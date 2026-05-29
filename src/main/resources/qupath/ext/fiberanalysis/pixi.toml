@@ -1,0 +1,17 @@
+[workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
+
+[dependencies]
+python = "3.11.*"
+appose = ">=0.7.2"
+numpy = ">=1.24.0,<2.0"
+scipy = ">=1.11.0"
+scikit-image = ">=0.21.0"
+matplotlib-base = ">=3.7.0"
+pillow = ">=10.0.0"
+
+# fiberlib is bundled inside the extension JAR and unpacked at runtime.
+# Do not list it here as a pip dependency -- it would go stale because pixi
+# only rebuilds when this toml's *content* changes (see CLAUDE.md
+# git-URL-pip-deps gotcha).

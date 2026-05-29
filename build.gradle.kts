@@ -1,0 +1,148 @@
+plugins {
+    // To optionally create a shadow/fat jar that bundle up any non-core dependencies
+    id("com.gradleup.shadow") version "8.3.5"
+    // QuPath Gradle extension convention plugin
+    id("qupath-conventions")
+    // Auto-formatting (palantirJavaFormat) -- gates the build via `check`
+    id("com.diffplug.spotless") version "7.0.2"
+    // Static bug detection
+    id("com.github.spotbugs") version "6.5.0"
+}
+
+// Configure the extension
+qupathExtension {
+    name = "qupath-extension-fiber-analysis"
+    group = "io.github.uw-loci"
+    version = "0.1.0"
+    description = "Testbed QuPath extension for fiber straightness, TWOMBLI-derived morphometrics, and GLCM texture on segmented collagen fibers."
+    automaticModule = "io.github.uw.loci.extension.fiberanalysis"
+}
+
+allprojects {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        maven {
+            name = "SciJava"
+            url = uri("https://maven.scijava.org/content/repositories/releases")
+        }
+        maven {
+            name = "OME-Artifacts"
+            url = uri("https://artifacts.openmicroscopy.org/artifactory/maven/")
+        }
+    }
+}
+
+val javafxVersion = "17.0.2"
+
+dependencies {
+    // Main dependencies for QuPath extensions (provided by QuPath at runtime).
+    shadow(libs.bundles.qupath)
+    shadow(libs.bundles.logging)
+    shadow(libs.qupath.fxtras)
+    shadow(libs.gson)
+
+    // Appose for embedded Java-Python IPC with shared memory.
+    // NOT shadowed -- Appose is on QuPath's classpath at runtime (DL classifier precedent).
+    implementation("org.apposed:appose:0.11.0")
+
+    // For testing
+    testImplementation(libs.bundles.qupath)
+    testImplementation("io.github.qupath:qupath-app:0.7.0")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.13.4")
+    testImplementation("org.assertj:assertj-core:3.27.7")
+    testImplementation(libs.bundles.logging)
+    testImplementation(libs.qupath.fxtras)
+    testImplementation("org.openjfx:javafx-base:$javafxVersion")
+    testImplementation("org.openjfx:javafx-graphics:$javafxVersion")
+    testImplementation("org.openjfx:javafx-controls:$javafxVersion")
+}
+
+// Merge META-INF/services so ServiceLoader discovers Appose implementations
+// (NDArray ShmFactory, Groovy FastStringService, etc.).
+tasks.shadowJar {
+    mergeServiceFiles()
+}
+
+tasks.withType<JavaCompile> {
+    options.compilerArgs.add("-Xlint:deprecation")
+    options.compilerArgs.add("-Xlint:unchecked")
+}
+
+tasks.test {
+    useJUnitPlatform()
+    // Move JavaFX JARs from classpath to module path so --add-modules can find them.
+    // Temurin JDK does not bundle JavaFX, so the modules are only available
+    // as dependency JARs which Gradle places on the classpath by default.
+    doFirst {
+        val cp = classpath.files
+        val fxJars = cp.filter { it.name.startsWith("javafx-") }
+        if (fxJars.isNotEmpty()) {
+            classpath = files(cp - fxJars)
+            jvmArgs(
+                "--module-path", fxJars.joinToString(File.pathSeparator),
+                "--add-modules", "javafx.base,javafx.graphics,javafx.controls",
+                "--add-opens", "javafx.graphics/javafx.stage=ALL-UNNAMED"
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spotless -- auto-formatting (gates the build via `check`)
+// ---------------------------------------------------------------------------
+spotless {
+    java {
+        target("src/**/*.java")
+        palantirJavaFormat("2.90.0")
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ASCII-only enforcement (CLAUDE.md policy: no chars > 0x7F in Java sources).
+// Prevents Windows cp1252 encoding failures.
+// ---------------------------------------------------------------------------
+tasks.register("checkAsciiOnly") {
+    description = "Fails if any Java source file contains non-ASCII characters (> 0x7F)"
+    group = "verification"
+    val srcDirs = fileTree("src") { include("**/*.java") }
+    inputs.files(srcDirs)
+    doLast {
+        val violations = mutableListOf<String>()
+        srcDirs.forEach { file ->
+            file.readText().lines().forEachIndexed { idx, line ->
+                line.forEachIndexed { col, ch ->
+                    if (ch.code > 0x7F) {
+                        violations.add(
+                            "${file.relativeTo(projectDir)}:${idx + 1}:${col + 1}  " +
+                                    "'$ch' (U+${"04X".format(ch.code)})"
+                        )
+                    }
+                }
+            }
+        }
+        if (violations.isNotEmpty()) {
+            throw GradleException(
+                "Non-ASCII characters found (will break on Windows cp1252):\n" +
+                        violations.joinToString("\n")
+            )
+        }
+        logger.lifecycle("checkAsciiOnly: all Java sources are ASCII-clean")
+    }
+}
+tasks.named("check") { dependsOn("checkAsciiOnly") }
+
+// ---------------------------------------------------------------------------
+// SpotBugs -- static bug detection (gates the build)
+// ---------------------------------------------------------------------------
+spotbugs {
+    effort.set(com.github.spotbugs.snom.Effort.MAX)
+    reportLevel.set(com.github.spotbugs.snom.Confidence.HIGH)
+}
+
+tasks.withType<com.github.spotbugs.snom.SpotBugsTask>().configureEach {
+    reports.create("html") { required.set(true) }
+}
