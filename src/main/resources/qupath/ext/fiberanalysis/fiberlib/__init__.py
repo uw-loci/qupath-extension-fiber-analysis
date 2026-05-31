@@ -18,7 +18,23 @@ Public modules:
     render         : matplotlib RGBA PNG renderers
     io             : windows.json / results.json / .npz writers
 
+    pipeline       : end-to-end orchestration as a callable library
+                     (`fiberlib.analyze(image, ...)`)
+
 Citations carried inline in each module docstring. See the shipped
 documentation for the full references table.
+
+Library entry point::
+
+    import fiberlib
+    out = fiberlib.analyze(image, pixel_size_um=0.5, ...)
+    metrics = out["result"]          # JSON-friendly summary dict
+
+The QuPath/Appose path (`scripts/run_fiber_analysis.py`) is a thin wrapper over
+this same `analyze` function.
 """
+
 from ._version import __version__  # noqa: F401
+from .pipeline import analyze, sanitize_json  # noqa: F401
+
+__all__ = ["__version__", "analyze", "sanitize_json"]

@@ -23,7 +23,8 @@ forgetting the bump means users keep running stale Python.
     257 instead of ~1.0 -- broke downstream Otsu / Frangi sigma
     expectations).
 """
-__version__ = "0.2.3"
+
+__version__ = "0.2.4"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -42,4 +43,14 @@ __version__ = "0.2.3"
 #     them decide what is meaningful at their scale.
 #   - io.py: flattens window_grid["morphometrics"] sub-dict into each
 #     window entry so pd.json_normalize(windows) sees them as flat
+#
+# 0.2.4 (2026-05-31):
+#   - NEW pipeline.py: the full orchestration is now a callable library
+#     function `fiberlib.analyze(image, ...)` (numpy in -> result dict out),
+#     with no Appose/QuPath dependency. __init__.py re-exports analyze +
+#     sanitize_json. scripts/run_fiber_analysis.py became a thin wrapper that
+#     unpacks the Appose globals, loads the PNGs, and calls analyze(). No
+#     behavior change to the QuPath path; this just makes the same pipeline
+#     importable for tests / batch / the collagen-phantom tooling. A repo-root
+#     pyproject.toml makes `pip install -e .` expose `import fiberlib`.
 #     columns next to n_fiber_px / tortuosity_median.

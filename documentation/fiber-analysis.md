@@ -89,6 +89,36 @@ sync with the JAR you installed. The Appose env (Pixi-managed) lives
 at `~/.local/share/appose/qupath-fiber-analysis/` and is built on
 first use.
 
+### Calling fiberlib as a library (outside QuPath)
+
+The entire pipeline is also a plain Python function -- the Appose task
+script (`scripts/run_fiber_analysis.py`) is only a thin wrapper that
+unpacks the injected globals, loads the PNGs, and calls it. To run the
+exact same analysis from host Python (tests, batch jobs, the
+collagen-phantom tooling):
+
+```python
+import fiberlib                      # pip install -e . , or add the
+                                     # fiberanalysis resource dir to sys.path
+out = fiberlib.analyze(
+    image,                           # numpy (H, W) or (H, W, 3)
+    pixel_size_um=0.5,
+    zone_mode="inside",              # whole-field analysis: 'inside' + a
+    border_zone_width_um=800,        # border wider than the region
+    window_enabled=True, window_size_um=80,
+)
+metrics = out["result"]              # JSON-friendly summary dict
+windows = out["window_grid"]         # per-window arrays (or None)
+```
+
+`analyze()` takes the same parameter names the Appose side injects (see
+its docstring), returns `result` / `window_grid` / `fiber_mask` /
+`analysis_mask` / `skeleton`, and only writes sidecar files when
+`output_dir=` is given. A repo-root `pyproject.toml` exposes `fiberlib`
+via `pip install -e .`. Note the analysis runs inside the dilated zone
+around the boundary mask, so for a whole-image baseline pass a full
+boundary with `zone_mode="inside"` and a large `border_zone_width_um`.
+
 Outputs land in the per-annotation subfolder under the output
 directory and are also surfaced as buttons on the results panel
 card. At most one overlay is shown on the image at a time -- clicking

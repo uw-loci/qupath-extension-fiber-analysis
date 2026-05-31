@@ -1,0 +1,39 @@
+# Makes the bundled `fiberlib` importable as a standalone Python library
+# (`pip install -e .` -> `import fiberlib`). This does NOT affect the Gradle
+# build of the QuPath extension; it only exposes the same package that ships in
+# the JAR for use in tests, batch scripts, and the collagen-phantom tooling.
+#
+# The QuPath/Appose runtime keeps loading fiberlib from the JAR-extracted copy
+# (see ApposeFiberService); this pyproject is purely for host-Python callers.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fiberlib"
+description = "Callable fiber-analysis library bundled with qupath-extension-fiber-analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-image",
+    "matplotlib",
+    "pillow",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff"]
+
+# fiberlib lives inside the JAR resource tree; point setuptools at it and read
+# the version from the single source of truth (_version.py) via AST (no import).
+[tool.setuptools]
+package-dir = { "" = "src/main/resources/qupath/ext/fiberanalysis" }
+
+[tool.setuptools.packages.find]
+where = ["src/main/resources/qupath/ext/fiberanalysis"]
+include = ["fiberlib*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "fiberlib._version.__version__" }
