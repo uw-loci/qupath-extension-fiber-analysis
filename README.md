@@ -51,7 +51,16 @@ project metadata, or UI surfaces are being replaced.
    overlays + a `windows.json` sidecar; the panel attaches the
    measurements to the annotation.
 
+![Run dialog showing the Search area, Fiber segmentation, and Window analysis sections, with the Straightness, Morphometrics, Texture, and Output sections collapsed below.](documentation/images/run-dialog.png)
+
 ## What the analyses tell you
+
+The three metric families run over a dilated border zone around the
+annotation. The example below inspects a region about 120 microns wide
+and shows, left to right, the segmented fiber mask, a morphometrics
+HDM map, a GLCM entropy map, and a straightness map.
+
+![Four side-by-side maps from one analysed region: segmented mask, morphometrics HDM, GLCM entropy, and straightness map.](documentation/images/output-maps-border-zone.png)
 
 **Straightness / persistence.** Distinguishes wavy from straightened
 collagen fibers. In TACS-3 breast pathology (Conklin et al. 2011,

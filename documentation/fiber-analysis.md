@@ -39,6 +39,12 @@ fibers relative to the boundary using a hue-calibrated orientation
 field, whereas this extension scores **shape and texture of the
 segmented fibers themselves**, with no hue calibration.
 
+The four outputs from one analysed region -- here a border zone about
+120 microns wide -- are the segmented fiber mask, a morphometrics HDM
+map, a GLCM entropy map, and a straightness map:
+
+![Segmented mask, morphometrics HDM, GLCM entropy, and straightness map for one analysed region.](images/output-maps-border-zone.png)
+
 Read the document in order if you are setting up the workflow for
 the first time. Section 2 explains how an annotation becomes
 per-window metrics; sections 3 and 4 cover the two inputs the user
@@ -80,6 +86,14 @@ tortuosity      morphometrics    Radon scalar    GLCM features
         v
 overlays (PNG) + windows.json + optional PathObjects
 ```
+
+The Run dialog drives this chain. Section 1 sets the search area
+(border zone width and zone mode), Section 2 picks the segmentation
+source, and Section 3 configures the moving-window grid; the
+Straightness, Morphometrics, Texture, and Output sections follow
+below:
+
+![Fiber Analysis Run dialog with the Search area, Fiber segmentation, and Window analysis sections expanded.](images/run-dialog.png)
 
 The Java side reads the annotation geometry, rasterises the dilated
 border zone, and dispatches an Appose task with the parameter dict.
