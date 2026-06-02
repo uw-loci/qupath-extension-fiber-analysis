@@ -245,6 +245,24 @@ public class FiberAnalysisExtension implements QuPathExtension {
             }
         });
 
+        // Whole-slide density-map output across multiple project images. Writes
+        // a uint16 pyramid OME-TIFF sidecar per image; the user picks whether
+        // to attach it as channels (changes how the base image renders) or
+        // keep it as a separate sidecar with sampling commands (preserves the
+        // native display). Validation rules for the type / mode combos live
+        // in FiberDensityMapDialog; this menu only needs an open project.
+        MenuItem densityMapItem = new MenuItem("Project density map...");
+        densityMapItem.disableProperty().bind(qupath.projectProperty().isNull());
+        densityMapItem.setOnAction(e -> {
+            logger.info("Opening Fiber Analysis project-density-map dialog");
+            try {
+                new qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog(qupath).show();
+            } catch (Exception ex) {
+                logger.error("Failed to open Fiber Analysis density-map dialog", ex);
+                Dialogs.showErrorMessage(EXTENSION_NAME, "Failed to open dialog: " + ex.getMessage());
+            }
+        });
+
         MenuItem setupItem = new MenuItem("Setup environment...");
         setupItem.setOnAction(e -> {
             logger.info("Opening Fiber Analysis setup environment dialog");
@@ -258,7 +276,7 @@ public class FiberAnalysisExtension implements QuPathExtension {
             PythonConsoleWindow.getInstance().show();
         });
 
-        extensionMenu.getItems().addAll(runItem, batchItem, new SeparatorMenuItem(), setupItem, pyConsoleItem);
+        extensionMenu.getItems().addAll(runItem, batchItem, densityMapItem, new SeparatorMenuItem(), setupItem, pyConsoleItem);
         logger.info("Menu items added for extension: {}", EXTENSION_NAME);
     }
 }
