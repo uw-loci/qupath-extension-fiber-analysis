@@ -16,7 +16,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -98,18 +97,16 @@ public final class FiberAnalysisBatchDialog {
         Project<BufferedImage> project = getProject();
         if (project == null) {
             Dialogs.showErrorMessage(
-                    "Fiber Analysis Batch",
-                    "A QuPath project must be open. Open or create a project and try again.");
+                    "Fiber Analysis Batch", "A QuPath project must be open. Open or create a project and try again.");
             return;
         }
 
         VBox root = new VBox(10);
         root.setPadding(new Insets(12));
 
-        Label header = new Label(
-                "Apply a saved params.json across multiple project images. The Search area\n"
-                        + "and class filter saved in params.json (or overridden below) drive which\n"
-                        + "annotations are analysed per image.");
+        Label header = new Label("Apply a saved params.json across multiple project images. The Search area\n"
+                + "and class filter saved in params.json (or overridden below) drive which\n"
+                + "annotations are analysed per image.");
         header.setWrapText(true);
         header.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         root.getChildren().add(header);
@@ -146,7 +143,8 @@ public final class FiberAnalysisBatchDialog {
         refreshList();
         root.getChildren().add(imageList);
 
-        HBox selectButtons = new HBox(8,
+        HBox selectButtons = new HBox(
+                8,
                 buildButton("Select all", () -> setAllChecked(true)),
                 buildButton("Select none", () -> setAllChecked(false)));
         root.getChildren().add(selectButtons);
@@ -196,17 +194,15 @@ public final class FiberAnalysisBatchDialog {
 
     private javafx.scene.layout.VBox buildCalibrationBanner() {
         javafx.scene.layout.VBox box = new javafx.scene.layout.VBox(6);
-        box.setStyle(
-                "-fx-background-color: #fff5d6; -fx-border-color: #d4a82a; -fx-border-radius: 4;"
-                        + " -fx-background-radius: 4; -fx-padding: 8;");
+        box.setStyle("-fx-background-color: #fff5d6; -fx-border-color: #d4a82a; -fx-border-radius: 4;"
+                + " -fx-background-radius: 4; -fx-padding: 8;");
         Label title = new Label("Calibrate threshold across this project (recommended)");
         title.setStyle("-fx-font-weight: bold;");
-        Label body = new Label(
-                "Per-annotation Otsu gives every region a different threshold, so fiber coverage"
-                        + " / ridge count / HDM are NOT directly comparable across images. Run"
-                        + " calibration once to compute a single project-wide threshold from a"
-                        + " random subsample of regions. Required for cross-image density-map"
-                        + " workflows.");
+        Label body = new Label("Per-annotation Otsu gives every region a different threshold, so fiber coverage"
+                + " / ridge count / HDM are NOT directly comparable across images. Run"
+                + " calibration once to compute a single project-wide threshold from a"
+                + " random subsample of regions. Required for cross-image density-map"
+                + " workflows.");
         body.setWrapText(true);
         body.setStyle("-fx-font-size: 11px;");
 
@@ -268,8 +264,8 @@ public final class FiberAnalysisBatchDialog {
 
         classFilterField = new TextField();
         classFilterField.setPromptText("Override class filter (optional, comma-separated)");
-        classFilterField.setTooltip(new Tooltip(
-                "If non-empty, overrides the class filter from the loaded params.json for this batch run."
+        classFilterField.setTooltip(
+                new Tooltip("If non-empty, overrides the class filter from the loaded params.json for this batch run."
                         + " Format: 'Tumor, Stroma' (case-sensitive)."));
 
         Label nameLbl = new Label("Name:");
@@ -322,81 +318,121 @@ public final class FiberAnalysisBatchDialog {
         // otherwise the override would be silently ignored if the loaded params
         // had searchArea="selected" or "all".
         return new FiberAnalysisParams(
-                "class", override,
-                base.borderZoneUm(), base.zoneMode(), base.useImagePixelSize(), base.pixelSizeOverrideUm(),
-                base.segSource(), base.internalChannel(), base.thresholdMethod(), base.manualThreshold(),
-                base.ridgeFilter(), base.sigmaMinUm(), base.sigmaMaxUm(), base.sigmaStepUm(),
+                "class",
+                override,
+                base.borderZoneUm(),
+                base.zoneMode(),
+                base.useImagePixelSize(),
+                base.pixelSizeOverrideUm(),
+                base.segSource(),
+                base.internalChannel(),
+                base.thresholdMethod(),
+                base.manualThreshold(),
+                base.ridgeFilter(),
+                base.sigmaMinUm(),
+                base.sigmaMaxUm(),
+                base.sigmaStepUm(),
                 base.minFiberAreaUm2(),
-                base.projectCalibrationName(), base.invertIntensity(), base.rollingBallRadiusUm(),
-                base.maskSource(), base.classifierName(), base.objectClass(), base.maskFile(),
+                base.projectCalibrationName(),
+                base.invertIntensity(),
+                base.rollingBallRadiusUm(),
+                base.maskSource(),
+                base.classifierName(),
+                base.objectClass(),
+                base.maskFile(),
                 base.windowEnabled(),
                 base.windowSizeUm(),
                 base.windowOverlapPercent(),
                 base.windowObjects(),
                 base.minWindowCoveragePercent(),
-                base.straightnessEnabled(), base.tortuosityOn(), base.radonOn(), base.minBranchUm(),
-                base.morphEnabled(), base.branchpoints(), base.endpoints(), base.length(),
-                base.curvature(), base.hdm(), base.lacunarity(), base.fractal(), base.gapAnalysis(),
-                base.lacBoxSizesUm(), base.fractalBoxSizesUm(),
-                base.textureEnabled(), base.quantLevels(), base.glcmDistancesUm(),
-                base.contrast(), base.correlation(), base.energy(),
-                base.homogeneity(), base.entropy(), base.dissimilarity(),
-                base.outputDir(), base.fiberMaskOverlay(), base.straightnessHeatmap(), base.glcmHeatmap(),
-                base.glcmHeatmapProp(), base.morphSummary(), base.jsonSidecar(), base.emitNpz());
+                base.straightnessEnabled(),
+                base.tortuosityOn(),
+                base.radonOn(),
+                base.minBranchUm(),
+                base.morphEnabled(),
+                base.branchpoints(),
+                base.endpoints(),
+                base.length(),
+                base.curvature(),
+                base.hdm(),
+                base.lacunarity(),
+                base.fractal(),
+                base.gapAnalysis(),
+                base.lacBoxSizesUm(),
+                base.fractalBoxSizesUm(),
+                base.textureEnabled(),
+                base.quantLevels(),
+                base.glcmDistancesUm(),
+                base.contrast(),
+                base.correlation(),
+                base.energy(),
+                base.homogeneity(),
+                base.entropy(),
+                base.dissimilarity(),
+                base.outputDir(),
+                base.fiberMaskOverlay(),
+                base.straightnessHeatmap(),
+                base.glcmHeatmap(),
+                base.glcmHeatmapProp(),
+                base.morphSummary(),
+                base.jsonSidecar(),
+                base.emitNpz());
     }
 
     private void runBatch(FiberAnalysisParams params, List<ProjectImageEntry<BufferedImage>> entries) {
-        Thread t = new Thread(() -> {
-            int ok = 0;
-            int skipped = 0;
-            int failed = 0;
-            for (int i = 0; i < entries.size(); i++) {
-                ProjectImageEntry<BufferedImage> entry = entries.get(i);
-                String name = entry.getImageName();
-                logger.info("Batch [{}/{}]: {}", i + 1, entries.size(), name);
-                try {
-                    ImageData<BufferedImage> data = entry.readImageData();
-                    List<PathObject> annotations = resolveAnnotations(params, data);
-                    if (annotations.isEmpty()) {
-                        logger.info("Skipping '{}': no matching annotations", name);
-                        skipped++;
-                        continue;
+        Thread t = new Thread(
+                () -> {
+                    int ok = 0;
+                    int skipped = 0;
+                    int failed = 0;
+                    for (int i = 0; i < entries.size(); i++) {
+                        ProjectImageEntry<BufferedImage> entry = entries.get(i);
+                        String name = entry.getImageName();
+                        logger.info("Batch [{}/{}]: {}", i + 1, entries.size(), name);
+                        try {
+                            ImageData<BufferedImage> data = entry.readImageData();
+                            List<PathObject> annotations = resolveAnnotations(params, data);
+                            if (annotations.isEmpty()) {
+                                logger.info("Skipping '{}': no matching annotations", name);
+                                skipped++;
+                                continue;
+                            }
+                            // Block on this image's run before advancing -- runForAnnotations
+                            // returns the worker Thread so the batch can join it instead of
+                            // racing the next image's readImageData against the previous
+                            // image's Appose call.
+                            Thread worker = new FiberAnalysisWorkflow(resultPanel)
+                                    .runForAnnotations(params, annotations, data, gui);
+                            if (worker != null) {
+                                worker.join();
+                            }
+                            ok++;
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            failed++;
+                            logger.warn("Batch interrupted at '{}'", name);
+                            break;
+                        } catch (IOException ioe) {
+                            failed++;
+                            logger.error("Batch entry '{}' failed to read: {}", name, ioe.getMessage());
+                        } catch (Exception ex) {
+                            failed++;
+                            logger.error("Batch entry '{}' failed", name, ex);
+                        }
                     }
-                    // Block on this image's run before advancing -- runForAnnotations
-                    // returns the worker Thread so the batch can join it instead of
-                    // racing the next image's readImageData against the previous
-                    // image's Appose call.
-                    Thread worker = new FiberAnalysisWorkflow(resultPanel)
-                            .runForAnnotations(params, annotations, data, gui);
-                    if (worker != null) {
-                        worker.join();
-                    }
-                    ok++;
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    failed++;
-                    logger.warn("Batch interrupted at '{}'", name);
-                    break;
-                } catch (IOException ioe) {
-                    failed++;
-                    logger.error("Batch entry '{}' failed to read: {}", name, ioe.getMessage());
-                } catch (Exception ex) {
-                    failed++;
-                    logger.error("Batch entry '{}' failed", name, ex);
-                }
-            }
-            final int okF = ok;
-            final int skipF = skipped;
-            final int failF = failed;
-            Platform.runLater(() -> Dialogs.showInfoNotification(
-                    "Fiber Analysis Batch",
-                    String.format("Done. ran=%d, skipped=%d, failed=%d", okF, skipF, failF)));
-        }, "FiberAnalysisBatch");
+                    final int okF = ok;
+                    final int skipF = skipped;
+                    final int failF = failed;
+                    Platform.runLater(() -> Dialogs.showInfoNotification(
+                            "Fiber Analysis Batch",
+                            String.format("Done. ran=%d, skipped=%d, failed=%d", okF, skipF, failF)));
+                },
+                "FiberAnalysisBatch");
         t.setDaemon(true);
         t.start();
     }
 
-private static List<PathObject> resolveAnnotations(FiberAnalysisParams params, ImageData<BufferedImage> data) {
+    private static List<PathObject> resolveAnnotations(FiberAnalysisParams params, ImageData<BufferedImage> data) {
         if (data == null || data.getHierarchy() == null) return List.of();
         List<PathObject> all = data.getHierarchy().getAnnotationObjects().stream()
                 .filter(o -> o != null && o.isAnnotation())
@@ -408,10 +444,12 @@ private static List<PathObject> resolveAnnotations(FiberAnalysisParams params, I
             case "class":
                 Set<String> wanted = parseClassFilter(params.classFilter());
                 if (wanted.isEmpty()) return List.of();
-                return all.stream().filter(o -> {
-                    PathClass pc = o.getPathClass();
-                    return pc != null && pc.getName() != null && wanted.contains(pc.getName());
-                }).collect(Collectors.toList());
+                return all.stream()
+                        .filter(o -> {
+                            PathClass pc = o.getPathClass();
+                            return pc != null && pc.getName() != null && wanted.contains(pc.getName());
+                        })
+                        .collect(Collectors.toList());
             case "selected":
             default:
                 // In batch context "selected" makes no sense -- a project entry is

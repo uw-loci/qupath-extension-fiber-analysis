@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-import java.util.function.Consumer;
 import javax.imageio.ImageIO;
 import org.apposed.appose.Service.Task;
 import org.slf4j.Logger;
@@ -138,7 +137,8 @@ public final class FiberCalibrationRunner {
 
         try {
             // Phase 1: collect (entry, annotation) pairs that match the filters.
-            String needle = cfg.nameFilter == null ? "" : cfg.nameFilter.toLowerCase().trim();
+            String needle =
+                    cfg.nameFilter == null ? "" : cfg.nameFilter.toLowerCase().trim();
             List<EntryAnn> pool = new ArrayList<>();
             for (ProjectImageEntry<BufferedImage> entry : project.getImageList()) {
                 if (progress != null && progress.isCancelled()) {
@@ -178,7 +178,10 @@ public final class FiberCalibrationRunner {
                 pool = pool.subList(0, cfg.sampleSize);
             }
             final int total = pool.size();
-            logger.info("Calibration pool: {} annotations from {} project images", total, project.getImageList().size());
+            logger.info(
+                    "Calibration pool: {} annotations from {} project images",
+                    total,
+                    project.getImageList().size());
 
             // Phase 3: extract one region per annotation into the temp dir.
             List<String> regionPngs = new ArrayList<>();
@@ -225,7 +228,8 @@ public final class FiberCalibrationRunner {
             if (outJson == null) throw new IOException("calibrate_threshold returned no result_json");
             JsonObject result = new Gson().fromJson(String.valueOf(outJson), JsonObject.class);
             if (result.has("error") && !result.get("error").isJsonNull()) {
-                throw new IOException("Calibration Python error: " + result.get("error").getAsString());
+                throw new IOException(
+                        "Calibration Python error: " + result.get("error").getAsString());
             }
 
             double thr = result.get("threshold_normalised").getAsDouble();
@@ -271,7 +275,11 @@ public final class FiberCalibrationRunner {
             }
             Files.writeString(
                     calFile,
-                    new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create().toJson(payload));
+                    new GsonBuilder()
+                            .setPrettyPrinting()
+                            .disableHtmlEscaping()
+                            .create()
+                            .toJson(payload));
 
             logger.info(
                     "Calibration '{}' saved to {} -- threshold={}, regions={}, pixels={}",
@@ -284,15 +292,13 @@ public final class FiberCalibrationRunner {
         } finally {
             // Best-effort cleanup of the temp PNGs.
             try {
-                Files.walk(tempDir)
-                        .sorted(java.util.Comparator.reverseOrder())
-                        .forEach(p -> {
-                            try {
-                                Files.deleteIfExists(p);
-                            } catch (IOException ignored) {
-                                // best-effort
-                            }
-                        });
+                Files.walk(tempDir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (IOException ignored) {
+                        // best-effort
+                    }
+                });
             } catch (IOException ignored) {
                 // best-effort
             }

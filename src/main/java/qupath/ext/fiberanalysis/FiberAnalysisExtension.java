@@ -276,7 +276,9 @@ public class FiberAnalysisExtension implements QuPathExtension {
             PythonConsoleWindow.getInstance().show();
         });
 
-        extensionMenu.getItems().addAll(runItem, batchItem, densityMapItem, new SeparatorMenuItem(), setupItem, pyConsoleItem);
+        extensionMenu
+                .getItems()
+                .addAll(runItem, batchItem, densityMapItem, new SeparatorMenuItem(), setupItem, pyConsoleItem);
         logger.info("Menu items added for extension: {}", EXTENSION_NAME);
     }
 }

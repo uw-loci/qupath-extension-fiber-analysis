@@ -273,10 +273,7 @@ public class ApposeFiberService {
                         logger.error("Fiber task '{}' CRASH (attempt {}): {}", scriptName, attemptCapture, task.error);
                     } else if (event.responseType == ResponseType.FAILURE) {
                         logger.error(
-                                "Fiber task '{}' FAILURE (attempt {}): {}",
-                                scriptName,
-                                attemptCapture,
-                                task.error);
+                                "Fiber task '{}' FAILURE (attempt {}): {}", scriptName, attemptCapture, task.error);
                     }
                 });
                 try {

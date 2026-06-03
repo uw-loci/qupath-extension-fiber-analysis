@@ -33,15 +33,11 @@ import javafx.scene.control.CheckBox;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
-import javafx.scene.control.RadioButton;
 import javafx.scene.control.Slider;
 import javafx.scene.control.Spinner;
-import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
@@ -216,13 +212,15 @@ final class FiberSegmentationPreviewWindow {
         sizeChoice.valueProperty().addListener(autoListener);
         if (channelCombo != null) channelCombo.valueProperty().addListener(autoListener);
         if (thresholdMethodCombo != null) thresholdMethodCombo.valueProperty().addListener(autoListener);
-        if (manualThresholdSpinner != null) manualThresholdSpinner.valueProperty().addListener(autoListener);
+        if (manualThresholdSpinner != null)
+            manualThresholdSpinner.valueProperty().addListener(autoListener);
         if (ridgeFilterCombo != null) ridgeFilterCombo.valueProperty().addListener(autoListener);
         if (sigmaMinSpinner != null) sigmaMinSpinner.valueProperty().addListener(autoListener);
         if (sigmaMaxSpinner != null) sigmaMaxSpinner.valueProperty().addListener(autoListener);
         if (sigmaStepSpinner != null) sigmaStepSpinner.valueProperty().addListener(autoListener);
         if (minFiberAreaSpinner != null) minFiberAreaSpinner.valueProperty().addListener(autoListener);
-        if (invertIntensityCheck != null) invertIntensityCheck.selectedProperty().addListener(autoListener);
+        if (invertIntensityCheck != null)
+            invertIntensityCheck.selectedProperty().addListener(autoListener);
         if (rollingBallSpinner != null) rollingBallSpinner.valueProperty().addListener(autoListener);
         if (calibrationCombo != null) calibrationCombo.valueProperty().addListener(autoListener);
         if (borderZoneSpinner != null) borderZoneSpinner.valueProperty().addListener(autoListener);
@@ -331,7 +329,11 @@ final class FiberSegmentationPreviewWindow {
             String thrCode = "Project Otsu (calibrated)".equals(thrMethod) ? "project_otsu" : thrMethod.toLowerCase();
             in.put("threshold_method", thrCode);
             in.put("manual_threshold", manualThresholdSpinner == null ? 128 : manualThresholdSpinner.getValue());
-            in.put("ridge_filter", ridgeFilterCombo == null ? "none" : ridgeFilterCombo.getValue().toLowerCase());
+            in.put(
+                    "ridge_filter",
+                    ridgeFilterCombo == null
+                            ? "none"
+                            : ridgeFilterCombo.getValue().toLowerCase());
             double sMin = sigmaMinSpinner == null ? 1.0 : sigmaMinSpinner.getValue();
             double sMax = sigmaMaxSpinner == null ? 4.0 : sigmaMaxSpinner.getValue();
             double sStep = sigmaStepSpinner == null ? 1.0 : sigmaStepSpinner.getValue();
@@ -370,7 +372,10 @@ final class FiberSegmentationPreviewWindow {
                 summary = String.format(
                         java.util.Locale.ROOT,
                         "%dx%d at (%d,%d) | fiber %d/%d px (%.1f%%) | Python %.0f ms (total %d ms)",
-                        w, h, x, y,
+                        w,
+                        h,
+                        x,
+                        y,
                         result.get("fiber_pixels").getAsInt(),
                         result.get("total_pixels").getAsInt(),
                         result.get("coverage_percent").getAsDouble(),

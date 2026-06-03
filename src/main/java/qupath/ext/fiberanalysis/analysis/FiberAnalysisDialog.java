@@ -443,8 +443,8 @@ public final class FiberAnalysisDialog {
                 "Pick one or more QuPath classes. Only annotations whose class matches a checked entry"
                         + " are analysed. 'Unclassified' matches annotations with no class assigned.");
         Button classRefreshBtn = new Button("Refresh");
-        classRefreshBtn.setTooltip(installDelay(new Tooltip(
-                "Re-scan the current image (and project as fallback) for class names. Use after"
+        classRefreshBtn.setTooltip(installDelay(
+                new Tooltip("Re-scan the current image (and project as fallback) for class names. Use after"
                         + " drawing new annotations or changing classes.")));
         classRefreshBtn.setOnAction(e -> populateClassFilter());
         HBox classBox = new HBox(6, classFilterCombo, classRefreshBtn);
@@ -583,8 +583,8 @@ public final class FiberAnalysisDialog {
         internalGrid.add(internalChannelCombo, 1, row);
         row++;
 
-        thresholdMethodCombo = new ComboBox<>(FXCollections.observableArrayList(
-                "Otsu", "Triangle", "Manual", "Project Otsu (calibrated)"));
+        thresholdMethodCombo = new ComboBox<>(
+                FXCollections.observableArrayList("Otsu", "Triangle", "Manual", "Project Otsu (calibrated)"));
         thresholdMethodCombo.setValue(
                 FiberAnalysisPreferences.thresholdMethodProperty().get());
         applyTooltip(
@@ -653,7 +653,8 @@ public final class FiberAnalysisDialog {
                 0.1, 50.0, FiberAnalysisPreferences.sigmaMinProperty().get(), 0.5));
         sigmaMinSpinner.setEditable(true);
         sigmaMinSpinner.setPrefWidth(80);
-        applyTooltip(sigmaMinSpinner,
+        applyTooltip(
+                sigmaMinSpinner,
                 "Smallest fiber half-width in microns the ridge filter looks for."
                         + " Java converts to pixels using each image's measured pixel size.");
         sigmaMaxSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
@@ -668,18 +669,14 @@ public final class FiberAnalysisDialog {
                 0.05, 10.0, FiberAnalysisPreferences.sigmaStepProperty().get(), 0.25));
         sigmaStepSpinner.setEditable(true);
         sigmaStepSpinner.setPrefWidth(80);
-        applyTooltip(sigmaStepSpinner,
-                "Step size in microns for the sigma sweep. Smaller = more sensitive, slower.");
+        applyTooltip(sigmaStepSpinner, "Step size in microns for the sigma sweep. Smaller = more sensitive, slower.");
         // Explicit Min / Max / Step labels: the v0.1 inline 'to' / 'step' labels
         // were getting clipped to '...' between the spinners on Windows.
         Label sigmaMinLbl = new Label("Min:");
         Label sigmaMaxLbl = new Label("Max:");
         Label sigmaStepLbl = new Label("Step:");
-        HBox sigmaBox = new HBox(
-                6,
-                sigmaMinLbl, sigmaMinSpinner,
-                sigmaMaxLbl, sigmaMaxSpinner,
-                sigmaStepLbl, sigmaStepSpinner);
+        HBox sigmaBox =
+                new HBox(6, sigmaMinLbl, sigmaMinSpinner, sigmaMaxLbl, sigmaMaxSpinner, sigmaStepLbl, sigmaStepSpinner);
         sigmaBox.setAlignment(Pos.CENTER_LEFT);
         BooleanBinding ridgeDisabled = ridgeFilterCombo.valueProperty().isEqualTo("None");
         sigmaHeader.disableProperty().bind(ridgeDisabled);
@@ -716,7 +713,10 @@ public final class FiberAnalysisDialog {
 
         Label rollingBallLabel = new Label("Rolling-ball radius (um):");
         rollingBallSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
-                0.0, 50.0, FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(), 0.5));
+                0.0,
+                50.0,
+                FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
+                0.5));
         rollingBallSpinner.setEditable(true);
         applyTooltip(
                 rollingBallSpinner,
@@ -734,8 +734,8 @@ public final class FiberAnalysisDialog {
         // invert / rolling-ball quickly without waiting for a full
         // per-annotation analysis run.
         Button previewBtn = new Button("Preview segmentation...");
-        previewBtn.setTooltip(installDelay(new Tooltip(
-                "Open a live preview window. Reads a small region around the viewer center"
+        previewBtn.setTooltip(
+                installDelay(new Tooltip("Open a live preview window. Reads a small region around the viewer center"
                         + " (or selected annotation) and shows the magenta fiber-mask overlay using"
                         + " the current Section 2 settings. Updates as you change spinners.")));
         previewBtn.setOnAction(e -> FiberSegmentationPreviewWindow.show(
@@ -795,8 +795,7 @@ public final class FiberAnalysisDialog {
         applyTooltip(maskSourceClassifierRadio, maskSourceTip);
         applyTooltip(maskSourceObjectClassRadio, maskSourceTip);
         applyTooltip(maskSourceFileRadio, maskSourceTip);
-        HBox maskSourceBox = new HBox(
-                15, maskSourceClassifierRadio, maskSourceObjectClassRadio, maskSourceFileRadio);
+        HBox maskSourceBox = new HBox(15, maskSourceClassifierRadio, maskSourceObjectClassRadio, maskSourceFileRadio);
         maskSourceBox.setAlignment(Pos.CENTER_LEFT);
         existingGrid.add(new Label("Mask source:"), 0, erow);
         existingGrid.add(maskSourceBox, 1, erow);
@@ -816,7 +815,8 @@ public final class FiberAnalysisDialog {
         applyTooltip(
                 classifierNameCombo,
                 "Name of a pixel classifier in the current project whose 'fiber' channel will be used.");
-        BooleanBinding classifierDisabled = maskSourceClassifierRadio.selectedProperty().not();
+        BooleanBinding classifierDisabled =
+                maskSourceClassifierRadio.selectedProperty().not();
         classifierLabel.disableProperty().bind(classifierDisabled);
         classifierNameCombo.disableProperty().bind(classifierDisabled);
         existingGrid.add(classifierLabel, 0, erow);
@@ -834,7 +834,8 @@ public final class FiberAnalysisDialog {
                         ? prefObjClass
                         : objectClassCombo.getItems().get(0));
         applyTooltip(objectClassCombo, "PathClass whose objects will be rasterised to a binary mask.");
-        BooleanBinding objectDisabled = maskSourceObjectClassRadio.selectedProperty().not();
+        BooleanBinding objectDisabled =
+                maskSourceObjectClassRadio.selectedProperty().not();
         objectClassLabel.disableProperty().bind(objectDisabled);
         objectClassCombo.disableProperty().bind(objectDisabled);
         existingGrid.add(objectClassLabel, 0, erow);
@@ -967,7 +968,10 @@ public final class FiberAnalysisDialog {
         Label coverageLabel = new Label("Min coverage per window (%):");
         coverageLabel.setStyle(INDENT_STYLE);
         minWindowCoverageSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
-                0.0, 100.0, FiberAnalysisPreferences.minWindowCoveragePercentProperty().get(), 1.0));
+                0.0,
+                100.0,
+                FiberAnalysisPreferences.minWindowCoveragePercentProperty().get(),
+                1.0));
         minWindowCoverageSpinner.setEditable(true);
         applyTooltip(
                 minWindowCoverageSpinner,
@@ -1127,7 +1131,8 @@ public final class FiberAnalysisDialog {
         lacBoxSizesField =
                 new TextField(FiberAnalysisPreferences.lacBoxSizesPxProperty().get());
         lacBoxSizesField.setPrefColumnCount(20);
-        applyTooltip(lacBoxSizesField,
+        applyTooltip(
+                lacBoxSizesField,
                 "Comma-separated box sizes for the gliding-box lacunarity computation, in microns."
                         + " Java converts each value to integer pixels per image.");
         Label fdLabel = new Label("Fractal box sizes (um):");
@@ -1284,7 +1289,10 @@ public final class FiberAnalysisDialog {
                 File f = new File(existing);
                 if (f.isDirectory()) initial = f;
             }
-            if (initial == null && gui != null && gui.getProject() != null && gui.getProject().getPath() != null) {
+            if (initial == null
+                    && gui != null
+                    && gui.getProject() != null
+                    && gui.getProject().getPath() != null) {
                 java.nio.file.Path projDir = gui.getProject().getPath().getParent();
                 if (projDir != null) {
                     java.nio.file.Path fa = projDir.resolve("fiber-analysis");
@@ -1427,7 +1435,8 @@ public final class FiberAnalysisDialog {
         }
         if (segInternalRadio.isSelected()
                 && "Project Otsu (calibrated)".equals(thresholdMethodCombo.getValue())
-                && (calibrationCombo.getValue() == null || calibrationCombo.getValue().isBlank())) {
+                && (calibrationCombo.getValue() == null
+                        || calibrationCombo.getValue().isBlank())) {
             markInvalid(calibrationCombo);
             errors.add("Project Otsu selected but no calibration is available."
                     + " Run 'Calibrate threshold...' from the batch dialog first.");
@@ -1666,8 +1675,8 @@ public final class FiberAnalysisDialog {
      */
     private void populateClassFilter() {
         if (classFilterCombo == null) return;
-        Set<String> previouslyChecked = new java.util.LinkedHashSet<>(
-                classFilterCombo.getCheckModel().getCheckedItems());
+        Set<String> previouslyChecked =
+                new java.util.LinkedHashSet<>(classFilterCombo.getCheckModel().getCheckedItems());
         if (previouslyChecked.isEmpty()) {
             // First-time load: seed from persisted preference CSV.
             String saved = FiberAnalysisPreferences.classFilterProperty().get();
@@ -1750,8 +1759,8 @@ public final class FiberAnalysisDialog {
                                     })
                                     .forEach(p -> {
                                         String fn = p.getFileName().toString();
-                                        String name = fn.substring(
-                                                "calibration_".length(), fn.length() - ".json".length());
+                                        String name =
+                                                fn.substring("calibration_".length(), fn.length() - ".json".length());
                                         calibrationCombo.getItems().add(name);
                                     });
                         }
@@ -1761,7 +1770,9 @@ public final class FiberAnalysisDialog {
         } catch (Exception ex) {
             logger.debug("Could not enumerate calibrations: {}", ex.getMessage());
         }
-        if (previous != null && !previous.isBlank() && calibrationCombo.getItems().contains(previous)) {
+        if (previous != null
+                && !previous.isBlank()
+                && calibrationCombo.getItems().contains(previous)) {
             calibrationCombo.setValue(previous);
         } else if (!calibrationCombo.getItems().isEmpty()) {
             calibrationCombo.setValue(calibrationCombo.getItems().get(0));
@@ -1823,10 +1834,12 @@ public final class FiberAnalysisDialog {
             case "class":
                 Set<String> wanted = parseClassFilter(params.classFilter());
                 if (wanted.isEmpty()) return List.of();
-                return all.stream().filter(o -> {
-                    PathClass pc = o.getPathClass();
-                    return pc != null && pc.getName() != null && wanted.contains(pc.getName());
-                }).collect(Collectors.toList());
+                return all.stream()
+                        .filter(o -> {
+                            PathClass pc = o.getPathClass();
+                            return pc != null && pc.getName() != null && wanted.contains(pc.getName());
+                        })
+                        .collect(Collectors.toList());
             case "selected":
             default:
                 return selectedAnnotations();

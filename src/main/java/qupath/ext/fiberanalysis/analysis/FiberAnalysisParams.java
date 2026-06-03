@@ -162,12 +162,13 @@ public record FiberAnalysisParams(
                 FiberAnalysisPreferences.lacunarityProperty().get(),
                 FiberAnalysisPreferences.fractalProperty().get(),
                 FiberAnalysisPreferences.gapAnalysisProperty().get(),
-                FiberAnalysisPreferences.lacBoxSizesPxProperty().get(),  // now microns; property name kept for back-compat
-                FiberAnalysisPreferences.fractalBoxSizesPxProperty().get(),  // now microns
+                FiberAnalysisPreferences.lacBoxSizesPxProperty()
+                        .get(), // now microns; property name kept for back-compat
+                FiberAnalysisPreferences.fractalBoxSizesPxProperty().get(), // now microns
                 // Section 6
                 FiberAnalysisPreferences.textureEnabledProperty().get(),
                 FiberAnalysisPreferences.quantLevelsProperty().get(),
-                FiberAnalysisPreferences.glcmDistancesPxProperty().get(),  // now microns
+                FiberAnalysisPreferences.glcmDistancesPxProperty().get(), // now microns
                 FiberAnalysisPreferences.contrastProperty().get(),
                 FiberAnalysisPreferences.correlationProperty().get(),
                 FiberAnalysisPreferences.energyProperty().get(),

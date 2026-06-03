@@ -46,6 +46,13 @@ dependencies {
     // NOT shadowed -- Appose is on QuPath's classpath at runtime (DL classifier precedent).
     implementation("org.apposed:appose:0.11.0")
 
+    // Bio-Formats for the density-map sidecar writer (DensityTiffWriter).
+    // compileOnly because QuPath ships Bio-Formats at runtime via its own
+    // qupath-extension-bioformats; bundling it here would balloon the jar
+    // (~50 MB) for no functional gain. Standard pattern for QuPath extensions
+    // that target the bioformats stack -- see qupath-extension-tiles-to-pyramid.
+    compileOnly("ome:formats-gpl:7.1.0")
+
     // For testing
     testImplementation(libs.bundles.qupath)
     testImplementation("io.github.qupath:qupath-app:0.7.0")

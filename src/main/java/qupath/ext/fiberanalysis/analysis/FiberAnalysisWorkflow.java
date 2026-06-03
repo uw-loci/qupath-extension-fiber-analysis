@@ -381,9 +381,8 @@ public class FiberAnalysisWorkflow {
         // GLCM: one overlay per enabled property; same ComboBox pattern in
         // the panel. "Show GLCM" alone was ambiguous because GLCM is a
         // family of 6 properties.
-        for (String prop : new String[] {
-            "contrast", "correlation", "energy", "homogeneity", "entropy", "dissimilarity"
-        }) {
+        for (String prop :
+                new String[] {"contrast", "correlation", "energy", "homogeneity", "entropy", "dissimilarity"}) {
             registerIfExists(overlays, "glcm:" + prop, annDir.resolve("texture_" + prop + "_overlay.png"));
         }
         // Morphometrics: each enabled metric in the family now has a
@@ -738,14 +737,20 @@ public class FiberAnalysisWorkflow {
         }
         withMeta.putAll(meta);
 
-        Gson gson = new com.google.gson.GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+        Gson gson = new com.google.gson.GsonBuilder()
+                .setPrettyPrinting()
+                .disableHtmlEscaping()
+                .create();
         Files.writeString(runDir.resolve("params.json"), gson.toJson(withMeta));
 
         StringBuilder sb = new StringBuilder();
         sb.append("# fiber-analysis run parameters\n");
         sb.append("# Reload this run's settings by pointing the batch dialog at params.json in this folder.\n");
         for (Map.Entry<String, Object> e : withMeta.entrySet()) {
-            sb.append(e.getKey()).append(" = ").append(String.valueOf(e.getValue())).append('\n');
+            sb.append(e.getKey())
+                    .append(" = ")
+                    .append(String.valueOf(e.getValue()))
+                    .append('\n');
         }
         Files.writeString(runDir.resolve("params.txt"), sb.toString());
     }
@@ -1024,7 +1029,9 @@ public class FiberAnalysisWorkflow {
                 // below the user's threshold. Python also marks these as
                 // `included: false` and writes NaN metrics, so this is a
                 // belt-and-braces check that costs nothing.
-                if (w.has("included") && !w.get("included").isJsonNull() && !w.get("included").getAsBoolean()) {
+                if (w.has("included")
+                        && !w.get("included").isJsonNull()
+                        && !w.get("included").getAsBoolean()) {
                     skippedLowCoverage++;
                     continue;
                 }
@@ -1098,9 +1105,8 @@ public class FiberAnalysisWorkflow {
                         // "Correlation (GLCM)", etc. Suffix disambiguates if
                         // future families (e.g. LBP) also produce a "Contrast".
                         String prop = e.getKey();
-                        String capitalised = prop.isEmpty()
-                                ? prop
-                                : Character.toUpperCase(prop.charAt(0)) + prop.substring(1);
+                        String capitalised =
+                                prop.isEmpty() ? prop : Character.toUpperCase(prop.charAt(0)) + prop.substring(1);
                         String key = capitalised + " (GLCM)";
                         JsonElement v = e.getValue();
                         if (v != null
@@ -1145,8 +1151,7 @@ public class FiberAnalysisWorkflow {
             if (skippedLowCoverage > 0) {
                 logger.info(
                         "createWindowDetections: skipped {} windows below {}% coverage",
-                        skippedLowCoverage,
-                        minWindowCoveragePercent);
+                        skippedLowCoverage, minWindowCoveragePercent);
             }
         } catch (Exception ex) {
             logger.warn("Failed to parse windows.json {}: {}", windowsJsonPath, ex.getMessage());

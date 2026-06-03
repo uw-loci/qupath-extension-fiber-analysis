@@ -10,6 +10,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javafx.embed.swing.SwingFXUtils;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -32,7 +33,6 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.stage.FileChooser;
-import java.util.concurrent.atomic.AtomicBoolean;
 import javax.imageio.ImageIO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -313,18 +313,16 @@ public class FiberAnalysisPanel extends VBox {
             }
         });
 
-        FiberAnalysisOverlayController.getInstance()
-                .activeTokenProperty()
-                .addListener((obs, oldT, newT) -> {
-                    boolean active = myToken.equals(newT);
-                    suppress.set(true);
-                    try {
-                        btn.setSelected(active);
-                    } finally {
-                        suppress.set(false);
-                    }
-                    applyActiveGlow(btn, active);
-                });
+        FiberAnalysisOverlayController.getInstance().activeTokenProperty().addListener((obs, oldT, newT) -> {
+            boolean active = myToken.equals(newT);
+            suppress.set(true);
+            try {
+                btn.setSelected(active);
+            } finally {
+                suppress.set(false);
+            }
+            applyActiveGlow(btn, active);
+        });
 
         row.getChildren().add(btn);
     }
@@ -372,8 +370,7 @@ public class FiberAnalysisPanel extends VBox {
         Label familyLabel = new Label(label + ":");
         ComboBox<String> combo = new ComboBox<>(javafx.collections.FXCollections.observableArrayList(options));
         combo.setValue(none);
-        combo.setTooltip(new Tooltip(
-                "Choose which " + label + " per-window heatmap to display. Pick (none) to hide."));
+        combo.setTooltip(new Tooltip("Choose which " + label + " per-window heatmap to display. Pick (none) to hide."));
 
         final int idx = result.index();
         final int ox = result.regionOffsetX();
@@ -386,7 +383,8 @@ public class FiberAnalysisPanel extends VBox {
         combo.valueProperty().addListener((obs, oldV, newV) -> {
             if (suppress.get()) return;
             if (newV == null || none.equals(newV)) {
-                String activeToken = FiberAnalysisOverlayController.getInstance().getActiveToken();
+                String activeToken =
+                        FiberAnalysisOverlayController.getInstance().getActiveToken();
                 if (activeToken != null && activeToken.startsWith(myPrefix)) {
                     FiberAnalysisOverlayController.getInstance().clear();
                 }
@@ -399,23 +397,21 @@ public class FiberAnalysisPanel extends VBox {
             FiberAnalysisOverlayController.getInstance().show(png, ox, oy, rw, rh, token);
         });
 
-        FiberAnalysisOverlayController.getInstance()
-                .activeTokenProperty()
-                .addListener((obs, oldT, newT) -> {
-                    boolean iAmActive = newT != null && newT.startsWith(myPrefix);
-                    suppress.set(true);
-                    try {
-                        if (iAmActive) {
-                            String prop = newT.substring(myPrefix.length());
-                            combo.setValue(prop);
-                        } else {
-                            combo.setValue(none);
-                        }
-                    } finally {
-                        suppress.set(false);
-                    }
-                    applyActiveGlow(combo, iAmActive);
-                });
+        FiberAnalysisOverlayController.getInstance().activeTokenProperty().addListener((obs, oldT, newT) -> {
+            boolean iAmActive = newT != null && newT.startsWith(myPrefix);
+            suppress.set(true);
+            try {
+                if (iAmActive) {
+                    String prop = newT.substring(myPrefix.length());
+                    combo.setValue(prop);
+                } else {
+                    combo.setValue(none);
+                }
+            } finally {
+                suppress.set(false);
+            }
+            applyActiveGlow(combo, iAmActive);
+        });
 
         row.getChildren().addAll(familyLabel, combo);
     }

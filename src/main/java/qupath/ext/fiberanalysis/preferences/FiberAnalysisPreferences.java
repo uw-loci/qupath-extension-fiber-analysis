@@ -219,14 +219,12 @@ public class FiberAnalysisPreferences {
         sigmaMin = PathPrefs.createPersistentPreference(PREFIX + "sigmaMinUm", DEFAULT_SIGMA_MIN_UM);
         sigmaMax = PathPrefs.createPersistentPreference(PREFIX + "sigmaMaxUm", DEFAULT_SIGMA_MAX_UM);
         sigmaStep = PathPrefs.createPersistentPreference(PREFIX + "sigmaStepUm", DEFAULT_SIGMA_STEP_UM);
-        minFiberAreaUm2 =
-                PathPrefs.createPersistentPreference(PREFIX + "minFiberAreaUm2", DEFAULT_MIN_FIBER_AREA_UM2);
+        minFiberAreaUm2 = PathPrefs.createPersistentPreference(PREFIX + "minFiberAreaUm2", DEFAULT_MIN_FIBER_AREA_UM2);
         projectCalibrationName = PathPrefs.createPersistentPreference(
                 PREFIX + "projectCalibrationName", DEFAULT_PROJECT_CALIBRATION_NAME);
-        invertIntensity = PathPrefs.createPersistentPreference(
-                PREFIX + "invertIntensity", DEFAULT_INVERT_INTENSITY);
-        rollingBallRadiusUm = PathPrefs.createPersistentPreference(
-                PREFIX + "rollingBallRadiusUm", DEFAULT_ROLLING_BALL_RADIUS_UM);
+        invertIntensity = PathPrefs.createPersistentPreference(PREFIX + "invertIntensity", DEFAULT_INVERT_INTENSITY);
+        rollingBallRadiusUm =
+                PathPrefs.createPersistentPreference(PREFIX + "rollingBallRadiusUm", DEFAULT_ROLLING_BALL_RADIUS_UM);
         maskSource = PathPrefs.createPersistentPreference(PREFIX + "maskSource", DEFAULT_MASK_SOURCE);
         classifierName = PathPrefs.createPersistentPreference(PREFIX + "classifierName", DEFAULT_CLASSIFIER_NAME);
         objectClass = PathPrefs.createPersistentPreference(PREFIX + "objectClass", DEFAULT_OBJECT_CLASS);

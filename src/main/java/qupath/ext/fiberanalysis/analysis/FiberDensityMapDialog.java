@@ -13,6 +13,7 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import javafx.application.Platform;
@@ -24,7 +25,6 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
 import javafx.scene.control.ScrollPane;
@@ -46,6 +46,7 @@ import javafx.scene.text.FontWeight;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.images.ImageData;
@@ -158,16 +159,15 @@ public final class FiberDensityMapDialog {
 
         Label hdr = new Label("Images");
         hdr.setFont(Font.font("System", FontWeight.BOLD, 13));
-        Label sub = new Label(
-                "Select the project images to compute a density-map sidecar for. "
-                        + "Type / dimensions / calibration populate in the background.");
+        Label sub = new Label("Select the project images to compute a density-map sidecar for. "
+                + "Type / dimensions / calibration populate in the background.");
         sub.setStyle("-fx-text-fill: #555; -fx-font-size: 11px;");
         sub.setWrapText(true);
 
         imageTable = new TableView<>(rows);
         imageTable.setPlaceholder(new Label("This project has no images."));
 
-        TableColumn<ImageRow, Boolean> selCol = new TableColumn<>("✓");
+        TableColumn<ImageRow, Boolean> selCol = new TableColumn<>("Run");
         selCol.setCellValueFactory(cd -> cd.getValue().selectedProperty());
         selCol.setCellFactory(CheckBoxTableCell.forTableColumn(selCol));
         selCol.setEditable(true);
@@ -257,8 +257,8 @@ public final class FiberDensityMapDialog {
         modeSidecarRadio.setSelected(true); // default: safer for RGB base images
         outputModeGroup.selectedToggleProperty().addListener((obs, o, n) -> revalidate());
 
-        Label modeHelp = new Label(
-                "Channels:  density appears as extra channels on the source image and is sampleable\n"
+        Label modeHelp =
+                new Label("Channels:  density appears as extra channels on the source image and is sampleable\n"
                         + "via Analyze > Calculate Features > Add intensity features. For RGB base\n"
                         + "images this changes how the image renders (R/G/B become separate display\n"
                         + "channels; we auto-configure to recreate the RGB look on attach).\n\n"
@@ -271,22 +271,20 @@ public final class FiberDensityMapDialog {
         // --- Window grid (placeholder; will read from defaults later) ---
         Label windowLabel = new Label("Window grid (microns)");
         windowLabel.setStyle("-fx-font-weight: bold;");
-        Label windowHelp = new Label(
-                "Window size, overlap, and minimum coverage gate are inherited from your last\n"
-                        + "fiber-analysis Run. The defaults are loaded here; advanced controls land\n"
-                        + "in a later iteration of this dialog.");
+        Label windowHelp = new Label("Window size, overlap, and minimum coverage gate are inherited from your last\n"
+                + "fiber-analysis Run. The defaults are loaded here; advanced controls land\n"
+                + "in a later iteration of this dialog.");
         windowHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         windowHelp.setWrapText(true);
 
         // --- Sidecar location ---
         Label sidecarLabel = new Label("Sidecar location");
         sidecarLabel.setStyle("-fx-font-weight: bold;");
-        Label sidecarBody = new Label(
-                "Per image, a tiled uint16 pyramid OME-TIFF is written to\n"
-                        + "    <project>/fiber-analysis/density-maps/<image>_density.ome.tif\n"
-                        + "LZW-compressed; empty regions encoded as the no-data sentinel (raw=0,\n"
-                        + "channel scale + offset preserved in OME-XML so real units round-trip).\n"
-                        + "Expected size for a 100k x 100k slide with 8 channels: ~10-40 MB per image.");
+        Label sidecarBody = new Label("Per image, a tiled uint16 pyramid OME-TIFF is written to\n"
+                + "    <project>/fiber-analysis/density-maps/<image>_density.ome.tif\n"
+                + "LZW-compressed; empty regions encoded as the no-data sentinel (raw=0,\n"
+                + "channel scale + offset preserved in OME-XML so real units round-trip).\n"
+                + "Expected size for a 100k x 100k slide with 8 channels: ~10-40 MB per image.");
         sidecarBody.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         sidecarBody.setWrapText(true);
 
@@ -294,14 +292,7 @@ public final class FiberDensityMapDialog {
         VBox winBox = new VBox(4, windowLabel, windowHelp);
         VBox sideBox = new VBox(4, sidecarLabel, sidecarBody);
 
-        VBox content = new VBox(
-                12,
-                validationBox,
-                modeBox,
-                new Separator(),
-                winBox,
-                new Separator(),
-                sideBox);
+        VBox content = new VBox(12, validationBox, modeBox, new Separator(), winBox, new Separator(), sideBox);
         content.setPadding(new Insets(0));
 
         ScrollPane scroll = new ScrollPane(content);
@@ -320,10 +311,9 @@ public final class FiberDensityMapDialog {
 
         runBtn = new Button("Compute density maps");
         runBtn.setDefaultButton(true);
-        runBtn.setTooltip(new Tooltip(
-                "Tile-stream each selected image, write a uint16 quantized pyramid OME-TIFF\n"
-                        + "sidecar per image, and either attach as channels (Channels mode) or\n"
-                        + "expose via the sampling command (Sidecar mode)."));
+        runBtn.setTooltip(new Tooltip("Tile-stream each selected image, write a uint16 quantized pyramid OME-TIFF\n"
+                + "sidecar per image, and either attach as channels (Channels mode) or\n"
+                + "expose via the sampling command (Sidecar mode)."));
         runBtn.setOnAction(e -> onRun());
         runBtn.setDisable(true);
 
@@ -336,12 +326,62 @@ public final class FiberDensityMapDialog {
     }
 
     private void onRun() {
-        // Skeleton: compute pipeline is not yet wired. The validation has
-        // already enforced legality, so reaching here means the user did
-        // pick something legal -- we just have nothing to dispatch yet.
-        Dialogs.showInfoNotification(
-                "Fiber Analysis density map",
-                "Settings validated. Compute pipeline lands in the next iteration.");
+        Project<BufferedImage> project = gui != null ? gui.getProject() : null;
+        if (project == null) {
+            Dialogs.showErrorMessage("Fiber density map", "No open project.");
+            return;
+        }
+        List<ImageRow> picked = pickedRows();
+        if (picked.isEmpty()) return;
+
+        List<ProjectImageEntry<BufferedImage>> entries = new ArrayList<>(picked.size());
+        for (ImageRow r : picked) entries.add(r.entry);
+
+        // v1 reads the persisted segmentation + window prefs (the user's last
+        // run from the per-annotation dialog). A follow-up iteration adds
+        // controls to this dialog for window size / overlap / channel
+        // selection; right now the prefs ARE the source of truth so the user
+        // can review the segmentation behaviour in the regular Run dialog
+        // before kicking off the whole-slide density compute.
+        Double projectThresholdNorm = null;
+        String thrMethod = FiberAnalysisPreferences.thresholdMethodProperty().get();
+        if ("Project Otsu (calibrated)".equals(thrMethod)) {
+            String calName =
+                    FiberAnalysisPreferences.projectCalibrationNameProperty().get();
+            if (calName != null && !calName.isBlank()) {
+                projectThresholdNorm = FiberAnalysisWorkflow.loadCalibratedThreshold(calName);
+            }
+            // Always submit lowercase canonical method name to the Python side.
+            thrMethod = "project_otsu";
+        } else {
+            thrMethod = thrMethod.toLowerCase(Locale.ROOT);
+        }
+
+        FiberDensityMapWorkflow.DensityMapJobSpec spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
+                FiberAnalysisPreferences.windowSizeUmProperty().get(),
+                FiberAnalysisPreferences.windowOverlapPercentProperty().get(),
+                FiberAnalysisPreferences.internalChannelProperty().get(),
+                thrMethod,
+                FiberAnalysisPreferences.manualThresholdProperty().get(),
+                FiberAnalysisPreferences.ridgeFilterProperty().get(),
+                FiberAnalysisPreferences.sigmaMinProperty().get(),
+                FiberAnalysisPreferences.sigmaMaxProperty().get(),
+                FiberAnalysisPreferences.sigmaStepProperty().get(),
+                FiberAnalysisPreferences.minFiberAreaUm2Property().get(),
+                FiberAnalysisPreferences.invertIntensityProperty().get(),
+                FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
+                projectThresholdNorm);
+
+        // Output mode is captured but only the sidecar half is wired in v1;
+        // attach-as-channels lands in task 76. Log the choice so the
+        // server-side artefacts make it clear what the user picked.
+        boolean channelsMode = modeChannelsRadio != null && modeChannelsRadio.isSelected();
+        logger.info(
+                "Project density map: dispatching {} image(s), mode={}",
+                entries.size(),
+                channelsMode ? "Channels (sidecar still always written; attach not yet implemented)" : "Sidecar");
+
+        new FiberDensityMapWorkflow().runForEntries(spec, entries, project, gui);
     }
 
     // ---------- validation ----------
@@ -356,8 +396,7 @@ public final class FiberDensityMapDialog {
 
     static ValidationResult validate(List<ImageRow> picked, boolean channelsMode) {
         if (picked.isEmpty()) {
-            return ValidationResult.warn(
-                    "Select one or more images on the left to compute a density map.");
+            return ValidationResult.warn("Select one or more images on the left to compute a density map.");
         }
 
         // Pending = some rows still loading. Treat as blocking so the user
@@ -377,18 +416,17 @@ public final class FiberDensityMapDialog {
             }
         }
         if (!uncalibrated.isEmpty()) {
-            return ValidationResult.error(
-                    "Cannot run: "
-                            + uncalibrated.size()
-                            + " selected image"
-                            + (uncalibrated.size() == 1 ? " has" : "s have")
-                            + " no pixel calibration. "
-                            + "Set the pixel size in QuPath (Image > Set image type / properties) "
-                            + "or remove "
-                            + (uncalibrated.size() == 1 ? "it" : "them")
-                            + " from the selection.\n"
-                            + "Affected: "
-                            + summariseNames(uncalibrated));
+            return ValidationResult.error("Cannot run: "
+                    + uncalibrated.size()
+                    + " selected image"
+                    + (uncalibrated.size() == 1 ? " has" : "s have")
+                    + " no pixel calibration. "
+                    + "Set the pixel size in QuPath (Image > Set image type / properties) "
+                    + "or remove "
+                    + (uncalibrated.size() == 1 ? "it" : "them")
+                    + " from the selection.\n"
+                    + "Affected: "
+                    + summariseNames(uncalibrated));
         }
 
         // Pixel-type set across the selection drives mode-legality.
@@ -420,22 +458,20 @@ public final class FiberDensityMapDialog {
                                 + (picked.size() == 1 ? "" : "s")
                                 + ".");
             }
-            return ValidationResult.ok(
-                    "Ready to run in Channels mode on "
-                            + picked.size()
-                            + " image"
-                            + (picked.size() == 1 ? "" : "s")
-                            + " ("
-                            + describeTypes(types)
-                            + ").");
+            return ValidationResult.ok("Ready to run in Channels mode on "
+                    + picked.size()
+                    + " image"
+                    + (picked.size() == 1 ? "" : "s")
+                    + " ("
+                    + describeTypes(types)
+                    + ").");
         } else {
             // Sidecar mode works for everything.
-            return ValidationResult.ok(
-                    "Ready to run in Sidecar mode on "
-                            + picked.size()
-                            + " image"
-                            + (picked.size() == 1 ? "" : "s")
-                            + ". Native display is preserved for every selected image.");
+            return ValidationResult.ok("Ready to run in Sidecar mode on "
+                    + picked.size()
+                    + " image"
+                    + (picked.size() == 1 ? "" : "s")
+                    + ". Native display is preserved for every selected image.");
         }
     }
 
