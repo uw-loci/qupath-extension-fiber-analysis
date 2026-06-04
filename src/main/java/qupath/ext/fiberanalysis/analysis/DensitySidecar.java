@@ -99,6 +99,56 @@ public final class DensitySidecar {
     }
 
     /**
+     * Companion path to the sidecar carrying the auto-reattach opt-in. A
+     * tiny ASCII file -- presence is the signal; the body holds a few
+     * provenance fields so the user can grep the project tree to see
+     * which images have auto-reattach enabled.
+     */
+    public static Path markerPathFor(Path sidecar) {
+        if (sidecar == null) return null;
+        return sidecar.resolveSibling(sidecar.getFileName().toString() + ".attach");
+    }
+
+    /** Companion path for the project entry's sidecar; null if the project has no path. */
+    public static Path markerPathFor(Project<?> project, ProjectImageEntry<?> entry) {
+        Path sidecar = sidecarPathFor(project, entry);
+        return sidecar == null ? null : markerPathFor(sidecar);
+    }
+
+    /** True iff the auto-reattach marker is present beside the sidecar. */
+    public static boolean autoReattachEnabled(Path sidecar) {
+        Path marker = markerPathFor(sidecar);
+        return marker != null && Files.isRegularFile(marker);
+    }
+
+    /**
+     * Write (or refresh) the auto-reattach marker file beside the sidecar.
+     * Body is a small ASCII block so a user grepping the project tree can
+     * see which images have auto-reattach enabled and with what window size.
+     */
+    public static void writeAutoReattachMarker(Path sidecar, double windowSizeUm) throws IOException {
+        Path marker = markerPathFor(sidecar);
+        if (marker == null) return;
+        String body = "fiber_density_auto_reattach=true\n"
+                + String.format(java.util.Locale.ROOT, "window_size_um=%.6g%n", windowSizeUm)
+                + "sidecar=" + sidecar.getFileName() + "\n";
+        Files.writeString(marker, body, java.nio.charset.StandardCharsets.US_ASCII);
+        logger.info("Wrote auto-reattach marker: {}", marker);
+    }
+
+    /** Remove the auto-reattach marker. Returns true if a marker was deleted. */
+    public static boolean clearAutoReattachMarker(Path sidecar) {
+        Path marker = markerPathFor(sidecar);
+        if (marker == null) return false;
+        try {
+            return Files.deleteIfExists(marker);
+        } catch (IOException ex) {
+            logger.warn("Could not delete auto-reattach marker {}: {}", marker, ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Parse the per-channel quantization block from the sidecar's OME-XML
      * image description. Matches rows like
      * {@code  [3] name=Skeleton length (um); scale=1.23e-5; offset=0.0; unit=um}.

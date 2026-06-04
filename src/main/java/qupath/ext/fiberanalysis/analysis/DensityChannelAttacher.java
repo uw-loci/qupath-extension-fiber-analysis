@@ -69,12 +69,24 @@ public final class DensityChannelAttacher {
 
     private DensityChannelAttacher() {}
 
+    /** User-facing entry point: warns on RGB base before attaching. */
+    public static boolean attachForCurrentImage(QuPathGUI gui) {
+        return attachForCurrentImage(gui, true);
+    }
+
     /**
      * Locate the sidecar for the currently-open image and attach its channels.
-     * Returns true on success; surfaces an error dialog on the JavaFX thread
-     * for the user-visible failure modes (no project, no entry, no sidecar).
+     *
+     * @param gui            the QuPath GUI
+     * @param confirmForRgb  when true and the source image is RGB, show a
+     *                       confirmation dialog warning about the display
+     *                       impact before attaching. The auto-reattach hook
+     *                       passes {@code false} because the dialog's pre-run
+     *                       warning + the user's opt-in marker were the
+     *                       consent moment.
+     * @return true on successful attach.
      */
-    public static boolean attachForCurrentImage(QuPathGUI gui) {
+    public static boolean attachForCurrentImage(QuPathGUI gui, boolean confirmForRgb) {
         if (gui == null) return false;
         ImageData<BufferedImage> imageData = gui.getImageData();
         if (imageData == null) {
@@ -102,6 +114,15 @@ public final class DensityChannelAttacher {
                     "No density sidecar for this image yet. Run \"Project density map...\" first.\n\n"
                             + "Expected: " + sidecar);
             return false;
+        }
+        if (confirmForRgb && imageData.getServer().isRGB()) {
+            boolean ok = Dialogs.showConfirmDialog(
+                    "Fiber density attach",
+                    "This image is 8-bit RGB. Attaching density as channels will change how the image\n"
+                            + "renders: R/G/B become separate display channels until you reconfigure colours.\n\n"
+                            + "Continue? (Use the Sidecar + sampling workflow if you prefer to keep the\n"
+                            + "native RGB display.)");
+            if (!ok) return false;
         }
         try {
             attach(gui, imageData, sidecar);

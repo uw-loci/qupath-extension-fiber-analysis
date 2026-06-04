@@ -315,6 +315,13 @@ public final class FiberDensityMapWorkflow {
         String safeName = sanitize(entry.getImageName());
         Path outPath = outRoot.resolve(safeName + "_density.ome.tif");
         DensityTiffWriter.write(outPath.toString(), gridW, gridH, sidecarPxUm, channels, grids, quants);
+        // Drop / refresh the auto-reattach marker. We intentionally do not
+        // delete an existing marker when the user runs without the checkbox
+        // checked -- removing the marker is an explicit user action via the
+        // "Stop auto-reattaching density channels" menu command.
+        if (spec.writeAutoReattachMarker) {
+            DensitySidecar.writeAutoReattachMarker(outPath, spec.windowSizeUm);
+        }
         return outPath;
     }
 
@@ -482,6 +489,15 @@ public final class FiberDensityMapWorkflow {
         public final boolean invertIntensity;
         public final double rollingBallRadiusUm;
         public final Double projectThresholdNorm; // null = not used
+        /**
+         * When true (and Channels mode was picked), the workflow writes a
+         * companion {@code <sidecar>.attach} marker file alongside the
+         * sidecar. The extension's image-open hook reads this marker to
+         * auto-attach the channels on future opens. The dialog's pre-run
+         * warning for RGB base images was the consent moment; the auto-hook
+         * does not re-prompt.
+         */
+        public final boolean writeAutoReattachMarker;
 
         public DensityMapJobSpec(
                 double windowSizeUm,
@@ -496,7 +512,8 @@ public final class FiberDensityMapWorkflow {
                 double minFiberAreaUm2,
                 boolean invertIntensity,
                 double rollingBallRadiusUm,
-                Double projectThresholdNorm) {
+                Double projectThresholdNorm,
+                boolean writeAutoReattachMarker) {
             this.windowSizeUm = windowSizeUm;
             this.windowOverlapPercent = windowOverlapPercent;
             this.segChannel = segChannel;
@@ -510,6 +527,7 @@ public final class FiberDensityMapWorkflow {
             this.invertIntensity = invertIntensity;
             this.rollingBallRadiusUm = rollingBallRadiusUm;
             this.projectThresholdNorm = projectThresholdNorm;
+            this.writeAutoReattachMarker = writeAutoReattachMarker;
         }
     }
 

@@ -22,8 +22,12 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.awt.image.BufferedImage;
 import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
 import qupath.ext.fiberanalysis.analysis.DensitySamplingCommand;
+import qupath.ext.fiberanalysis.analysis.DensitySidecar;
+import qupath.lib.projects.Project;
+import qupath.lib.projects.ProjectImageEntry;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisBatchDialog;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisDialog;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisOverlayController;
@@ -162,7 +166,48 @@ public class FiberAnalysisExtension implements QuPathExtension {
         extractBundledDocumentation();
 
         // Build the menu on the FX thread.
-        Platform.runLater(() -> addMenuItems(qupath));
+        Platform.runLater(() -> {
+            addMenuItems(qupath);
+            installAutoReattachHook(qupath);
+        });
+    }
+
+    /**
+     * Installs a listener on {@link QuPathGUI#imageDataProperty()} that
+     * checks for an auto-reattach marker beside the just-opened image's
+     * density sidecar and, if present, attaches the density channels via
+     * {@link DensityChannelAttacher}. Idempotent: re-entrant calls
+     * triggered by our own setImageData are skipped because the wrapped
+     * server's type contains "concat".
+     */
+    private void installAutoReattachHook(QuPathGUI qupath) {
+        qupath.imageDataProperty().addListener((obs, oldData, newData) -> {
+            if (newData == null) return;
+            // Skip if this is the post-attach event (the new ImageData wraps
+            // a ConcatChannelsImageServer). String-match the server type
+            // because the class itself is package-private in qupath-core.
+            try {
+                String type = newData.getServer().getServerType();
+                if (type != null && type.toLowerCase().contains("concat")) return;
+            } catch (Exception ignored) {
+                // best-effort; fall through to the attach attempt
+            }
+            Project<BufferedImage> project = qupath.getProject();
+            if (project == null) return;
+            ProjectImageEntry<BufferedImage> entry = project.getEntry(newData);
+            if (entry == null) return;
+            Path sidecar = DensitySidecar.sidecarPathFor(project, entry);
+            if (sidecar == null || !DensitySidecar.exists(sidecar) || !DensitySidecar.autoReattachEnabled(sidecar)) {
+                return;
+            }
+            logger.info("Auto-reattach: density sidecar marker present, attaching for {}", entry.getImageName());
+            // Schedule on a microtask so the imageDataProperty listener
+            // chain returns before we trigger another setImageData. Calling
+            // setImageData inside a listener-on-imageDataProperty is allowed
+            // in QuPath, but defers a frame so the UI stays responsive.
+            Platform.runLater(() -> DensityChannelAttacher.attachForCurrentImage(qupath, false));
+        });
+        logger.info("Density auto-reattach hook installed");
     }
 
     /**
@@ -301,6 +346,45 @@ public class FiberAnalysisExtension implements QuPathExtension {
             }
         });
 
+        // Opt-out for the cross-session auto-reattach hook. Deletes the
+        // <sidecar>.attach marker so future image-opens get the original
+        // server. The sidecar itself stays on disk for the sampling command
+        // and manual reattach.
+        MenuItem stopAutoReattachItem = new MenuItem("Stop auto-reattaching density channels");
+        stopAutoReattachItem.disableProperty().bind(qupath.imageDataProperty().isNull());
+        stopAutoReattachItem.setOnAction(e -> {
+            try {
+                Project<BufferedImage> project = qupath.getProject();
+                if (project == null) {
+                    Dialogs.showErrorMessage(EXTENSION_NAME, "No project is open.");
+                    return;
+                }
+                ProjectImageEntry<BufferedImage> entry = project.getEntry(qupath.getImageData());
+                if (entry == null) {
+                    Dialogs.showErrorMessage(EXTENSION_NAME, "Current image is not part of the open project.");
+                    return;
+                }
+                Path sidecar = DensitySidecar.sidecarPathFor(project, entry);
+                if (sidecar == null || !DensitySidecar.exists(sidecar)) {
+                    Dialogs.showErrorMessage(EXTENSION_NAME, "No density sidecar for this image -- nothing to do.");
+                    return;
+                }
+                boolean removed = DensitySidecar.clearAutoReattachMarker(sidecar);
+                if (removed) {
+                    Dialogs.showInfoNotification(
+                            EXTENSION_NAME,
+                            "Auto-reattach disabled for this image. Sidecar TIFF kept on disk.");
+                } else {
+                    Dialogs.showInfoNotification(
+                            EXTENSION_NAME,
+                            "Auto-reattach was not enabled for this image (no marker found).");
+                }
+            } catch (Exception ex) {
+                logger.error("Stop-auto-reattach failed", ex);
+                Dialogs.showErrorMessage(EXTENSION_NAME, "Failed: " + ex.getMessage());
+            }
+        });
+
         MenuItem setupItem = new MenuItem("Setup environment...");
         setupItem.setOnAction(e -> {
             logger.info("Opening Fiber Analysis setup environment dialog");
@@ -322,6 +406,7 @@ public class FiberAnalysisExtension implements QuPathExtension {
                         densityMapItem,
                         sampleDensityItem,
                         attachDensityItem,
+                        stopAutoReattachItem,
                         new SeparatorMenuItem(),
                         setupItem,
                         pyConsoleItem);

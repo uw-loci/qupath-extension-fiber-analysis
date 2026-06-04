@@ -25,6 +25,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
 import javafx.scene.control.ScrollPane;
@@ -100,6 +101,7 @@ public final class FiberDensityMapDialog {
     private ToggleGroup outputModeGroup;
     private RadioButton modeChannelsRadio;
     private RadioButton modeSidecarRadio;
+    private CheckBox autoReattachCheck;
 
     private Label validationBanner;
     private VBox validationBox;
@@ -268,6 +270,22 @@ public final class FiberDensityMapDialog {
         modeHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         modeHelp.setWrapText(true);
 
+        // --- Cross-session opt-in (only meaningful in Channels mode) ---
+        autoReattachCheck = new CheckBox("Auto-reattach channels on image open");
+        autoReattachCheck.setTooltip(new Tooltip(
+                "When checked, a small marker file is written beside the sidecar. The\n"
+                        + "extension's image-open listener reads it on every future open of this\n"
+                        + "image (in this project) and re-attaches the density channels without\n"
+                        + "asking. To stop, run \"Stop auto-reattaching density channels\" or\n"
+                        + "delete the .attach marker file beside the sidecar."));
+        autoReattachCheck.disableProperty().bind(modeSidecarRadio.selectedProperty());
+        Label autoReattachHelp = new Label(
+                "Marker file: <sidecar>.attach (a few hundred bytes). Sidecar mode ignores\n"
+                        + "this checkbox -- the sampling command does not need an attach.");
+        autoReattachHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
+        autoReattachHelp.setWrapText(true);
+        autoReattachHelp.disableProperty().bind(modeSidecarRadio.selectedProperty());
+
         // --- Window grid (placeholder; will read from defaults later) ---
         Label windowLabel = new Label("Window grid (microns)");
         windowLabel.setStyle("-fx-font-weight: bold;");
@@ -288,7 +306,8 @@ public final class FiberDensityMapDialog {
         sidecarBody.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         sidecarBody.setWrapText(true);
 
-        VBox modeBox = new VBox(4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp);
+        VBox modeBox = new VBox(
+                4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp, autoReattachCheck, autoReattachHelp);
         VBox winBox = new VBox(4, windowLabel, windowHelp);
         VBox sideBox = new VBox(4, sidecarLabel, sidecarBody);
 
@@ -357,6 +376,9 @@ public final class FiberDensityMapDialog {
             thrMethod = thrMethod.toLowerCase(Locale.ROOT);
         }
 
+        boolean channelsMode = modeChannelsRadio != null && modeChannelsRadio.isSelected();
+        boolean autoReattach = channelsMode && autoReattachCheck != null && autoReattachCheck.isSelected();
+
         FiberDensityMapWorkflow.DensityMapJobSpec spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
                 FiberAnalysisPreferences.windowSizeUmProperty().get(),
                 FiberAnalysisPreferences.windowOverlapPercentProperty().get(),
@@ -370,9 +392,8 @@ public final class FiberDensityMapDialog {
                 FiberAnalysisPreferences.minFiberAreaUm2Property().get(),
                 FiberAnalysisPreferences.invertIntensityProperty().get(),
                 FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
-                projectThresholdNorm);
-
-        boolean channelsMode = modeChannelsRadio != null && modeChannelsRadio.isSelected();
+                projectThresholdNorm,
+                autoReattach);
         logger.info("Project density map: dispatching {} image(s), mode={}", entries.size(), channelsMode ? "Channels" : "Sidecar");
 
         Runnable onComplete = null;
