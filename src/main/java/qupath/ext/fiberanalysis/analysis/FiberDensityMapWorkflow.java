@@ -82,6 +82,21 @@ public final class FiberDensityMapWorkflow {
             List<ProjectImageEntry<BufferedImage>> entries,
             Project<BufferedImage> project,
             QuPathGUI qupath) {
+        return runForEntries(spec, entries, project, qupath, null);
+    }
+
+    /**
+     * Variant that runs {@code onComplete} on the JavaFX thread after every
+     * image has been processed (regardless of per-image success). Used by the
+     * dialog to fire the Channels-mode attach for the currently-open image
+     * once its sidecar is on disk.
+     */
+    public Thread runForEntries(
+            DensityMapJobSpec spec,
+            List<ProjectImageEntry<BufferedImage>> entries,
+            Project<BufferedImage> project,
+            QuPathGUI qupath,
+            Runnable onComplete) {
         if (entries == null || entries.isEmpty()) {
             Dialogs.showWarningNotification("Fiber density map", "No images selected.");
             return null;
@@ -91,7 +106,15 @@ public final class FiberDensityMapWorkflow {
         ProgressUi progress = new ProgressUi(owner);
         Platform.runLater(progress::show);
 
-        Thread worker = new Thread(() -> runWorker(spec, entries, project, progress), "FiberDensityMap-Worker");
+        Thread worker = new Thread(
+                () -> {
+                    try {
+                        runWorker(spec, entries, project, progress);
+                    } finally {
+                        if (onComplete != null) Platform.runLater(onComplete);
+                    }
+                },
+                "FiberDensityMap-Worker");
         worker.setDaemon(true);
         worker.start();
         return worker;

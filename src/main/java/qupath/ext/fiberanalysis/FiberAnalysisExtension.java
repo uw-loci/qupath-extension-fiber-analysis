@@ -22,10 +22,13 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
+import qupath.ext.fiberanalysis.analysis.DensitySamplingCommand;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisBatchDialog;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisDialog;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisOverlayController;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisPanel;
+import qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.ext.fiberanalysis.ui.PythonConsoleWindow;
 import qupath.ext.fiberanalysis.ui.SetupEnvironmentDialog;
@@ -256,7 +259,7 @@ public class FiberAnalysisExtension implements QuPathExtension {
         densityMapItem.setOnAction(e -> {
             logger.info("Opening Fiber Analysis project-density-map dialog");
             try {
-                new qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog(qupath).show();
+                new FiberDensityMapDialog(qupath).show();
             } catch (Exception ex) {
                 logger.error("Failed to open Fiber Analysis density-map dialog", ex);
                 Dialogs.showErrorMessage(EXTENSION_NAME, "Failed to open dialog: " + ex.getMessage());
@@ -274,10 +277,27 @@ public class FiberAnalysisExtension implements QuPathExtension {
         sampleDensityItem.setOnAction(e -> {
             logger.info("Running Fiber density sampling command");
             try {
-                new qupath.ext.fiberanalysis.analysis.DensitySamplingCommand(qupath).run();
+                new DensitySamplingCommand(qupath).run();
             } catch (Exception ex) {
                 logger.error("Density sampling command failed to launch", ex);
                 Dialogs.showErrorMessage(EXTENSION_NAME, "Failed to launch sampling: " + ex.getMessage());
+            }
+        });
+
+        // Channels-mode follow-up: attach the density sidecar onto the open
+        // image as extra channels. Per design discussion this is a session-
+        // only attach; the project's stored server builder is untouched, so
+        // the next time the image is opened the user sees the original
+        // server back. Auto-reattach on open is a later iteration.
+        MenuItem attachDensityItem = new MenuItem("Attach density channels");
+        attachDensityItem.disableProperty().bind(qupath.imageDataProperty().isNull());
+        attachDensityItem.setOnAction(e -> {
+            logger.info("Running Fiber density attach-as-channels command");
+            try {
+                DensityChannelAttacher.attachForCurrentImage(qupath);
+            } catch (Exception ex) {
+                logger.error("Density attach command failed to launch", ex);
+                Dialogs.showErrorMessage(EXTENSION_NAME, "Failed to launch attach: " + ex.getMessage());
             }
         });
 
@@ -301,6 +321,7 @@ public class FiberAnalysisExtension implements QuPathExtension {
                         batchItem,
                         densityMapItem,
                         sampleDensityItem,
+                        attachDensityItem,
                         new SeparatorMenuItem(),
                         setupItem,
                         pyConsoleItem);

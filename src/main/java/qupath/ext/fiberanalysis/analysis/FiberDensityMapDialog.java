@@ -372,16 +372,34 @@ public final class FiberDensityMapDialog {
                 FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
                 projectThresholdNorm);
 
-        // Output mode is captured but only the sidecar half is wired in v1;
-        // attach-as-channels lands in task 76. Log the choice so the
-        // server-side artefacts make it clear what the user picked.
         boolean channelsMode = modeChannelsRadio != null && modeChannelsRadio.isSelected();
-        logger.info(
-                "Project density map: dispatching {} image(s), mode={}",
-                entries.size(),
-                channelsMode ? "Channels (sidecar still always written; attach not yet implemented)" : "Sidecar");
+        logger.info("Project density map: dispatching {} image(s), mode={}", entries.size(), channelsMode ? "Channels" : "Sidecar");
 
-        new FiberDensityMapWorkflow().runForEntries(spec, entries, project, gui);
+        Runnable onComplete = null;
+        if (channelsMode) {
+            // After the whole batch completes, auto-attach the density
+            // channels onto whatever image is currently open in QuPath, if
+            // that image was part of this run. Other images in the batch
+            // are left as sidecars-on-disk; the user can switch to them
+            // and run "Attach density channels" manually. Session-only --
+            // the project entry's stored server builder is untouched.
+            final List<ProjectImageEntry<BufferedImage>> ranEntries = new ArrayList<>(entries);
+            final QuPathGUI guiRef = gui;
+            onComplete = () -> {
+                if (guiRef == null) return;
+                ImageData<BufferedImage> currentData = guiRef.getImageData();
+                if (currentData == null) return;
+                ProjectImageEntry<BufferedImage> currentEntry =
+                        guiRef.getProject() != null ? guiRef.getProject().getEntry(currentData) : null;
+                if (currentEntry == null || !ranEntries.contains(currentEntry)) {
+                    logger.info("Channels mode: current image was not part of the run; manual attach via menu");
+                    return;
+                }
+                DensityChannelAttacher.attachForCurrentImage(guiRef);
+            };
+        }
+
+        new FiberDensityMapWorkflow().runForEntries(spec, entries, project, gui, onComplete);
     }
 
     // ---------- validation ----------
