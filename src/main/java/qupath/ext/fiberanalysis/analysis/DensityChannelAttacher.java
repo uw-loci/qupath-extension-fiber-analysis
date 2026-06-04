@@ -18,6 +18,7 @@ import javafx.application.Platform;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.fx.dialogs.Dialogs;
+import qupath.lib.display.DirectServerChannelInfo;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
@@ -148,6 +149,7 @@ public final class DensityChannelAttacher {
         }
 
         ImageServer<BufferedImage> sourceServer = imageData.getServer();
+        boolean sourceWasRgb = sourceServer.isRGB();
         ImageServer<BufferedImage> sidecarServer = ImageServers.buildServer(sidecar.toUri());
 
         ImageServer<BufferedImage> merged = new TransformedServerBuilder(sourceServer)
@@ -156,8 +158,8 @@ public final class DensityChannelAttacher {
 
         // Carry the hierarchy + image type into the new ImageData so the
         // user's annotations / detections survive the server swap.
-        ImageData<BufferedImage> newImageData = new ImageData<>(
-                merged, imageData.getHierarchy(), imageData.getImageType());
+        ImageData<BufferedImage> newImageData =
+                new ImageData<>(merged, imageData.getHierarchy(), imageData.getImageType());
 
         final QuPathViewer viewer = gui.getViewer();
         if (viewer == null) {
@@ -166,14 +168,52 @@ public final class DensityChannelAttacher {
         Platform.runLater(() -> {
             try {
                 viewer.setImageData(newImageData);
+                if (sourceWasRgb) {
+                    // Concat forces the wrapped server to multi-channel
+                    // uint8, which drops QuPath's native RGB display path.
+                    // Configure the first three channels (= the original R,
+                    // G, B from the source) with red / green / blue LUT
+                    // colours and select them so the user gets back the
+                    // RGB look without manual reconfig. The remaining
+                    // channels (density) inherit the auto-assigned colours
+                    // from DensityChannelsImageServer's channel list.
+                    applyRgbDisplayRecovery(viewer);
+                }
                 logger.info(
-                        "Attached density channels for {} ({} sidecar channels appended)",
+                        "Attached density channels for {} ({} sidecar channels appended; rgb-recovery={})",
                         sourceServer.getPath(),
-                        sidecarServer.nChannels());
+                        sidecarServer.nChannels(),
+                        sourceWasRgb);
             } catch (IOException ex) {
                 logger.error("viewer.setImageData failed during density attach", ex);
                 Dialogs.showErrorMessage("Fiber density attach", "Setting the wrapped image failed: " + ex.getMessage());
             }
         });
+    }
+
+    /**
+     * Force the first three channels of the viewer's ImageDisplay to render
+     * as R / G / B, all selected. Used right after attach when the source
+     * image was RGB -- the concat'd server is non-RGB multi-channel so the
+     * viewer would otherwise default to a single-channel grayscale view.
+     *
+     * <p>Cast to {@link DirectServerChannelInfo} to call {@code setLUTColor};
+     * skip any channel that doesn't expose it (e.g. transform channels in
+     * a more exotic concat chain).
+     */
+    private static void applyRgbDisplayRecovery(QuPathViewer viewer) {
+        var display = viewer.getImageDisplay();
+        if (display == null) return;
+        var channels = display.availableChannels();
+        if (channels.size() < 3) return;
+        int[][] rgb = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}};
+        for (int i = 0; i < 3; i++) {
+            var info = channels.get(i);
+            if (info instanceof DirectServerChannelInfo direct) {
+                direct.setLUTColor(rgb[i][0], rgb[i][1], rgb[i][2]);
+            }
+            display.setChannelSelected(info, true);
+        }
+        viewer.repaintEntireImage();
     }
 }

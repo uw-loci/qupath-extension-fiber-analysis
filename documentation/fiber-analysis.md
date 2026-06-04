@@ -103,6 +103,53 @@ sync with the JAR you installed. The Appose env (Pixi-managed) lives
 at `~/.local/share/appose/qupath-fiber-analysis/` and is built on
 first use.
 
+## Project density map (whole-slide)
+
+For density-of-fiber maps across an entire slide, use the separate
+**Project density map** workflow rather than the per-annotation Run
+dialog. It tile-streams each selected image, runs the same per-window
+computations, and writes a uint16 pyramidal OME-TIFF "sidecar" per
+image at
+`<project>/fiber-analysis/density-maps/<image>_density.ome.tif`.
+
+Two output modes, picked in the dialog:
+
+- **Sidecar + sampling commands** (default; safer for RGB images).
+  The sidecar lives on disk; pull per-object density values into
+  the measurement table via `Sample fiber density into
+  measurements`. The base image's native display is untouched.
+- **Attach as channels**. After the sidecar lands, its channels are
+  concatenated onto the source server in the open viewer. Use this
+  if you want QuPath's `Analyze > Calculate Features > Add
+  intensity features` or any density-aware classifier to see the
+  density as channels. On RGB base images the wrapper forces
+  multi-channel uint16 and the native RGB display path is lost;
+  the attacher auto-configures the first three channels as red /
+  green / blue LUT colours so you get the RGB look back, but the
+  result is not pixel-identical to the original.
+
+The dialog blocks runs on uncalibrated images and on mixed-pixel-type
+selections when Channels mode is picked; warns (but allows) on
+Channels mode with RGB base images. An optional
+**"Auto-reattach channels on image open"** checkbox writes a small
+marker file beside the sidecar; the extension installs an image-open
+listener that re-attaches automatically on every future open in this
+project. To stop: `Stop auto-reattaching density channels` (deletes
+the marker; sidecar stays).
+
+Sidecar format (recoverable units): channels are uint16 with
+sentinel `raw=0` for no-data. Per-channel scale + offset live in
+the OME-XML image description so `real = raw * scale + offset` round-
+trips the original float values. Channel names match the QuPath
+measurement-table column names (`Fiber coverage (%)`, `HDM`,
+`Ridge count`, `Skeleton length (um)`, `Branch points`,
+`Mean angle (deg)`, `Order parameter`). Pixel size = `stride_px *
+source_pixel_size_um`, so QuPath aligns the sidecar back to the
+source physically.
+
+See the project README's "Project density map (WSI scale)" section
+for the full menu / validation matrix / limitations.
+
 ### Calling fiberlib as a library (outside QuPath)
 
 The entire pipeline is also a plain Python function -- the Appose task

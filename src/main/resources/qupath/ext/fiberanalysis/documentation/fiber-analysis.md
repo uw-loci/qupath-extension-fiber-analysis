@@ -39,6 +39,12 @@ fibers relative to the boundary using a hue-calibrated orientation
 field, whereas this extension scores **shape and texture of the
 segmented fibers themselves**, with no hue calibration.
 
+The four outputs from one analysed region -- here a border zone about
+120 microns wide -- are the segmented fiber mask, a morphometrics HDM
+map, a GLCM entropy map, and a straightness map:
+
+![Segmented mask, morphometrics HDM, GLCM entropy, and straightness map for one analysed region.](images/output-maps-border-zone.png)
+
 Read the document in order if you are setting up the workflow for
 the first time. Section 2 explains how an annotation becomes
 per-window metrics; sections 3 and 4 cover the two inputs the user
@@ -81,6 +87,14 @@ tortuosity      morphometrics    Radon scalar    GLCM features
 overlays (PNG) + windows.json + optional PathObjects
 ```
 
+The Run dialog drives this chain. Section 1 sets the search area
+(border zone width and zone mode), Section 2 picks the segmentation
+source, and Section 3 configures the moving-window grid; the
+Straightness, Morphometrics, Texture, and Output sections follow
+below:
+
+![Fiber Analysis Run dialog with the Search area, Fiber segmentation, and Window analysis sections expanded.](images/run-dialog.png)
+
 The Java side reads the annotation geometry, rasterises the dilated
 border zone, and dispatches an Appose task with the parameter dict.
 The Python module (`fiberlib/`) is bundled inside the JAR; it loads
@@ -88,6 +102,83 @@ from JAR resources at run time so the analysis code is always in
 sync with the JAR you installed. The Appose env (Pixi-managed) lives
 at `~/.local/share/appose/qupath-fiber-analysis/` and is built on
 first use.
+
+## Project density map (whole-slide)
+
+For density-of-fiber maps across an entire slide, use the separate
+**Project density map** workflow rather than the per-annotation Run
+dialog. It tile-streams each selected image, runs the same per-window
+computations, and writes a uint16 pyramidal OME-TIFF "sidecar" per
+image at
+`<project>/fiber-analysis/density-maps/<image>_density.ome.tif`.
+
+Two output modes, picked in the dialog:
+
+- **Sidecar + sampling commands** (default; safer for RGB images).
+  The sidecar lives on disk; pull per-object density values into
+  the measurement table via `Sample fiber density into
+  measurements`. The base image's native display is untouched.
+- **Attach as channels**. After the sidecar lands, its channels are
+  concatenated onto the source server in the open viewer. Use this
+  if you want QuPath's `Analyze > Calculate Features > Add
+  intensity features` or any density-aware classifier to see the
+  density as channels. On RGB base images the wrapper forces
+  multi-channel uint16 and the native RGB display path is lost;
+  the attacher auto-configures the first three channels as red /
+  green / blue LUT colours so you get the RGB look back, but the
+  result is not pixel-identical to the original.
+
+The dialog blocks runs on uncalibrated images and on mixed-pixel-type
+selections when Channels mode is picked; warns (but allows) on
+Channels mode with RGB base images. An optional
+**"Auto-reattach channels on image open"** checkbox writes a small
+marker file beside the sidecar; the extension installs an image-open
+listener that re-attaches automatically on every future open in this
+project. To stop: `Stop auto-reattaching density channels` (deletes
+the marker; sidecar stays).
+
+Sidecar format (recoverable units): channels are uint16 with
+sentinel `raw=0` for no-data. Per-channel scale + offset live in
+the OME-XML image description so `real = raw * scale + offset` round-
+trips the original float values. Channel names match the QuPath
+measurement-table column names (`Fiber coverage (%)`, `HDM`,
+`Ridge count`, `Skeleton length (um)`, `Branch points`,
+`Mean angle (deg)`, `Order parameter`). Pixel size = `stride_px *
+source_pixel_size_um`, so QuPath aligns the sidecar back to the
+source physically.
+
+See the project README's "Project density map (WSI scale)" section
+for the full menu / validation matrix / limitations.
+
+### Calling fiberlib as a library (outside QuPath)
+
+The entire pipeline is also a plain Python function -- the Appose task
+script (`scripts/run_fiber_analysis.py`) is only a thin wrapper that
+unpacks the injected globals, loads the PNGs, and calls it. To run the
+exact same analysis from host Python (tests, batch jobs, the
+collagen-phantom tooling):
+
+```python
+import fiberlib                      # pip install -e . , or add the
+                                     # fiberanalysis resource dir to sys.path
+out = fiberlib.analyze(
+    image,                           # numpy (H, W) or (H, W, 3)
+    pixel_size_um=0.5,
+    zone_mode="inside",              # whole-field analysis: 'inside' + a
+    border_zone_width_um=800,        # border wider than the region
+    window_enabled=True, window_size_um=80,
+)
+metrics = out["result"]              # JSON-friendly summary dict
+windows = out["window_grid"]         # per-window arrays (or None)
+```
+
+`analyze()` takes the same parameter names the Appose side injects (see
+its docstring), returns `result` / `window_grid` / `fiber_mask` /
+`analysis_mask` / `skeleton`, and only writes sidecar files when
+`output_dir=` is given. A repo-root `pyproject.toml` exposes `fiberlib`
+via `pip install -e .`. Note the analysis runs inside the dilated zone
+around the boundary mask, so for a whole-image baseline pass a full
+boundary with `zone_mode="inside"` and a large `border_zone_width_um`.
 
 Outputs land in the per-annotation subfolder under the output
 directory and are also surfaced as buttons on the results panel

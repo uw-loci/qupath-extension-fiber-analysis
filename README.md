@@ -199,6 +199,113 @@ Optional **per-window PathObjects** are added only when "Create
 per-window detection objects" is on in Section 3. A 50 x 50 grid =
 2500 objects; the toggle is off by default.
 
+## Project density map (WSI scale)
+
+A separate workflow for **whole-slide density-map output**: tile-streams
+each selected image, runs the same per-window analysis the regular
+"Run analysis..." dialog does, and writes the result as a tiled
+pyramidal uint16 OME-TIFF sidecar per image. The sidecar can be
+**sampled** into object measurements (preserves the native RGB
+display) or **attached as extra channels** on the source image
+(works for fluorescence WSIs without UX impact; on RGB it changes
+how the image renders, see warnings below).
+
+Menu: `Extensions > Fiber Analysis > Project density map...`
+
+### Output mode (you pick at dialog time)
+
+- **Sidecar + sampling commands** (default; safer for RGB). The
+  density TIFF lives at
+  `<project>/fiber-analysis/density-maps/<image>_density.ome.tif`
+  and is consumed via the new "Sample fiber density into
+  measurements" menu command. The base image's native display is
+  untouched.
+- **Attach as channels**. Same compute, but after the sidecar lands
+  the workflow concatenates its channels onto the source server in
+  the open viewer. The user can then use QuPath's built-in
+  `Analyze > Calculate Features > Add intensity features`, the
+  object classifier, density-aware cell classifiers, etc. -- the
+  density channels behave like any other channel. **On RGB base
+  images** the wrapper forces multi-channel uint16 and QuPath's
+  native RGB-display path is lost; the attacher auto-configures
+  channels 0-2 with red / green / blue LUT colours so the user
+  gets something resembling the RGB look back, but the result is
+  not pixel-identical to the original viewer state.
+
+### Validation rules in the dialog
+
+The dialog opens a split-pane picker. Left = project images with
+pixel type / dimensions / calibration status (populated in a
+background thread). Right = settings. A live validation banner
+gates the Run button:
+
+- Any selected image **without pixel calibration** -- **blocked**
+  in either mode (the um window size can't be translated).
+- **Channels mode + mixed pixel types** in the selection --
+  **blocked** (concat requires a single pixel type). Switch to
+  Sidecar or split into separate batches.
+- **Channels mode + RGB base** image(s) -- **warned but allowed**;
+  the user sees the display-impact note before they hit Run.
+- Sidecar mode always allowed (after the calibration gate).
+
+### Sidecar OME-TIFF format
+
+- uint16 multi-channel, planar (one IFD per channel).
+- 256x256 tiles, pyramid halving levels down to ~256 px max-dim,
+  LZW compression.
+- Channel names match the QuPath measurement-table column names
+  (`Fiber coverage (%)`, `HDM`, `Ridge count`, `Skeleton length
+  (um)`, `Branch points`, `Mean angle (deg)`, `Order parameter`),
+  so a user reading the channel list sees the same labels they
+  see in the measurement table.
+- Pixel value `raw=0` is the **no-data sentinel** (every metric is
+  non-negative by construction, so 0 is unambiguous).
+- Per-channel **scale + offset** are encoded in the OME-XML image
+  description (one row per channel); recover real units via
+  `real = raw * scale + offset`.
+- Pixel size in the OME-XML = `window_stride_px * source_pixel_size_um`
+  so the sidecar aligns to the source physically.
+
+### Auto-reattach across sessions (opt-in)
+
+Channels mode also exposes an **"Auto-reattach channels on image
+open"** checkbox in the dialog. When checked, the workflow writes
+a small ASCII marker file `<sidecar>.attach` (a few hundred bytes,
+carrying `window_size_um` and the sidecar filename) beside the
+OME-TIFF. The extension installs a listener on QuPath's
+`imageDataProperty` that, on every future open of an image with
+both a sidecar and the marker, calls the attacher without
+re-prompting. Off by default; explicit per-run opt-in.
+
+To **stop** auto-reattaching: `Extensions > Fiber Analysis > Stop
+auto-reattaching density channels` deletes the marker for the
+currently-open image. The OME-TIFF stays on disk for sampling and
+manual reattach. Equivalent if you delete the `.attach` file
+yourself.
+
+### Menu items at a glance
+
+| Item | What it does |
+|---|---|
+| `Project density map...` | Open the picker, pick images + mode, Run. Writes the sidecar OME-TIFFs (+ marker if opted in); auto-attaches to the currently-open image when Channels mode was picked. |
+| `Sample fiber density into measurements` | For the open image, locates its sidecar, samples per-channel mean of valid pixels within each target object's ROI, writes the per-channel real-units mean as a measurement named `Density: <channel>`. Targets selected objects when any are selected, otherwise all annotations. |
+| `Attach density channels` | Manually attach the sidecar for the currently-open image (one-off, session-only). Warns first on RGB sources. Use after switching to an image whose sidecar already exists. |
+| `Stop auto-reattaching density channels` | Delete the `.attach` marker for the currently-open image. Sidecar stays on disk. |
+
+### Limitations carried in v1
+
+- **No tile-margin overlap**. Skeleton-derived metrics (branch
+  points, total length) may have minor seam artefacts at tile
+  boundaries. Coverage / HDM / ridge_count are unaffected.
+- **Sequential per-tile Appose calls** -- a 100k slide is roughly
+  10-15 min. NDArray IPC + tile batching is a known speed
+  follow-up.
+- **Mean-angle channel is arithmetically averaged in the sampling
+  command** -- near the 0/180 axial boundary this gives wrong
+  values. Axial-circular averaging is a follow-up.
+- **Channel set is fixed** (the 7 above). Per-channel toggles in
+  the dialog are a follow-up; for now every run writes all 7.
+
 ## Troubleshooting
 
 ### "Show fiber mask" -- what the magenta overlay should look like
@@ -272,6 +379,49 @@ Known Appose race -- a prior task's worker-thread cleanup event is
 misattributed to the next task's UUID. `ApposeFiberService.runTask` now
 retries on this (max 2 attempts). If you see it land repeatedly on the
 same task, file an issue with the console log.
+
+### Density-map: the sidecar TIFF opens but every pixel is "0"
+
+Two common causes. First: the image had no fibers in any tile under
+your current segmentation settings -- preview a few tiles via the
+regular "Run analysis..." dialog before launching the whole-slide
+compute. Second: the source image was uncalibrated and the density
+fell back to the wrong scale -- the project-density dialog blocks
+uncalibrated images, but if you manually constructed the spec, set
+the pixel size in QuPath first (`Image > Set image type / properties`).
+
+### Density-map: Channels attach changed how my RGB image renders
+
+Expected. The wrapper forces multi-channel uint16 and drops QuPath's
+native RGB display path. The attacher auto-configures channels 0-2 as
+red / green / blue so you get the RGB look back, but the result is
+not pixel-identical to the original (auto min/max, channel-mixing
+math). To get back the original display, switch to a different image
+in the project and back, or run `Stop auto-reattaching density
+channels` and re-open the image. **Use Sidecar mode** (the default)
+plus `Sample fiber density into measurements` if you need the
+original RGB display preserved exactly.
+
+### Density-map: auto-reattach is firing for an image I no longer want it on
+
+Run `Extensions > Fiber Analysis > Stop auto-reattaching density
+channels` with that image open. This deletes the `.attach` marker
+file beside the sidecar. The sidecar OME-TIFF itself stays on disk so
+the sampling command and manual reattach still work. To stop on all
+images at once, delete every `<project>/fiber-analysis/density-maps/*.attach`
+in your file manager.
+
+### Density-map: "Sample fiber density into measurements" doesn't add any columns
+
+Three checks:
+1. Did the density compute finish for that image? Look for
+   `<project>/fiber-analysis/density-maps/<image>_density.ome.tif`.
+2. Are there target objects? The command samples selected objects
+   first; if nothing is selected, it falls back to every annotation.
+   If neither set exists, it bails out with an error.
+3. Did the object's bbox overlap any non-no-data sidecar pixels?
+   Empty regions of the slide are all-zero in the sidecar; sampling
+   over a region with no fiber returns NaN for every channel.
 
 ## Caveats
 
