@@ -432,14 +432,13 @@ public final class FiberDensityMapWorkflow {
         return Path.of(System.getProperty("user.home"), "QuPath", "fiber-out");
     }
 
+    /**
+     * Delegates to {@link DensitySidecar#sanitize(String)} so the writer and
+     * the sampling-command's sidecar-locator stay in sync. If you change the
+     * sanitisation rules, change them there.
+     */
     private static String sanitize(String name) {
-        if (name == null || name.isBlank()) return "image";
-        String s = name.replaceAll("[\\\\/:*?\"<>|\\s]+", "_");
-        // strip trailing dots / spaces (Windows refuses both)
-        s = s.replaceAll("[. ]+$", "");
-        if (s.isBlank()) return "image";
-        if (s.length() > 60) s = s.substring(0, 60);
-        return s;
+        return DensitySidecar.sanitize(name);
     }
 
     /**

@@ -263,6 +263,24 @@ public class FiberAnalysisExtension implements QuPathExtension {
             }
         });
 
+        // Sidecar-mode companion: reads the density-map sidecar for the
+        // currently open image and adds per-channel mean measurements onto
+        // selected objects (or all annotations if nothing is selected).
+        // Equivalent to the QuPath built-in "Add intensity features" but
+        // pulls from the sidecar instead of an attached channel, so the
+        // base RGB display stays native.
+        MenuItem sampleDensityItem = new MenuItem("Sample fiber density into measurements");
+        sampleDensityItem.disableProperty().bind(qupath.imageDataProperty().isNull());
+        sampleDensityItem.setOnAction(e -> {
+            logger.info("Running Fiber density sampling command");
+            try {
+                new qupath.ext.fiberanalysis.analysis.DensitySamplingCommand(qupath).run();
+            } catch (Exception ex) {
+                logger.error("Density sampling command failed to launch", ex);
+                Dialogs.showErrorMessage(EXTENSION_NAME, "Failed to launch sampling: " + ex.getMessage());
+            }
+        });
+
         MenuItem setupItem = new MenuItem("Setup environment...");
         setupItem.setOnAction(e -> {
             logger.info("Opening Fiber Analysis setup environment dialog");
@@ -278,7 +296,14 @@ public class FiberAnalysisExtension implements QuPathExtension {
 
         extensionMenu
                 .getItems()
-                .addAll(runItem, batchItem, densityMapItem, new SeparatorMenuItem(), setupItem, pyConsoleItem);
+                .addAll(
+                        runItem,
+                        batchItem,
+                        densityMapItem,
+                        sampleDensityItem,
+                        new SeparatorMenuItem(),
+                        setupItem,
+                        pyConsoleItem);
         logger.info("Menu items added for extension: {}", EXTENSION_NAME);
     }
 }
