@@ -281,6 +281,59 @@ public final class FiberCalibrationRunner {
                             .create()
                             .toJson(payload));
 
+            // Provenance triple: alongside calibration_<name>.json we emit a
+            // human-readable params.txt echo and a Groovy re-run script.
+            // The calibration_<name>.json itself is the load-back file
+            // (so we don't duplicate it as a separate params.json) -- the
+            // Groovy template reads calibration_<name>.json directly.
+            try {
+                Map<String, Object> cfgEchoed = new LinkedHashMap<>();
+                cfgEchoed.put("calibrationName", safeName);
+                cfgEchoed.put("sampleSize", cfg.sampleSize);
+                cfgEchoed.put("randomSeed", cfg.randomSeed);
+                cfgEchoed.put("nameFilter", cfg.nameFilter == null ? "" : cfg.nameFilter);
+                cfgEchoed.put("classFilter", new ArrayList<>(cfg.classFilter));
+                cfgEchoed.put("segChannel", cfg.segChannel);
+                cfgEchoed.put("ridgeFilter", cfg.ridgeFilter);
+                cfgEchoed.put("sigmaMinUm", cfg.sigmaMinUm);
+                cfgEchoed.put("sigmaMaxUm", cfg.sigmaMaxUm);
+                cfgEchoed.put("sigmaStepUm", cfg.sigmaStepUm);
+                cfgEchoed.put("invertIntensity", cfg.invertIntensity);
+                cfgEchoed.put("rollingBallRadiusUm", cfg.rollingBallRadiusUm);
+                cfgEchoed.put("borderZoneUm", cfg.borderZoneUm);
+
+                String projectPath = project.getPath() != null
+                        ? project.getPath().toAbsolutePath().toString()
+                        : "";
+                Map<String, String> placeholders = new LinkedHashMap<>();
+                placeholders.put("PROJECT_PATH", projectPath);
+                placeholders.put("PROJECT_PATH_LITERAL", RunProvenance.groovyString(projectPath));
+                // For calibration the rerun script reads the calibration_<name>.json
+                // directly (it's already a complete settings record); override the
+                // auto-injected PARAMS_JSON_PATH to point at that file rather than
+                // a sibling params.json we don't write.
+                placeholders.put("PARAMS_JSON_PATH", calFile.toAbsolutePath().toString());
+                placeholders.put(
+                        "PARAMS_JSON_PATH_LITERAL",
+                        RunProvenance.groovyString(calFile.toAbsolutePath().toString()));
+
+                // Write params.txt + rerun.groovy. We skip params.json (calibration_<name>.json
+                // IS the params.json) by writing only the two we need.
+                Path txtPath = faDir.resolve("calibration_" + safeName + "_params.txt");
+                Path groovyPath = faDir.resolve("calibration_" + safeName + "_rerun.groovy");
+                RunProvenance.writeParamsTxt(
+                        txtPath,
+                        java.util.List.of(
+                                "calibration run parameters",
+                                "The companion " + calFile.getFileName()
+                                        + " is the load-back file the rerun script reads.",
+                                "Re-run headlessly via:  QuPath script " + groovyPath.getFileName()),
+                        cfgEchoed);
+                RunProvenance.writeRerunGroovy(groovyPath, RunProvenance.KIND_CALIBRATION, placeholders);
+            } catch (IOException provEx) {
+                logger.warn("Could not write calibration provenance for '{}': {}", safeName, provEx.getMessage());
+            }
+
             logger.info(
                     "Calibration '{}' saved to {} -- threshold={}, regions={}, pixels={}",
                     safeName,

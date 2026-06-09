@@ -37,7 +37,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
-import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.Label;
@@ -122,11 +121,13 @@ public class FiberAnalysisWorkflow {
             ImageData<BufferedImage> imageData,
             QuPathGUI qupath) {
         if (annotations == null || annotations.isEmpty()) {
-            Dialogs.showWarningNotification("Fiber Analysis", "No annotations selected.");
+            if (HeadlessFx.isReady()) Dialogs.showWarningNotification("Fiber Analysis", "No annotations selected.");
+            else logger.warn("Fiber Analysis: no annotations selected (headless).");
             return null;
         }
         if (imageData == null || imageData.getServer() == null) {
-            Dialogs.showErrorMessage("Fiber Analysis", "No image data available.");
+            if (HeadlessFx.isReady()) Dialogs.showErrorMessage("Fiber Analysis", "No image data available.");
+            else logger.error("Fiber Analysis: no image data available (headless).");
             return null;
         }
 
@@ -136,7 +137,7 @@ public class FiberAnalysisWorkflow {
         // Surface the results panel up front (B2 fix). If the user invoked Run
         // with the panel hidden, we make sure it is reachable before the first
         // appendResult, so the run is never "where did the results go?".
-        Platform.runLater(() -> {
+        HeadlessFx.runLater(() -> {
             progress.show();
             FiberAnalysisExtension.ensureResultWindow(qupath);
             // Start the run counter on the panel so the status line counts down
@@ -151,7 +152,8 @@ public class FiberAnalysisWorkflow {
             }
         });
 
-        Thread worker = new Thread(() -> runWorker(params, annotations, imageData, progress), "FiberAnalysis-Worker");
+        Thread worker =
+                new Thread(() -> runWorker(params, annotations, imageData, qupath, progress), "FiberAnalysis-Worker");
         worker.setDaemon(true);
         worker.start();
         return worker;
@@ -161,6 +163,7 @@ public class FiberAnalysisWorkflow {
             FiberAnalysisParams params,
             List<PathObject> annotations,
             ImageData<BufferedImage> imageData,
+            QuPathGUI qupath,
             ProgressUi progress) {
         long t0 = System.currentTimeMillis();
         int total = annotations.size();
@@ -173,7 +176,7 @@ public class FiberAnalysisWorkflow {
                 ApposeFiberService.getInstance().initialize(progress::setSub);
             } catch (IOException e) {
                 logger.error("Failed to initialize Appose service", e);
-                Platform.runLater(() -> {
+                HeadlessFx.runLater(() -> {
                     progress.close();
                     Dialogs.showErrorMessage(
                             "Fiber Analysis", "Failed to set up Python environment: " + e.getMessage());
@@ -197,7 +200,7 @@ public class FiberAnalysisWorkflow {
             Path outputRoot = baseRoot.resolve(runFolder);
             try {
                 Files.createDirectories(outputRoot);
-                writeParamsFiles(outputRoot, params, paramsHash, runStamp, imageData);
+                writeParamsFiles(outputRoot, params, paramsHash, runStamp, imageData, qupath, annotations);
             } catch (IOException e) {
                 logger.warn("Could not create output dir or write params: {}", e.getMessage());
             }
@@ -242,7 +245,7 @@ public class FiberAnalysisWorkflow {
                 } catch (Exception e) {
                     failed++;
                     logger.error("Annotation {} failed", annName, e);
-                    Platform.runLater(() -> Dialogs.showErrorNotification(
+                    HeadlessFx.runLater(() -> Dialogs.showErrorNotification(
                             "Fiber Analysis", "Annotation \"" + annName + "\" failed: " + e.getMessage()));
                 }
             }
@@ -251,7 +254,7 @@ public class FiberAnalysisWorkflow {
             if (!allWindowDetections.isEmpty() && imageData.getHierarchy() != null) {
                 final PathObjectHierarchy hierarchy = imageData.getHierarchy();
                 final List<PathObject> toAdd = new ArrayList<>(allWindowDetections);
-                Platform.runLater(() -> {
+                HeadlessFx.runLater(() -> {
                     hierarchy.addObjects(toAdd);
                     logger.info("Added {} window detection objects to hierarchy", toAdd.size());
                 });
@@ -264,7 +267,7 @@ public class FiberAnalysisWorkflow {
             try {
                 final Object p = panel;
                 if (p != null) {
-                    Platform.runLater(() -> {
+                    HeadlessFx.runLater(() -> {
                         try {
                             p.getClass().getMethod("finishRun").invoke(p);
                         } catch (Exception ex) {
@@ -276,7 +279,7 @@ public class FiberAnalysisWorkflow {
                 logger.debug("finishRun dispatch failed: {}", ex.getMessage());
             }
         } finally {
-            Platform.runLater(progress::close);
+            HeadlessFx.runLater(progress::close);
         }
     }
 
@@ -574,7 +577,7 @@ public class FiberAnalysisWorkflow {
                     "No results panel registered; result for {} written to {}", res.annotationName(), res.outputDir());
             return;
         }
-        Platform.runLater(() -> {
+        HeadlessFx.runLater(() -> {
             try {
                 panel.getClass()
                         .getMethod("appendResult", AnnotationResult.class)
@@ -714,45 +717,75 @@ public class FiberAnalysisWorkflow {
 
     /**
      * Writes the per-run {@code params.json} (machine-readable, suitable as
-     * input to a batch run) and {@code params.txt} (human-readable echo of
-     * every dialog control). Both land in the per-run subdir alongside the
-     * per-annotation output folders.
+     * input to a batch run), {@code params.txt} (human-readable echo of every
+     * dialog control), and {@code rerun.groovy} (headless re-run script).
+     * All three land in the per-run subdir alongside the per-annotation
+     * output folders. Delegates to {@link RunProvenance}.
+     *
+     * @param qupath      GUI handle for resolving project path; may be null
+     *                    (in which case the rerun script still writes but
+     *                    leaves the project path placeholder unresolved).
+     * @param annotations the input annotations -- their names are baked into
+     *                    rerun.groovy so a re-run picks the same set.
      */
     static void writeParamsFiles(
-            Path runDir, FiberAnalysisParams p, String paramsHash, String runStamp, ImageData<BufferedImage> imageData)
+            Path runDir,
+            FiberAnalysisParams p,
+            String paramsHash,
+            String runStamp,
+            ImageData<BufferedImage> imageData,
+            QuPathGUI qupath,
+            List<PathObject> annotations)
             throws IOException {
-        Map<String, Object> meta = paramsAsOrderedMap(p);
-        // Provenance keys at the top so a human reading params.txt sees them first.
-        Map<String, Object> withMeta = new LinkedHashMap<>();
-        withMeta.put("run_timestamp", runStamp);
-        withMeta.put("params_hash", paramsHash);
-        String extVersion = GeneralTools.getPackageVersion(FiberAnalysisWorkflow.class);
-        withMeta.put("extension_version", extVersion != null ? extVersion : "0.1.0-SNAPSHOT");
+        Map<String, Object> params = paramsAsOrderedMap(p);
+
+        String imageName = null;
         if (imageData != null && imageData.getServer() != null) {
             try {
-                withMeta.put("image_name", imageData.getServer().getMetadata().getName());
+                imageName = imageData.getServer().getMetadata().getName();
             } catch (Exception ignored) {
                 // best effort
             }
         }
-        withMeta.putAll(meta);
 
-        Gson gson = new com.google.gson.GsonBuilder()
-                .setPrettyPrinting()
-                .disableHtmlEscaping()
-                .create();
-        Files.writeString(runDir.resolve("params.json"), gson.toJson(withMeta));
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("# fiber-analysis run parameters\n");
-        sb.append("# Reload this run's settings by pointing the batch dialog at params.json in this folder.\n");
-        for (Map.Entry<String, Object> e : withMeta.entrySet()) {
-            sb.append(e.getKey())
-                    .append(" = ")
-                    .append(String.valueOf(e.getValue()))
-                    .append('\n');
+        String projectPath = "";
+        if (qupath != null && qupath.getProject() != null && qupath.getProject().getPath() != null) {
+            projectPath = qupath.getProject().getPath().toAbsolutePath().toString();
         }
-        Files.writeString(runDir.resolve("params.txt"), sb.toString());
+
+        // Annotation names for the rerun script. Skip unnamed annotations
+        // (they cannot be matched by name on rerun -- the rerun script
+        // falls back to "all annotations" if the list ends up empty).
+        List<String> annotationNames = new ArrayList<>();
+        if (annotations != null) {
+            for (PathObject ann : annotations) {
+                String n = ann.getName();
+                if (n != null && !n.isBlank()) annotationNames.add(n);
+            }
+        }
+
+        Map<String, String> placeholders = new LinkedHashMap<>();
+        placeholders.put("PROJECT_PATH", projectPath);
+        placeholders.put("PROJECT_PATH_LITERAL", RunProvenance.groovyString(projectPath));
+        placeholders.put("IMAGE_NAME", imageName == null ? "" : imageName);
+        placeholders.put("IMAGE_NAME_LITERAL", RunProvenance.groovyString(imageName == null ? "" : imageName));
+        placeholders.put("ANNOTATION_NAMES_LITERAL", RunProvenance.groovyStringList(annotationNames));
+
+        List<String> txtHeader = List.of(
+                "fiber-analysis run parameters",
+                "Reload this run's settings by pointing the batch dialog at params.json in this folder,",
+                "or re-run headlessly via:  QuPath script rerun.groovy");
+
+        RunProvenance.writeAll(
+                runDir,
+                "params",
+                RunProvenance.KIND_FIBER_ANALYSIS,
+                params,
+                txtHeader,
+                imageName,
+                runStamp,
+                paramsHash,
+                placeholders);
     }
 
     /**
@@ -1192,13 +1225,28 @@ public class FiberAnalysisWorkflow {
      * {@code DualProgressDialog} which is intentionally not available here.
      */
     private static final class ProgressUi {
-        private final Stage stage;
-        private final Label mainLabel = new Label("Starting...");
-        private final ProgressBar mainBar = new ProgressBar(0);
-        private final Label subLabel = new Label("");
-        private final ProgressBar subBar = new ProgressBar();
+        // Headless mode (JavaFX toolkit not started -- e.g. `QuPath script`)
+        // logs progress instead of building a Stage. Eager Control field
+        // initializers are gated for the same reason: instantiating
+        // `new Label(...)` would trip Control.<clinit> with ISE.
+        private final boolean headless;
+        private Stage stage;
+        private Label mainLabel;
+        private ProgressBar mainBar;
+        private Label subLabel;
+        private ProgressBar subBar;
 
         ProgressUi(Window owner, int totalAnnotations) {
+            this.headless = !HeadlessFx.isReady();
+            if (headless) {
+                logger.info("Fiber Analysis (headless mode -- progress logged below).");
+                return;
+            }
+            this.mainLabel = new Label("Starting...");
+            this.mainBar = new ProgressBar(0);
+            this.subLabel = new Label("");
+            this.subBar = new ProgressBar();
+
             this.stage = new Stage();
             stage.setTitle("Fiber Analysis");
             stage.initModality(Modality.NONE);
@@ -1217,15 +1265,22 @@ public class FiberAnalysisWorkflow {
         }
 
         void show() {
+            if (headless) return;
             stage.show();
         }
 
         void close() {
+            if (headless) return;
             stage.close();
         }
 
         void setMain(String message, int done, int total) {
-            Platform.runLater(() -> {
+            if (headless) {
+                if (total > 0) logger.info("[{}/{}] {}", done, total, message);
+                else logger.info("{}", message);
+                return;
+            }
+            HeadlessFx.runLater(() -> {
                 mainLabel.setText(message);
                 if (total > 0) {
                     mainBar.setProgress((double) done / (double) total);
@@ -1236,7 +1291,11 @@ public class FiberAnalysisWorkflow {
         }
 
         void setSub(String message) {
-            Platform.runLater(() -> {
+            if (headless) {
+                if (message != null && !message.isBlank()) logger.info("  {}", message);
+                return;
+            }
+            HeadlessFx.runLater(() -> {
                 subLabel.setText(message != null ? message : "");
                 subBar.setProgress(-1);
             });

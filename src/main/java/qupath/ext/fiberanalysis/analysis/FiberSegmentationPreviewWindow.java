@@ -20,8 +20,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import javafx.application.Platform;
 import javafx.beans.value.ChangeListener;
 import javafx.embed.swing.SwingFXUtils;
@@ -35,6 +37,7 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
 import javafx.scene.control.Spinner;
+import javafx.scene.control.Tooltip;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.HBox;
@@ -47,13 +50,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
 import qupath.fx.dialogs.Dialogs;
+import qupath.lib.common.ColorTools;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathObjects;
+import qupath.lib.objects.classes.PathClass;
+import qupath.lib.objects.hierarchy.PathObjectHierarchy;
+import qupath.lib.regions.ImagePlane;
 import qupath.lib.regions.RegionRequest;
+import qupath.lib.roi.ROIs;
+import qupath.lib.roi.interfaces.ROI;
 
 /**
  * Live segmentation preview window. Reads a small region (128/256/512 px)
@@ -63,6 +73,13 @@ import qupath.lib.regions.RegionRequest;
  * region. Recomputes (debounced) whenever any of the parent dialog's Section
  * 2 controls change, so users can tune sigma / threshold / invert /
  * rolling-ball quickly without waiting for a full per-annotation run.
+ *
+ * <p>The window also drops a transient rectangle annotation onto the QuPath
+ * viewer marking the exact region being previewed (PathClass
+ * "Fiber-Preview-Region", locked, set as the viewer's selection). The marker
+ * tracks the preview as the user pans / resizes the region and is removed
+ * when the window closes -- so the user always knows which patch of the slide
+ * the preview is reading from.
  */
 final class FiberSegmentationPreviewWindow {
 
@@ -70,6 +87,9 @@ final class FiberSegmentationPreviewWindow {
 
     /** Debounce delay between a spinner change and the next preview redraw. */
     private static final long DEBOUNCE_MS = 350;
+
+    /** Class assigned to the transient region-marker annotation. */
+    private static final String MARKER_CLASS_NAME = "Fiber-Preview-Region";
 
     private FiberSegmentationPreviewWindow() {}
 
@@ -106,48 +126,85 @@ final class FiberSegmentationPreviewWindow {
         ImageView baseView = new ImageView();
         baseView.setPreserveRatio(true);
         baseView.setSmooth(false);
-        baseView.setFitWidth(420);
-        baseView.setFitHeight(420);
+        baseView.setFitWidth(480);
+        baseView.setFitHeight(480);
 
         ImageView overlayView = new ImageView();
         overlayView.setPreserveRatio(true);
         overlayView.setSmooth(false);
-        overlayView.setFitWidth(420);
-        overlayView.setFitHeight(420);
+        overlayView.setFitWidth(480);
+        overlayView.setFitHeight(480);
         overlayView.setOpacity(0.65);
 
         StackPane imageStack = new StackPane(baseView, overlayView);
         imageStack.setStyle("-fx-background-color: #1f1f1f;");
-        imageStack.setPrefSize(420, 420);
+        imageStack.setPrefSize(480, 480);
 
         ChoiceBox<Integer> sizeChoice = new ChoiceBox<>();
         sizeChoice.getItems().addAll(128, 256, 512);
         sizeChoice.setValue(256);
+        sizeChoice.setTooltip(new Tooltip("Pixel side-length of the region to preview. Centred on the\n"
+                + "viewer (or the selected annotation's centroid)."));
 
         Slider opacitySlider = new Slider(0.0, 1.0, 0.65);
-        opacitySlider.setPrefWidth(150);
+        opacitySlider.setPrefWidth(140);
         opacitySlider.valueProperty().addListener((o, a, b) -> overlayView.setOpacity(b.doubleValue()));
+        opacitySlider.setTooltip(new Tooltip("Opacity of the magenta fiber-mask overlay on top of the\n"
+                + "source region. Does NOT re-run segmentation."));
 
         CheckBox autoCheck = new CheckBox("Auto-refresh");
         autoCheck.setSelected(true);
+        autoCheck.setTooltip(new Tooltip("When ON, the preview re-runs (after a short debounce) every time\n"
+                + "you change a segmentation knob in the main dialog -- threshold,\n"
+                + "ridge filter, sigma range, invert, rolling-ball, calibration,\n"
+                + "channel, border-zone -- or the Region size above.\n\n"
+                + "Pan / zoom in the QuPath viewer does NOT auto-trigger; click\n"
+                + "Refresh after moving to a new location.\n\n"
+                + "When OFF, every preview update is on-demand via the Refresh\n"
+                + "button. Useful while tweaking spinners quickly without paying\n"
+                + "the Python round-trip on every keystroke."));
 
         Button refreshBtn = new Button("Refresh");
+        refreshBtn.setTooltip(new Tooltip("Re-read the current region from the viewer and re-run segmentation\n"
+                + "with the current dialog settings. Use this after panning /\n"
+                + "zooming the QuPath viewer (those don't auto-refresh) or when\n"
+                + "Auto-refresh is OFF."));
+        refreshBtn.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        autoCheck.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
 
+        // Top summary line -- which patch of the slide are we previewing and
+        // with which segmentation knobs. Always visible, even before pixels
+        // load, so the user knows what the preview should reflect.
+        Label regionLabel = new Label("Region: --");
+        regionLabel.setStyle("-fx-font-weight: bold;");
+        regionLabel.setWrapText(true);
+        regionLabel.setMaxWidth(Double.MAX_VALUE);
+
+        Label paramsLabel = new Label("Parameters: --");
+        paramsLabel.setWrapText(true);
+        paramsLabel.setMaxWidth(Double.MAX_VALUE);
+
+        // Status (results / errors) -- inherit theme text colour rather than
+        // hard-coding a grey that disappears against QuPath's dark theme.
         Label statusLabel = new Label("Click Refresh to start.");
-        statusLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         statusLabel.setWrapText(true);
+        statusLabel.setMaxWidth(Double.MAX_VALUE);
 
-        HBox controls = new HBox(
-                8,
-                new Label("Region size (px):"),
-                sizeChoice,
-                new Label("Opacity:"),
-                opacitySlider,
-                autoCheck,
-                refreshBtn);
-        controls.setAlignment(Pos.CENTER_LEFT);
+        VBox infoBox = new VBox(3, regionLabel, paramsLabel, statusLabel);
+        infoBox.setMaxWidth(Double.MAX_VALUE);
 
-        VBox root = new VBox(8, imageStack, controls, statusLabel);
+        // Two control rows so the 560-wide stage doesn't clip Auto-refresh /
+        // Refresh on the right. Row 1: region + opacity (display knobs).
+        // Row 2: refresh controls (run knobs).
+        HBox displayRow = new HBox(8, new Label("Region size (px):"), sizeChoice, new Label("Opacity:"), opacitySlider);
+        displayRow.setAlignment(Pos.CENTER_LEFT);
+
+        HBox refreshRow = new HBox(8, autoCheck, refreshBtn);
+        refreshRow.setAlignment(Pos.CENTER_LEFT);
+
+        VBox controls = new VBox(4, displayRow, refreshRow);
+
+        VBox root = new VBox(8, imageStack, controls, infoBox);
         root.setPadding(new Insets(10));
         root.setAlignment(Pos.TOP_CENTER);
 
@@ -162,6 +219,9 @@ final class FiberSegmentationPreviewWindow {
         }
         final AtomicLong lastRequest = new AtomicLong(0);
         final AtomicLong inflightThreadId = new AtomicLong(0);
+        // Holds the transient region-marker annotation so we can update or
+        // remove it across previews + window close.
+        final AtomicReference<PathObject> regionMarker = new AtomicReference<>(null);
 
         Runnable schedule = () -> {
             long id = lastRequest.incrementAndGet();
@@ -194,9 +254,12 @@ final class FiberSegmentationPreviewWindow {
                                 borderZoneSpinner,
                                 baseView,
                                 overlayView,
+                                regionLabel,
+                                paramsLabel,
                                 statusLabel,
                                 lastRequest,
-                                inflightThreadId);
+                                inflightThreadId,
+                                regionMarker);
                     },
                     "FiberPreview-" + id);
             t.setDaemon(true);
@@ -225,8 +288,11 @@ final class FiberSegmentationPreviewWindow {
         if (calibrationCombo != null) calibrationCombo.valueProperty().addListener(autoListener);
         if (borderZoneSpinner != null) borderZoneSpinner.valueProperty().addListener(autoListener);
 
-        stage.setScene(new Scene(root, 480, 560));
+        // Wider stage so the long region/params/status lines don't get clipped.
+        stage.setScene(new Scene(root, 560, 640));
         stage.setOnHidden(e -> {
+            // Remove the region marker from the QuPath hierarchy.
+            removeRegionMarker(gui, regionMarker);
             // Best-effort temp cleanup
             try {
                 if (tempDir[0] != null && Files.isDirectory(tempDir[0])) {
@@ -268,9 +334,12 @@ final class FiberSegmentationPreviewWindow {
             Spinner<Double> borderZoneSpinner,
             ImageView baseView,
             ImageView overlayView,
+            Label regionLabel,
+            Label paramsLabel,
             Label statusLabel,
             AtomicLong lastRequest,
-            AtomicLong inflightThreadId) {
+            AtomicLong inflightThreadId,
+            AtomicReference<PathObject> regionMarker) {
 
         inflightThreadId.set(requestId);
         long t0 = System.currentTimeMillis();
@@ -285,7 +354,11 @@ final class FiberSegmentationPreviewWindow {
 
             double cx, cy;
             PathObject selected = viewer.getSelectedObject();
-            if (selected != null && selected.getROI() != null) {
+            // Treat our own region marker as "no user selection" so the
+            // preview keeps centering on the viewer instead of locking onto
+            // the rectangle we just dropped.
+            boolean haveUserSelection = selected != null && selected.getROI() != null && !isPreviewMarker(selected);
+            if (haveUserSelection) {
                 cx = selected.getROI().getCentroidX();
                 cy = selected.getROI().getCentroidY();
             } else {
@@ -296,6 +369,57 @@ final class FiberSegmentationPreviewWindow {
             int y = (int) Math.max(0, Math.min(server.getHeight() - regionSize, cy - regionSize / 2.0));
             int w = Math.min(regionSize, server.getWidth() - x);
             int h = Math.min(regionSize, server.getHeight() - y);
+
+            // Pixel size for um <-> px conversion (mirror buildScriptInputs logic).
+            double pxUm = 0.5;
+            boolean haveCalibration = false;
+            try {
+                PixelCalibration cal = server.getPixelCalibration();
+                if (cal != null && cal.hasPixelSizeMicrons()) {
+                    pxUm = cal.getAveragedPixelSizeMicrons();
+                    haveCalibration = true;
+                }
+            } catch (Exception ignored) {
+            }
+
+            // Update the top region/params labels + drop the marker onto the
+            // image right away so the user sees WHICH patch we're reading
+            // even before Python returns.
+            final int xF = x;
+            final int yF = y;
+            final int wF = w;
+            final int hF = h;
+            final double pxUmF = pxUm;
+            final boolean haveCalF = haveCalibration;
+            final String chanLabel = channelCombo == null ? "Raw intensity" : String.valueOf(channelCombo.getValue());
+            final String thrMethod =
+                    thresholdMethodCombo == null ? "Otsu" : String.valueOf(thresholdMethodCombo.getValue());
+            final String ridgeLabel = ridgeFilterCombo == null ? "none" : String.valueOf(ridgeFilterCombo.getValue());
+            final double sMin = sigmaMinSpinner == null ? 1.0 : sigmaMinSpinner.getValue();
+            final double sMax = sigmaMaxSpinner == null ? 4.0 : sigmaMaxSpinner.getValue();
+            final double sStep = sigmaStepSpinner == null ? 1.0 : sigmaStepSpinner.getValue();
+            final boolean invert = invertIntensityCheck != null && invertIntensityCheck.isSelected();
+            final double rbUm = rollingBallSpinner == null ? 0.0 : rollingBallSpinner.getValue();
+            Platform.runLater(() -> {
+                if (lastRequest.get() != requestId) return;
+                String umPart = haveCalF
+                        ? String.format(Locale.ROOT, " (%.1f x %.1f um)", wF * pxUmF, hF * pxUmF)
+                        : " (uncalibrated)";
+                regionLabel.setText(
+                        String.format(Locale.ROOT, "Region: %d x %d px at (%d, %d)%s", wF, hF, xF, yF, umPart));
+                paramsLabel.setText(String.format(
+                        Locale.ROOT,
+                        "Channel: %s | Threshold: %s | Ridge: %s | Sigma: %.1f-%.1f step %.1f um%s%s",
+                        chanLabel,
+                        thrMethod,
+                        ridgeLabel,
+                        sMin,
+                        sMax,
+                        sStep,
+                        invert ? " | inverted" : "",
+                        rbUm > 0 ? String.format(Locale.ROOT, " | rolling-ball %.1f um", rbUm) : ""));
+                updateRegionMarker(gui, regionMarker, xF, yF, wF, hF);
+            });
 
             RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, x, y, w, h);
             BufferedImage img = server.readRegion(req);
@@ -310,40 +434,21 @@ final class FiberSegmentationPreviewWindow {
             // If a newer request came in while we were reading, drop this one.
             if (lastRequest.get() != requestId) return;
 
-            // Pixel size for um->px conversion (mirror buildScriptInputs logic).
-            double pxUm = 0.5;
-            try {
-                PixelCalibration cal = server.getPixelCalibration();
-                if (cal != null && cal.hasPixelSizeMicrons()) {
-                    pxUm = cal.getAveragedPixelSizeMicrons();
-                }
-            } catch (Exception ignored) {
-            }
-
             Map<String, Object> in = new LinkedHashMap<>();
             in.put("region_image_path", regionPng.toAbsolutePath().toString());
             in.put("output_overlay_path", overlayPng.toAbsolutePath().toString());
-            in.put("seg_channel", channelCombo == null ? "Raw intensity" : channelCombo.getValue());
-            String thrMethod = thresholdMethodCombo == null ? "Otsu" : thresholdMethodCombo.getValue();
+            in.put("seg_channel", chanLabel);
             // Translate the dialog label into the snake_case the Python segmenter expects.
             String thrCode = "Project Otsu (calibrated)".equals(thrMethod) ? "project_otsu" : thrMethod.toLowerCase();
             in.put("threshold_method", thrCode);
             in.put("manual_threshold", manualThresholdSpinner == null ? 128 : manualThresholdSpinner.getValue());
-            in.put(
-                    "ridge_filter",
-                    ridgeFilterCombo == null
-                            ? "none"
-                            : ridgeFilterCombo.getValue().toLowerCase());
-            double sMin = sigmaMinSpinner == null ? 1.0 : sigmaMinSpinner.getValue();
-            double sMax = sigmaMaxSpinner == null ? 4.0 : sigmaMaxSpinner.getValue();
-            double sStep = sigmaStepSpinner == null ? 1.0 : sigmaStepSpinner.getValue();
+            in.put("ridge_filter", ridgeLabel.toLowerCase());
             in.put("sigma_min", sMin / pxUm);
             in.put("sigma_max", sMax / pxUm);
             in.put("sigma_step", sStep / pxUm);
             double minAreaUm2 = minFiberAreaSpinner == null ? 1.0 : minFiberAreaSpinner.getValue();
             in.put("min_fiber_area_px", (int) Math.max(0, Math.round(minAreaUm2 / (pxUm * pxUm))));
-            in.put("invert_intensity", invertIntensityCheck != null && invertIntensityCheck.isSelected());
-            double rbUm = rollingBallSpinner == null ? 0.0 : rollingBallSpinner.getValue();
+            in.put("invert_intensity", invert);
             in.put("rolling_ball_radius", (int) Math.max(0, Math.round(rbUm / pxUm)));
             // Calibrated threshold lookup if needed.
             if ("project_otsu".equals(thrCode) && calibrationCombo != null && calibrationCombo.getValue() != null) {
@@ -351,7 +456,25 @@ final class FiberSegmentationPreviewWindow {
                 if (thr != null) in.put("project_threshold_norm", thr);
             }
 
-            Task task = ApposeFiberService.getInstance().runTask("preview_segmentation", in);
+            // Lazy-init the Appose service if the main workflow hasn't been
+            // run yet this session. First-time setup builds a pixi env and
+            // can take several minutes -- pipe status into the preview's
+            // status line so the user knows what's happening. `initialize`
+            // is synchronized + idempotent, so concurrent preview requests
+            // queue cleanly and the second one returns immediately.
+            ApposeFiberService apposeSvc = ApposeFiberService.getInstance();
+            if (!apposeSvc.isAvailable()) {
+                setStatus(statusLabel, "First-time setup: building Python environment (may take several minutes)...");
+                try {
+                    apposeSvc.initialize(msg -> setStatus(statusLabel, "Setup: " + msg));
+                } catch (IOException initEx) {
+                    setStatus(statusLabel, "Appose setup failed: " + initEx.getMessage());
+                    return;
+                }
+                if (lastRequest.get() != requestId) return;
+            }
+
+            Task task = apposeSvc.runTask("preview_segmentation", in);
             if (lastRequest.get() != requestId) return;
 
             Object out = task.outputs.get("result_json");
@@ -370,19 +493,15 @@ final class FiberSegmentationPreviewWindow {
             final String summary;
             if (result != null) {
                 summary = String.format(
-                        java.util.Locale.ROOT,
-                        "%dx%d at (%d,%d) | fiber %d/%d px (%.1f%%) | Python %.0f ms (total %d ms)",
-                        w,
-                        h,
-                        x,
-                        y,
+                        Locale.ROOT,
+                        "Fiber: %d / %d px (%.1f%%) | Python %.0f ms | total %d ms",
                         result.get("fiber_pixels").getAsInt(),
                         result.get("total_pixels").getAsInt(),
                         result.get("coverage_percent").getAsDouble(),
                         result.get("ms_segment").getAsDouble(),
                         elapsed);
             } else {
-                summary = String.format("%dx%d at (%d,%d) | %d ms", w, h, x, y, elapsed);
+                summary = String.format(Locale.ROOT, "%d ms (no result payload)", elapsed);
             }
             Platform.runLater(() -> {
                 if (lastRequest.get() != requestId) return;
@@ -398,5 +517,54 @@ final class FiberSegmentationPreviewWindow {
 
     private static void setStatus(Label label, String text) {
         Platform.runLater(() -> label.setText(text));
+    }
+
+    /**
+     * Add (or move) the transient rectangle annotation that marks the patch
+     * being previewed. Locked + classed so the user can tell it's not a real
+     * annotation, and set as the viewer's selected object so they get the
+     * marching-ants visualisation. Must be called on the JavaFX thread.
+     */
+    private static void updateRegionMarker(QuPathGUI gui, AtomicReference<PathObject> ref, int x, int y, int w, int h) {
+        if (gui == null || gui.getImageData() == null) return;
+        PathObjectHierarchy hierarchy = gui.getImageData().getHierarchy();
+        if (hierarchy == null) return;
+        PathObject existing = ref.get();
+        if (existing != null) {
+            hierarchy.removeObject(existing, false);
+        }
+        ROI rect = ROIs.createRectangleROI(x, y, w, h, ImagePlane.getDefaultPlane());
+        PathClass markerClass = PathClass.fromString(MARKER_CLASS_NAME, ColorTools.packRGB(0, 200, 255));
+        PathObject marker = PathObjects.createAnnotationObject(rect, markerClass);
+        marker.setName("[Fiber preview region]");
+        marker.setLocked(true);
+        hierarchy.addObject(marker);
+        QuPathViewer viewer = gui.getViewer();
+        if (viewer != null) {
+            viewer.setSelectedObject(marker);
+        }
+        ref.set(marker);
+    }
+
+    /** Strip the marker on window close so it doesn't pollute the hierarchy. */
+    private static void removeRegionMarker(QuPathGUI gui, AtomicReference<PathObject> ref) {
+        Platform.runLater(() -> {
+            PathObject marker = ref.getAndSet(null);
+            if (marker == null || gui == null || gui.getImageData() == null) return;
+            PathObjectHierarchy hierarchy = gui.getImageData().getHierarchy();
+            if (hierarchy != null) {
+                hierarchy.removeObject(marker, false);
+                QuPathViewer viewer = gui.getViewer();
+                if (viewer != null && marker.equals(viewer.getSelectedObject())) {
+                    viewer.setSelectedObject(null);
+                }
+            }
+        });
+    }
+
+    private static boolean isPreviewMarker(PathObject obj) {
+        if (obj == null) return false;
+        PathClass cls = obj.getPathClass();
+        return cls != null && MARKER_CLASS_NAME.equals(cls.getName());
     }
 }

@@ -1,0 +1,51 @@
+// Headless re-run for a density-map run.
+//
+// Re-run from disk:
+//   <QuPath-launcher> script <this-file>
+//
+// ${TIMESTAMP_UTC}  (kind: ${WORKFLOW_KIND}, extension v${EXTENSION_VERSION})
+
+import qupath.lib.projects.Project
+import qupath.lib.projects.ProjectIO
+import qupath.lib.projects.ProjectImageEntry
+import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow
+import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow.DensityMapJobSpec
+import java.nio.file.Paths
+import java.util.concurrent.CountDownLatch
+
+// ---- Baked-in run identity (substituted at write time) ----
+String paramsJsonPath = ${PARAMS_JSON_PATH_LITERAL}
+String projectPath    = ${PROJECT_PATH_LITERAL}
+// Image names this script will (re-)compute density maps for.
+List<String> imageNames = [${IMAGE_NAMES_LITERAL}]
+
+// ---- Load the spec ----
+DensityMapJobSpec spec = DensityMapJobSpec.fromJson(new File(paramsJsonPath))
+println "Loaded density-map spec from: " + paramsJsonPath
+
+// ---- Open project + resolve entries ----
+Project project = ProjectIO.loadProject(new File(projectPath), java.awt.image.BufferedImage.class)
+List<ProjectImageEntry> entries = new ArrayList<>()
+for (name in imageNames) {
+    ProjectImageEntry hit = null
+    for (e in project.getImageList()) {
+        if (e.getImageName() == name) { hit = e; break }
+    }
+    if (hit == null) {
+        println "WARN: image '" + name + "' not found in project, skipping"
+    } else {
+        entries.add(hit)
+    }
+}
+if (entries.isEmpty()) {
+    println "ERROR: no matching images in " + projectPath
+    System.exit(2)
+}
+println "Will run density map on " + entries.size() + " image(s)"
+
+// ---- Dispatch + block via CountDownLatch ----
+CountDownLatch latch = new CountDownLatch(1)
+FiberDensityMapWorkflow wf = new FiberDensityMapWorkflow()
+wf.runForEntries(spec, entries, project, null, { -> latch.countDown() } as Runnable)
+latch.await()
+println "Done."

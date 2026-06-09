@@ -95,7 +95,18 @@ public class PythonConsoleWindow {
         String timestamp = LocalTime.now().format(TIME_FMT);
         messageQueue.add("[" + timestamp + "] " + msg);
         if (flushPending.compareAndSet(false, true)) {
-            Platform.runLater(PythonConsoleWindow::flushQueue);
+            // Headless guard: in `QuPath script` mode the JavaFX toolkit was
+            // never started, so Platform.runLater throws ISE. The queue is
+            // still useful (a later show() would flush it), but we must not
+            // bubble the failure -- this method is called from Appose's
+            // background thread to log every Python debug line, and we
+            // don't want to crash the entire run on a logging call.
+            if (qupath.ext.fiberanalysis.analysis.HeadlessFx.isReady()) {
+                Platform.runLater(PythonConsoleWindow::flushQueue);
+            } else {
+                // Reset so subsequent calls keep trying once FX is up.
+                flushPending.set(false);
+            }
         }
     }
 

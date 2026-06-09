@@ -199,6 +199,40 @@ Optional **per-window PathObjects** are added only when "Create
 per-window detection objects" is on in Section 3. A 50 x 50 grid =
 2500 objects; the toggle is off by default.
 
+## Reproducing a run from disk
+
+Every file-producing analysis drops three companion artifacts next to its
+outputs:
+
+- `params.json` -- pretty-printed JSON with a top-level `meta` block
+  (`versions`, `run: {timestamp_utc, run_id, ...}`) and the full
+  insertion-ordered `parameters` block. This is the machine-readable record
+  of what was actually run.
+- `params.txt` -- the same key/value list as a `key = value`-per-line text
+  file. Grep-friendly; quick to scan.
+- `rerun.groovy` -- a self-contained Groovy script that re-executes the
+  analysis headlessly via QuPath's script mode. All paths are baked in as
+  string literals; edit the script if the project moves.
+
+To re-run from disk (no GUI clicks):
+
+```
+~/path/to/QuPath script <output-dir>/rerun.groovy
+```
+
+Per analysis, the files land as follows:
+
+| Analysis | Output dir | Files |
+|---|---|---|
+| Per-annotation fiber analysis | `<base>/YYYYMMDD_HHMMSS_<hash>/` | `params.json`, `params.txt`, `rerun.groovy` |
+| Project density map | `<project>/fiber-analysis/density-maps/` | `<image>_density_params.json`, `<image>_density_params.txt`, `<image>_density_rerun.groovy` (one set per image) |
+| Project calibration | `<project>/fiber-analysis/` | `calibration_<name>_params.txt`, `calibration_<name>_rerun.groovy` (the existing `calibration_<name>.json` is itself the params record the rerun reads) |
+
+The rerun scripts use the project + image names recorded in the params at
+write time. If you move the project to a different machine or path, open
+the `.groovy` file and adjust the `projectPath` (and `imageName(s)`) at the
+top of the file.
+
 ## Project density map (WSI scale)
 
 A separate workflow for **whole-slide density-map output**: tile-streams

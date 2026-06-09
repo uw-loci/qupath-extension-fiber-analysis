@@ -743,34 +743,66 @@ def analyze(
                         fh.write(f"{k}: {v}\n")
 
         if morph_on and window_grid is not None and emit_mask:
+            # Build a per-window "is this window inside the analysis zone?"
+            # boolean grid the same way GLCM gates its per-window arrays --
+            # any zone-mask pixel in the cell means the window is in-bounds.
+            # Without this, ring-shaped annotations render the bounding-box
+            # corners as 0-valued viridis (dark purple) instead of the
+            # transparent the user expects, because n_pixels / n_fibers are
+            # integer arrays that stay at 0 outside the ring.
+            wpx = int(window_grid["window_px"])
+            spx = int(window_grid["stride_px"])
+            hw, ww = window_grid["grid_shape"]
+            zone_included = np.zeros((hw, ww), dtype=bool)
+            for iy in range(hw):
+                y0 = iy * spx
+                y1 = min(zone_mask.shape[0], y0 + wpx)
+                if y1 <= y0:
+                    continue
+                for ix in range(ww):
+                    x0 = ix * spx
+                    x1 = min(zone_mask.shape[1], x0 + wpx)
+                    if x1 <= x0:
+                        continue
+                    if zone_mask[y0:y1, x0:x1].any():
+                        zone_included[iy, ix] = True
+
+            def _zone_masked(arr):
+                """Return a float copy of arr with non-included cells NaN'd."""
+                if arr is None:
+                    return None
+                a = np.asarray(arr, dtype=np.float32).copy()
+                if a.shape != zone_included.shape:
+                    return a
+                a[~zone_included] = np.nan
+                return a
+
             zone_area_px_v = int(zone_mask.sum())
+            n_pix_masked = _zone_masked(window_grid.get("n_pixels"))
             rndr.render_morphometrics_overlay(
-                window_grid,
+                {**window_grid, "n_pixels": n_pix_masked},
                 os.path.join(out_dir, "morphometrics_overlay.png"),
                 rh,
                 rw,
                 zone_area_px=zone_area_px_v,
             )
+
             morph_per_window = OrderedDict()
             if "n_pixels" in window_grid and window_grid["n_pixels"] is not None:
                 n_pix_grid = window_grid["n_pixels"]
                 window_area_px = float(window_grid["window_px"]) ** 2
                 if window_area_px > 0:
-                    morph_per_window["fiber_coverage_percent"] = (
-                        100.0 * n_pix_grid.astype(float) / window_area_px
-                    )
-                morph_per_window["hdm"] = (
-                    n_pix_grid.astype(float) / window_area_px
-                    if window_area_px > 0
-                    else None
-                )
+                    cov = 100.0 * n_pix_grid.astype(float) / window_area_px
+                    morph_per_window["fiber_coverage_percent"] = _zone_masked(cov)
+                    hdm_arr = n_pix_grid.astype(float) / window_area_px
+                    morph_per_window["hdm"] = _zone_masked(hdm_arr)
             if "n_fibers" in window_grid and window_grid["n_fibers"] is not None:
-                morph_per_window["ridge_count"] = window_grid["n_fibers"]
+                morph_per_window["ridge_count"] = _zone_masked(window_grid["n_fibers"])
             morph_extra = window_grid.get("morphometrics")
             if isinstance(morph_extra, dict):
                 for k, arr in morph_extra.items():
                     if isinstance(arr, np.ndarray):
-                        morph_per_window[k] = arr
+                        morph_per_window[k] = _zone_masked(arr)
             for prop_name, arr in morph_per_window.items():
                 if arr is None:
                     continue

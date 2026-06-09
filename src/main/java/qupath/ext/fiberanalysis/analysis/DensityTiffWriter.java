@@ -80,50 +80,93 @@ public final class DensityTiffWriter {
     }
 
     /**
+     * Write a density-map sidecar.
+     *
+     * <p>The compact density grid ({@code gridW x gridH}) is upsampled on
+     * the fly into a sidecar with the SAME pixel dimensions as the source
+     * image ({@code srcW x srcH}) via nearest-neighbour replication: each
+     * grid cell {@code (gx, gy)} covers source pixels
+     * {@code [gx*stridePx, (gx+1)*stridePx) x [gy*stridePx, (gy+1)*stridePx)}.
+     * Why match source dims rather than save the compact grid:
+     *
+     * <ul>
+     *   <li>When the user opens the sidecar standalone (File &gt; Open) it
+     *       renders at the same visual scale as the source instead of a
+     *       small thumbnail in the upper-left.</li>
+     *   <li>{@code Attach density channels} can concat directly onto the
+     *       source server -- {@code TransformedServerBuilder.concatChannels}
+     *       requires matching pixel dimensions.</li>
+     *   <li>{@code Sample fiber density} reads sidecar pixels in identity
+     *       source-pixel coords; no scale conversion required.</li>
+     * </ul>
+     *
+     * LZW compresses the replicated blocks very efficiently so the on-disk
+     * cost over a 68 x 68 sidecar is modest (~10-20x rather than the
+     * 900x naive uncompressed).
+     *
      * @param outputPath  absolute path ending in {@code .ome.tif}
-     * @param width       density-grid width in windows
-     * @param height      density-grid height in windows
-     * @param pixelSizeUm physical pixel size for this server (i.e.
-     *                    {@code window_px * source_pixel_size_um}). The
-     *                    OME-TIFF reports this so QuPath aligns the
-     *                    sidecar back to the source image.
+     * @param srcW        sidecar pixel width = source image width
+     * @param srcH        sidecar pixel height = source image height
+     * @param srcPxUm     source pixel size in microns (also the sidecar's
+     *                    physical pixel size)
+     * @param gridW       compact density-grid width (windows across)
+     * @param gridH       compact density-grid height (windows down)
+     * @param stridePx    source-pixel stride between density-grid cells
+     *                    (= {@code window_px - overlap_px}); used as the
+     *                    nearest-neighbour upsample factor
      * @param channels    channel descriptors in canonical order; must match
      *                    {@code grids.length}.
-     * @param grids       per-channel uint16 buffers (length
-     *                    {@code width * height}). Sentinel value 0 marks
-     *                    "no data".
+     * @param grids       per-channel uint16 buffers, length
+     *                    {@code gridW * gridH}. Sentinel value 0 = no data.
      * @param quants      per-channel quantization spec; stored in OME-XML
-     *                    so the original float units round-trip.
+     *                    so the original float units round-trip via
+     *                    {@code real = raw * scale + offset}.
      */
     public static void write(
             String outputPath,
-            int width,
-            int height,
-            double pixelSizeUm,
+            int srcW,
+            int srcH,
+            double srcPxUm,
+            int gridW,
+            int gridH,
+            int stridePx,
             List<DensityChannelSpec> channels,
             short[][] grids,
-            List<ChannelQuant> quants)
+            List<ChannelQuant> quants,
+            boolean smoothInterpolation)
             throws IOException {
 
         if (channels.size() != grids.length || channels.size() != quants.size()) {
             throw new IllegalArgumentException("channels/grids/quants size mismatch: " + channels.size() + " / "
                     + grids.length + " / " + quants.size());
         }
+        if (stridePx <= 0) {
+            throw new IllegalArgumentException("stridePx must be positive, got " + stridePx);
+        }
+        for (short[] g : grids) {
+            if (g.length != gridW * gridH) {
+                throw new IllegalArgumentException("grid length " + g.length + " != gridW*gridH " + (gridW * gridH));
+            }
+        }
 
         int nChannels = channels.size();
-        double[] downsamples = computePyramidDownsamples(width, height);
+        double[] downsamples = computePyramidDownsamples(srcW, srcH);
         int numLevels = downsamples.length;
 
-        long estimatedBytes = estimatePixelBytes(width, height, nChannels, downsamples);
+        long estimatedBytes = estimatePixelBytes(srcW, srcH, nChannels, downsamples);
         boolean bigTiff = estimatedBytes >= (Integer.MAX_VALUE - 1024L * 1024L * 100L);
 
         IMetadata meta = MetadataTools.createOMEXMLMetadata();
-        initializeMetadata(meta, width, height, nChannels, pixelSizeUm, channels, quants, downsamples);
+        initializeMetadata(meta, srcW, srcH, nChannels, srcPxUm, channels, quants, downsamples);
 
         logger.info(
-                "Density OME-TIFF: {}x{}, {} channels, {} levels, tile={}, compression={}, bigTiff={}",
-                width,
-                height,
+                "Density OME-TIFF: {}x{} (from {}x{} grid, stride={}, smooth={}), {} channels, {} levels, tile={}, compression={}, bigTiff={}",
+                srcW,
+                srcH,
+                gridW,
+                gridH,
+                stridePx,
+                smoothInterpolation,
                 nChannels,
                 numLevels,
                 TILE_SIZE,
@@ -147,8 +190,8 @@ public final class DensityTiffWriter {
 
             for (int level = 0; level < numLevels; level++) {
                 double d = downsamples[level];
-                int levelW = Math.max(1, (int) (width / d));
-                int levelH = Math.max(1, (int) (height / d));
+                int levelW = Math.max(1, (int) (srcW / d));
+                int levelH = Math.max(1, (int) (srcH / d));
                 try {
                     tiffWriter.setSeries(0);
                     tiffWriter.setResolution(level);
@@ -165,7 +208,9 @@ public final class DensityTiffWriter {
                         int hh = Math.min(TILE_SIZE, levelH - yy);
                         for (int xx = 0; xx < levelW; xx += TILE_SIZE) {
                             int ww = Math.min(TILE_SIZE, levelW - xx);
-                            byte[] buf = packTile(grids[c], width, height, xx, yy, ww, hh, d);
+                            byte[] buf = smoothInterpolation
+                                    ? packTileBilinear(grids[c], gridW, gridH, stridePx, xx, yy, ww, hh, d)
+                                    : packTile(grids[c], gridW, gridH, stridePx, xx, yy, ww, hh, d);
                             try {
                                 tiffWriter.saveBytes(c, buf, ifd, xx, yy, ww, hh);
                             } catch (FormatException e) {
@@ -188,22 +233,131 @@ public final class DensityTiffWriter {
 
     // ---- internals ----
 
-    /** Pack a tile from the level-0 grid into big-endian uint16 bytes,
-     *  resampling on the fly when {@code downsample > 1} via nearest-neighbour. */
+    /**
+     * Pack a tile of source-coord pixels into big-endian uint16 bytes,
+     * resolving each output pixel back to its compact-grid cell.
+     *
+     * <p>At pyramid level 0 ({@code downsample = 1}) the source-pixel
+     * coordinate {@code sx, sy} maps to grid cell
+     * {@code (sx / stridePx, sy / stridePx)} (clamped to grid bounds).
+     * At deeper levels (downsample &gt; 1) the source coord is scaled up
+     * first via the level's downsample, then the same grid mapping applies.
+     */
     private static byte[] packTile(
-            short[] grid, int srcW, int srcH, int xx, int yy, int ww, int hh, double downsample) {
+            short[] grid, int gridW, int gridH, int stridePx, int xx, int yy, int ww, int hh, double downsample) {
         byte[] buf = new byte[ww * hh * 2];
         ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN);
         for (int ty = 0; ty < hh; ty++) {
-            int gy = (int) Math.round((yy + ty) * downsample);
+            int sy = (int) Math.round((yy + ty) * downsample);
+            int gy = sy / stridePx;
             if (gy < 0) gy = 0;
-            if (gy >= srcH) gy = srcH - 1;
-            int rowBase = gy * srcW;
+            if (gy >= gridH) gy = gridH - 1;
+            int rowBase = gy * gridW;
             for (int tx = 0; tx < ww; tx++) {
-                int gx = (int) Math.round((xx + tx) * downsample);
+                int sx = (int) Math.round((xx + tx) * downsample);
+                int gx = sx / stridePx;
                 if (gx < 0) gx = 0;
-                if (gx >= srcW) gx = srcW - 1;
+                if (gx >= gridW) gx = gridW - 1;
                 bb.putShort(grid[rowBase + gx]);
+            }
+        }
+        return buf;
+    }
+
+    /**
+     * Bilinear-with-sentinel-skip variant of {@link #packTile}. Each grid cell
+     * is treated as a sample at its centre (source pixel
+     * {@code gx*stridePx + stridePx/2}), and each output pixel is interpolated
+     * from the four surrounding centres.
+     *
+     * <p>Sentinel-aware: raw value 0 means "no data" and must NOT be
+     * interpolated against (otherwise the ring boundary would bleed
+     * grey-toward-zero into the corners). We accumulate weights only over
+     * valid (non-zero) corners and renormalise; if all four are zero we
+     * emit zero (preserves the transparent / no-data shape).
+     */
+    private static byte[] packTileBilinear(
+            short[] grid, int gridW, int gridH, int stridePx, int xx, int yy, int ww, int hh, double downsample) {
+        byte[] buf = new byte[ww * hh * 2];
+        ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN);
+        // Cell centre offset: cell gx is the sample at source pixel
+        // gx*stridePx + stridePx/2. Source pixel sx maps to fractional cell
+        // coord fx = (sx - stridePx/2) / stridePx = sx/stridePx - 0.5.
+        double halfStride = 0.5;
+        for (int ty = 0; ty < hh; ty++) {
+            int sy = (int) Math.round((yy + ty) * downsample);
+            double fy = (double) sy / stridePx - halfStride;
+            int gy0 = (int) Math.floor(fy);
+            int gy1 = gy0 + 1;
+            double wy1 = fy - gy0;
+            double wy0 = 1.0 - wy1;
+            if (gy0 < 0) {
+                gy0 = 0;
+                wy0 = 1.0;
+                wy1 = 0.0;
+                gy1 = 0;
+            } else if (gy1 >= gridH) {
+                gy1 = gridH - 1;
+                wy1 = 0.0;
+                wy0 = 1.0;
+                gy0 = gy1;
+            }
+            int rowBase0 = gy0 * gridW;
+            int rowBase1 = gy1 * gridW;
+            for (int tx = 0; tx < ww; tx++) {
+                int sx = (int) Math.round((xx + tx) * downsample);
+                double fx = (double) sx / stridePx - halfStride;
+                int gx0 = (int) Math.floor(fx);
+                int gx1 = gx0 + 1;
+                double wx1 = fx - gx0;
+                double wx0 = 1.0 - wx1;
+                if (gx0 < 0) {
+                    gx0 = 0;
+                    wx0 = 1.0;
+                    wx1 = 0.0;
+                    gx1 = 0;
+                } else if (gx1 >= gridW) {
+                    gx1 = gridW - 1;
+                    wx1 = 0.0;
+                    wx0 = 1.0;
+                    gx0 = gx1;
+                }
+                int v00 = grid[rowBase0 + gx0] & 0xFFFF;
+                int v01 = grid[rowBase0 + gx1] & 0xFFFF;
+                int v10 = grid[rowBase1 + gx0] & 0xFFFF;
+                int v11 = grid[rowBase1 + gx1] & 0xFFFF;
+                double w00 = wx0 * wy0;
+                double w01 = wx1 * wy0;
+                double w10 = wx0 * wy1;
+                double w11 = wx1 * wy1;
+                double sum = 0.0;
+                double wsum = 0.0;
+                if (v00 != 0) {
+                    sum += v00 * w00;
+                    wsum += w00;
+                }
+                if (v01 != 0) {
+                    sum += v01 * w01;
+                    wsum += w01;
+                }
+                if (v10 != 0) {
+                    sum += v10 * w10;
+                    wsum += w10;
+                }
+                if (v11 != 0) {
+                    sum += v11 * w11;
+                    wsum += w11;
+                }
+                int outv;
+                if (wsum <= 0.0) {
+                    outv = 0;
+                } else {
+                    int v = (int) Math.round(sum / wsum);
+                    if (v < 1) v = 1; // never collapse a valid mix back to the no-data sentinel
+                    if (v > 65535) v = 65535;
+                    outv = v;
+                }
+                bb.putShort((short) outv);
             }
         }
         return buf;

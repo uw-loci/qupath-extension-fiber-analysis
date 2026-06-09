@@ -1,0 +1,48 @@
+// Headless re-run for a project-wide calibration pass.
+//
+// Re-run from disk:
+//   <QuPath-launcher> script <this-file>
+//
+// ${TIMESTAMP_UTC}  (kind: ${WORKFLOW_KIND}, extension v${EXTENSION_VERSION})
+
+import qupath.lib.projects.Project
+import qupath.lib.projects.ProjectIO
+import qupath.ext.fiberanalysis.analysis.FiberCalibrationRunner
+import qupath.ext.fiberanalysis.analysis.FiberCalibrationRunner.CalibrationConfig
+import qupath.ext.fiberanalysis.analysis.FiberCalibrationRunner.CalibrationResult
+
+// ---- Baked-in run identity (substituted at write time) ----
+String paramsJsonPath = ${PARAMS_JSON_PATH_LITERAL}
+String projectPath    = ${PROJECT_PATH_LITERAL}
+
+// ---- Open project ----
+Project project = ProjectIO.loadProject(new File(projectPath), java.awt.image.BufferedImage.class)
+println "Opened project: " + projectPath
+
+// ---- Build config from calibration_<name>.json ----
+// The shape is: root keys for the run metadata + a nested "calibration_params"
+// block for the segmentation knobs + "filters" block for the filters.
+def json = new groovy.json.JsonSlurper().parse(new File(paramsJsonPath))
+def cp = json.calibration_params ?: [:]
+def fl = json.filters ?: [:]
+CalibrationConfig cfg = new CalibrationConfig()
+cfg.calibrationName       = json.name == null ? "default" : (String) json.name
+cfg.sampleSize            = json.sample_size_requested == null ? 0 : ((Number) json.sample_size_requested).intValue()
+cfg.randomSeed            = json.random_seed == null ? 42L : ((Number) json.random_seed).longValue()
+cfg.nameFilter            = fl.name_filter == null ? "" : (String) fl.name_filter
+cfg.classFilter           = (fl.class_filter == null) ? new HashSet<String>() : new HashSet<String>((List) fl.class_filter)
+cfg.segChannel            = cp.seg_channel == null ? "Raw intensity" : (String) cp.seg_channel
+cfg.ridgeFilter           = cp.ridge_filter == null ? "None" : (String) cp.ridge_filter
+cfg.sigmaMinUm            = cp.sigma_min_um == null ? 1.0 : ((Number) cp.sigma_min_um).doubleValue()
+cfg.sigmaMaxUm            = cp.sigma_max_um == null ? 4.0 : ((Number) cp.sigma_max_um).doubleValue()
+cfg.sigmaStepUm           = cp.sigma_step_um == null ? 1.0 : ((Number) cp.sigma_step_um).doubleValue()
+cfg.invertIntensity       = cp.invert_intensity == null ? false : (Boolean) cp.invert_intensity
+cfg.rollingBallRadiusUm   = cp.rolling_ball_radius_um == null ? 0.0 : ((Number) cp.rolling_ball_radius_um).doubleValue()
+cfg.borderZoneUm          = cp.border_zone_um == null ? 50.0 : ((Number) cp.border_zone_um).doubleValue()
+
+println "Calibration '" + cfg.calibrationName + "': sampleSize=" + cfg.sampleSize + ", classFilter=" + cfg.classFilter
+
+CalibrationResult result = FiberCalibrationRunner.run(project, cfg, null)
+println "Done. threshold_normalised=" + result.thresholdNormalised +
+        " regions=" + result.regionsUsed + " pixels=" + result.pixelsUsed
+println "Wrote: " + result.calibrationFile

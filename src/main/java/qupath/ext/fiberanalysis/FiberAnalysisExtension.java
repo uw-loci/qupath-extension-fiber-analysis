@@ -9,6 +9,7 @@
  */
 package qupath.ext.fiberanalysis;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -22,12 +23,9 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.awt.image.BufferedImage;
 import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
 import qupath.ext.fiberanalysis.analysis.DensitySamplingCommand;
 import qupath.ext.fiberanalysis.analysis.DensitySidecar;
-import qupath.lib.projects.Project;
-import qupath.lib.projects.ProjectImageEntry;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisBatchDialog;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisDialog;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisOverlayController;
@@ -40,6 +38,8 @@ import qupath.fx.dialogs.Dialogs;
 import qupath.lib.common.Version;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.QuPathExtension;
+import qupath.lib.projects.Project;
+import qupath.lib.projects.ProjectImageEntry;
 
 /**
  * Testbed QuPath extension for fiber-shape analysis on segmented collagen fibers.
@@ -372,12 +372,10 @@ public class FiberAnalysisExtension implements QuPathExtension {
                 boolean removed = DensitySidecar.clearAutoReattachMarker(sidecar);
                 if (removed) {
                     Dialogs.showInfoNotification(
-                            EXTENSION_NAME,
-                            "Auto-reattach disabled for this image. Sidecar TIFF kept on disk.");
+                            EXTENSION_NAME, "Auto-reattach disabled for this image. Sidecar TIFF kept on disk.");
                 } else {
                     Dialogs.showInfoNotification(
-                            EXTENSION_NAME,
-                            "Auto-reattach was not enabled for this image (no marker found).");
+                            EXTENSION_NAME, "Auto-reattach was not enabled for this image (no marker found).");
                 }
             } catch (Exception ex) {
                 logger.error("Stop-auto-reattach failed", ex);

@@ -1,0 +1,71 @@
+// Headless re-run for a per-annotation fiber-analysis run.
+//
+// Re-run from disk:
+//   <QuPath-launcher> script <this-file>
+//
+// QuPath ignores --project / --image because this script opens its own
+// project + sets its own image data, so the launcher's -p/-i flags are
+// redundant here.
+//
+// ${TIMESTAMP_UTC}  (kind: ${WORKFLOW_KIND}, extension v${EXTENSION_VERSION})
+
+import qupath.lib.gui.QuPathGUI
+import qupath.lib.images.ImageData
+import qupath.lib.objects.PathObject
+import qupath.lib.projects.Project
+import qupath.lib.projects.ProjectIO
+import qupath.lib.projects.ProjectImageEntry
+import qupath.ext.fiberanalysis.analysis.FiberAnalysisBatchDialog
+import qupath.ext.fiberanalysis.analysis.FiberAnalysisParams
+import qupath.ext.fiberanalysis.analysis.FiberAnalysisWorkflow
+import java.nio.file.Path
+import java.nio.file.Paths
+
+// ---- Baked-in run identity (substituted at write time) ----
+String paramsJsonPath = ${PARAMS_JSON_PATH_LITERAL}
+String projectPath    = ${PROJECT_PATH_LITERAL}
+String imageName      = ${IMAGE_NAME_LITERAL}
+// Annotation names from the original run; empty means "all annotations".
+List<String> annotationNames = [${ANNOTATION_NAMES_LITERAL}]
+
+// ---- Load params ----
+FiberAnalysisParams params = FiberAnalysisBatchDialog.loadParamsFromJson(Paths.get(paramsJsonPath))
+println "Loaded params from: ${paramsJsonPath}"
+
+// ---- Open the project ----
+Project<?> project = ProjectIO.loadProject(new File(projectPath), java.awt.image.BufferedImage.class)
+ProjectImageEntry entry = null
+for (e in project.getImageList()) {
+    if (e.getImageName() == imageName) { entry = e; break }
+}
+if (entry == null) {
+    println "ERROR: image '" + imageName + "' not in project " + projectPath
+    System.exit(2)
+}
+ImageData imageData = entry.readImageData()
+println "Opened image: " + imageName
+
+// ---- Pick annotations ----
+List<PathObject> all = new ArrayList<>(imageData.getHierarchy().getAnnotationObjects())
+List<PathObject> targets = []
+if (annotationNames.isEmpty()) {
+    targets.addAll(all)
+} else {
+    for (ann in all) {
+        String n = ann.getName()
+        if (n != null && annotationNames.contains(n)) targets.add(ann)
+    }
+}
+println "Will run on " + targets.size() + " annotation(s) (original run used " +
+        (annotationNames.isEmpty() ? "all" : annotationNames.size().toString()) + ")"
+
+if (targets.isEmpty()) {
+    println "ERROR: no matching annotations found in the image hierarchy"
+    System.exit(3)
+}
+
+// ---- Dispatch the workflow and block until done ----
+FiberAnalysisWorkflow wf = new FiberAnalysisWorkflow(null)
+Thread worker = wf.runForAnnotations(params, targets, imageData, null)
+if (worker != null) worker.join()
+println "Done."

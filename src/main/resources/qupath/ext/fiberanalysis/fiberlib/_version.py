@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -54,3 +54,16 @@ __version__ = "0.2.4"
 #     importable for tests / batch / the collagen-phantom tooling. A repo-root
 #     pyproject.toml makes `pip install -e .` expose `import fiberlib`.
 #     columns next to n_fiber_px / tortuosity_median.
+#
+# 0.2.5 (2026-06-07):
+#   - pipeline.py morph rendering: NaN-mask per-window arrays against a
+#     `zone_included` boolean grid (any zone_mask pixel in the window cell)
+#     before handing them to render_window_heatmap. Fixes ring annotations
+#     (e.g. tumor circles with N-um border zone) where the morph heatmaps
+#     were papering the full bounding box with 0-valued viridis dark-purple
+#     in the corners, suggesting "value=0 there" when actually "outside the
+#     analysis zone". GLCM rendered correctly because its per-window arrays
+#     are NaN-initialised and only filled where fiber_mask has signal; morph
+#     uses raw integer n_pixels / n_fibers grids which stay 0 in empty
+#     corners. The same zone gate now applies to the legacy
+#     morphometrics_overlay.png (HDM) too.

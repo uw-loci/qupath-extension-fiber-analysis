@@ -15,11 +15,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.function.Consumer;
-import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.Label;
@@ -98,20 +97,28 @@ public final class FiberDensityMapWorkflow {
             QuPathGUI qupath,
             Runnable onComplete) {
         if (entries == null || entries.isEmpty()) {
-            Dialogs.showWarningNotification("Fiber density map", "No images selected.");
+            if (HeadlessFx.isReady()) Dialogs.showWarningNotification("Fiber density map", "No images selected.");
+            else logger.warn("Fiber density map: no images selected (headless).");
             return null;
         }
 
         Window owner = qupath != null ? qupath.getStage() : null;
         ProgressUi progress = new ProgressUi(owner);
-        Platform.runLater(progress::show);
+        HeadlessFx.runLater(progress::show);
 
         Thread worker = new Thread(
                 () -> {
                     try {
                         runWorker(spec, entries, project, progress);
                     } finally {
-                        if (onComplete != null) Platform.runLater(onComplete);
+                        // User callbacks (onComplete) must execute regardless of
+                        // FX availability -- headless callers depend on it
+                        // (e.g. a CountDownLatch in a rerun.groovy script).
+                        // Defer to FX when up, run inline otherwise.
+                        if (onComplete != null) {
+                            if (HeadlessFx.isReady()) HeadlessFx.runLater(onComplete);
+                            else onComplete.run();
+                        }
                     }
                 },
                 "FiberDensityMap-Worker");
@@ -130,7 +137,7 @@ public final class FiberDensityMapWorkflow {
                 ApposeFiberService.getInstance().initialize(progress::setSub);
             } catch (IOException e) {
                 logger.error("Could not init Appose service", e);
-                Platform.runLater(() -> {
+                HeadlessFx.runLater(() -> {
                     progress.close();
                     Dialogs.showErrorMessage(
                             "Fiber density map", "Failed to set up Python environment: " + e.getMessage());
@@ -154,7 +161,7 @@ public final class FiberDensityMapWorkflow {
                 final int idx = i;
                 progress.setMain("Image " + (i + 1) + " of " + total + ": " + entry.getImageName(), i, total);
                 try {
-                    Path tiffPath = runForOneImage(spec, entry, outRoot, progress);
+                    Path tiffPath = runForOneImage(spec, entry, project, outRoot, progress);
                     if (tiffPath != null) {
                         ok++;
                         logger.info("Density map written: {}", tiffPath);
@@ -166,26 +173,30 @@ public final class FiberDensityMapWorkflow {
                     logger.error("Density map failed for {}", entry.getImageName(), e);
                     final String name = entry.getImageName();
                     final String msg = e.getMessage();
-                    Platform.runLater(() -> Dialogs.showErrorNotification(
+                    HeadlessFx.runLater(() -> Dialogs.showErrorNotification(
                             "Fiber density map", "Image \"" + name + "\" failed: " + msg));
                 }
             }
             final int okF = ok;
             final int failedF = failed;
-            Platform.runLater(() -> {
+            HeadlessFx.runLater(() -> {
                 progress.close();
                 Dialogs.showInfoNotification(
                         "Fiber density map",
                         String.format(Locale.ROOT, "Done: %d ok, %d failed. Sidecars in %s", okF, failedF, outRoot));
             });
         } finally {
-            Platform.runLater(progress::close);
+            HeadlessFx.runLater(progress::close);
         }
     }
 
     /** Compute + write the density-map sidecar for a single image. Returns the output path. */
     private Path runForOneImage(
-            DensityMapJobSpec spec, ProjectImageEntry<BufferedImage> entry, Path outRoot, ProgressUi progress)
+            DensityMapJobSpec spec,
+            ProjectImageEntry<BufferedImage> entry,
+            Project<BufferedImage> project,
+            Path outRoot,
+            ProgressUi progress)
             throws IOException {
         ImageData<BufferedImage> data = entry.readImageData();
         ImageServer<BufferedImage> server = data.getServer();
@@ -273,8 +284,17 @@ public final class FiberDensityMapWorkflow {
                                 "density_tile did not complete (error=" + (errObj != null ? errObj : "unknown") + ")");
                     }
 
-                    // Slot the tile into the slide-wide accumulator.
-                    accumulateTile(accum, channels, tileNpz, tx, ty, gridW, gridH, tileGridW, tileGridH);
+                    // Slot the tile into the slide-wide accumulator. We pass
+                    // the tile's first source-pixel coords (tileX, tileY) plus
+                    // stridePx so the function maps each tile's per-window
+                    // results back to the slide-wide window grid via integer
+                    // (source_px / stridePx). The previous formula
+                    // `slideX = tx * TILE_WIN` was only correct when
+                    // stridePx == windowPx (overlap = 0%); at overlap > 0 it
+                    // caused tiles to overwrite each other in the upper-left
+                    // of the slide grid.
+                    accumulateTile(
+                            accum, channels, tileNpz, tileX, tileY, stridePx, gridW, gridH, tileGridW, tileGridH);
                     doneTiles++;
                 }
             }
@@ -308,19 +328,60 @@ public final class FiberDensityMapWorkflow {
                     q.offset);
         }
 
-        // Sidecar pixel size = stride_px * source_pixel_size_um (one density
-        // pixel per window stride in source pixels).
-        double sidecarPxUm = stridePx * pxUm;
+        // Sidecar is written at SOURCE pixel dimensions (not grid dimensions)
+        // via nearest-neighbour upsampling inside DensityTiffWriter. This
+        // keeps Attach / Sample / standalone-open all in identity source-pixel
+        // coords -- a 68x68 sidecar opened standalone would otherwise look
+        // miniscule next to its 2048x2048 source. LZW absorbs the replicated
+        // blocks efficiently.
 
         String safeName = sanitize(entry.getImageName());
         Path outPath = outRoot.resolve(safeName + "_density.ome.tif");
-        DensityTiffWriter.write(outPath.toString(), gridW, gridH, sidecarPxUm, channels, grids, quants);
+        DensityTiffWriter.write(
+                outPath.toString(),
+                srcW,
+                srcH,
+                pxUm,
+                gridW,
+                gridH,
+                stridePx,
+                channels,
+                grids,
+                quants,
+                spec.smoothInterpolation);
         // Drop / refresh the auto-reattach marker. We intentionally do not
         // delete an existing marker when the user runs without the checkbox
         // checked -- removing the marker is an explicit user action via the
         // "Stop auto-reattaching density channels" menu command.
         if (spec.writeAutoReattachMarker) {
             DensitySidecar.writeAutoReattachMarker(outPath, spec.windowSizeUm);
+        }
+
+        // Provenance triple: <image>_density_params.json + _params.txt + _rerun.groovy
+        // next to the sidecar so the run can be audited / re-executed from disk.
+        try {
+            String projectPath = project != null && project.getPath() != null
+                    ? project.getPath().toAbsolutePath().toString()
+                    : "";
+            Map<String, String> placeholders = new LinkedHashMap<>();
+            placeholders.put("PROJECT_PATH", projectPath);
+            placeholders.put("PROJECT_PATH_LITERAL", RunProvenance.groovyString(projectPath));
+            placeholders.put(
+                    "IMAGE_NAMES_LITERAL", RunProvenance.groovyStringList(java.util.List.of(entry.getImageName())));
+            RunProvenance.writeAll(
+                    outRoot,
+                    safeName + "_density",
+                    RunProvenance.KIND_DENSITY_MAP,
+                    spec.toOrderedMap(),
+                    java.util.List.of(
+                            "density-map run parameters",
+                            "Re-run headlessly via:  QuPath script " + safeName + "_density_rerun.groovy"),
+                    entry.getImageName(),
+                    null,
+                    null,
+                    placeholders);
+        } catch (IOException provEx) {
+            logger.warn("Could not write density-map provenance for {}: {}", entry.getImageName(), provEx.getMessage());
         }
         return outPath;
     }
@@ -356,8 +417,9 @@ public final class FiberDensityMapWorkflow {
             float[][] accum,
             List<DensityChannelSpec> channels,
             Path npzPath,
-            int tileX,
-            int tileY,
+            int tileSrcX,
+            int tileSrcY,
+            int stridePx,
             int slideGridW,
             int slideGridH,
             int tileGridW,
@@ -380,10 +442,11 @@ public final class FiberDensityMapWorkflow {
         int copyH = Math.min(npyH, tileGridH);
         int copyW = Math.min(npyW, tileGridW);
 
-        // Where this tile lands in the slide-wide grid. Each tile begins at
-        // window-coord (tileX * TILE_WIN, tileY * TILE_WIN).
-        int slideX = tileX * TILE_WIN;
-        int slideY = tileY * TILE_WIN;
+        // Map tile-origin source pixels to the slide-wide window grid. Window
+        // i starts at source pixel `i * stridePx`, so tile origin (tileSrcX,
+        // tileSrcY) maps to grid cell (tileSrcX / stridePx, tileSrcY / stridePx).
+        int slideX = tileSrcX / stridePx;
+        int slideY = tileSrcY / stridePx;
 
         for (int c = 0; c < channels.size(); c++) {
             String key = channels.get(c).npzKey;
@@ -498,6 +561,14 @@ public final class FiberDensityMapWorkflow {
          * does not re-prompt.
          */
         public final boolean writeAutoReattachMarker;
+        /**
+         * When true, the sidecar is bilinear-interpolated from the compact
+         * grid into source-pixel space (smooth heatmap). When false, each
+         * grid cell is nearest-neighbour replicated across its window
+         * footprint (visible tile boundaries). Both modes are sentinel-aware:
+         * raw=0 / no-data corners stay transparent.
+         */
+        public final boolean smoothInterpolation;
 
         public DensityMapJobSpec(
                 double windowSizeUm,
@@ -513,7 +584,8 @@ public final class FiberDensityMapWorkflow {
                 boolean invertIntensity,
                 double rollingBallRadiusUm,
                 Double projectThresholdNorm,
-                boolean writeAutoReattachMarker) {
+                boolean writeAutoReattachMarker,
+                boolean smoothInterpolation) {
             this.windowSizeUm = windowSizeUm;
             this.windowOverlapPercent = windowOverlapPercent;
             this.segChannel = segChannel;
@@ -528,18 +600,103 @@ public final class FiberDensityMapWorkflow {
             this.rollingBallRadiusUm = rollingBallRadiusUm;
             this.projectThresholdNorm = projectThresholdNorm;
             this.writeAutoReattachMarker = writeAutoReattachMarker;
+            this.smoothInterpolation = smoothInterpolation;
+        }
+
+        /** Ordered echo of every spec field (for params.json / params.txt). */
+        public Map<String, Object> toOrderedMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("windowSizeUm", windowSizeUm);
+            m.put("windowOverlapPercent", windowOverlapPercent);
+            m.put("segChannel", segChannel);
+            m.put("thresholdMethod", thresholdMethod);
+            m.put("manualThreshold", manualThreshold);
+            m.put("ridgeFilter", ridgeFilter);
+            m.put("sigmaMinUm", sigmaMinUm);
+            m.put("sigmaMaxUm", sigmaMaxUm);
+            m.put("sigmaStepUm", sigmaStepUm);
+            m.put("minFiberAreaUm2", minFiberAreaUm2);
+            m.put("invertIntensity", invertIntensity);
+            m.put("rollingBallRadiusUm", rollingBallRadiusUm);
+            m.put("projectThresholdNorm", projectThresholdNorm);
+            m.put("writeAutoReattachMarker", writeAutoReattachMarker);
+            m.put("smoothInterpolation", smoothInterpolation);
+            return m;
+        }
+
+        /**
+         * Reconstruct a spec from a {@code _density_params.json} file written
+         * by the workflow. Tolerant of the {@code meta} wrapper: pulls
+         * {@code parameters} if present, otherwise reads keys at the root.
+         */
+        public static DensityMapJobSpec fromJson(java.io.File file) throws IOException {
+            String body = java.nio.file.Files.readString(file.toPath());
+            com.google.gson.JsonObject root =
+                    new com.google.gson.Gson().fromJson(body, com.google.gson.JsonObject.class);
+            com.google.gson.JsonObject p = root.has("parameters") ? root.getAsJsonObject("parameters") : root;
+            return new DensityMapJobSpec(
+                    jdouble(p, "windowSizeUm", 15.0),
+                    jdouble(p, "windowOverlapPercent", 0.0),
+                    jstring(p, "segChannel", "Raw intensity"),
+                    jstring(p, "thresholdMethod", "Otsu"),
+                    jint(p, "manualThreshold", 128),
+                    jstring(p, "ridgeFilter", "None"),
+                    jdouble(p, "sigmaMinUm", 1.0),
+                    jdouble(p, "sigmaMaxUm", 4.0),
+                    jdouble(p, "sigmaStepUm", 1.0),
+                    jdouble(p, "minFiberAreaUm2", 1.0),
+                    jbool(p, "invertIntensity", false),
+                    jdouble(p, "rollingBallRadiusUm", 0.0),
+                    p.has("projectThresholdNorm")
+                                    && !p.get("projectThresholdNorm").isJsonNull()
+                            ? p.get("projectThresholdNorm").getAsDouble()
+                            : null,
+                    jbool(p, "writeAutoReattachMarker", false),
+                    jbool(p, "smoothInterpolation", false));
+        }
+
+        private static String jstring(com.google.gson.JsonObject o, String k, String def) {
+            return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : def;
+        }
+
+        private static double jdouble(com.google.gson.JsonObject o, String k, double def) {
+            return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsDouble() : def;
+        }
+
+        private static int jint(com.google.gson.JsonObject o, String k, int def) {
+            return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsInt() : def;
+        }
+
+        private static boolean jbool(com.google.gson.JsonObject o, String k, boolean def) {
+            return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsBoolean() : def;
         }
     }
 
     /** Two-bar progress UI, mirroring the single-image workflow pattern. */
     private static final class ProgressUi {
-        private final Stage stage;
-        private final Label mainLabel = new Label("Starting...");
-        private final ProgressBar mainBar = new ProgressBar(0);
-        private final Label subLabel = new Label("");
-        private final ProgressBar subBar = new ProgressBar();
+        // headless == true: no JavaFX is touched; progress goes to the logger
+        // instead. Used when this workflow is dispatched from a headless
+        // Groovy script (e.g. `QuPath script rerun.groovy`) where the
+        // JavaFX toolkit was never started and instantiating any Control
+        // would throw "Toolkit not initialized" out of Control.<clinit>.
+        private final boolean headless;
+        private Stage stage;
+        private Label mainLabel;
+        private ProgressBar mainBar;
+        private Label subLabel;
+        private ProgressBar subBar;
 
         ProgressUi(Window owner) {
+            this.headless = !HeadlessFx.isReady();
+            if (headless) {
+                logger.info("Fiber density map (headless mode -- progress logged below).");
+                return;
+            }
+            this.mainLabel = new Label("Starting...");
+            this.mainBar = new ProgressBar(0);
+            this.subLabel = new Label("");
+            this.subBar = new ProgressBar();
+
             this.stage = new Stage();
             stage.setTitle("Fiber density map");
             stage.initModality(Modality.NONE);
@@ -556,28 +713,37 @@ public final class FiberDensityMapWorkflow {
         }
 
         void show() {
+            if (headless) return;
             stage.show();
         }
 
         void close() {
+            if (headless) return;
             stage.close();
         }
 
         void setMain(String message, int done, int total) {
-            Platform.runLater(() -> {
+            if (headless) {
+                if (total > 0) logger.info("[{}/{}] {}", done, total, message);
+                else logger.info("{}", message);
+                return;
+            }
+            HeadlessFx.runLater(() -> {
                 mainLabel.setText(message);
                 if (total > 0) mainBar.setProgress((double) done / (double) total);
                 else mainBar.setProgress(-1);
             });
         }
 
-        Consumer<String> setSub = msg -> Platform.runLater(() -> {
-            subLabel.setText(msg != null ? msg : "");
-            subBar.setProgress(-1);
-        });
-
-        void setSub(String message) {
-            setSub.accept(message);
+        void setSub(String msg) {
+            if (headless) {
+                if (msg != null && !msg.isBlank()) logger.info("  {}", msg);
+                return;
+            }
+            HeadlessFx.runLater(() -> {
+                subLabel.setText(msg != null ? msg : "");
+                subBar.setProgress(-1);
+            });
         }
     }
 }

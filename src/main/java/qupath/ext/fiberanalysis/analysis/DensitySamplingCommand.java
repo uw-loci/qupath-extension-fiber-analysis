@@ -94,8 +94,8 @@ public final class DensitySamplingCommand {
         if (!DensitySidecar.exists(sidecar)) {
             Dialogs.showErrorMessage(
                     "Fiber density sampling",
-                    "No density sidecar for this image yet. Run \"Project density map...\" first.\n\n"
-                            + "Expected: " + sidecar);
+                    "No density sidecar for this image yet. Run \"Project density map...\" first.\n\n" + "Expected: "
+                            + sidecar);
             return;
         }
 
@@ -109,8 +109,7 @@ public final class DensitySamplingCommand {
             return;
         }
 
-        Thread worker = new Thread(
-                () -> sampleAsync(imageData, sidecar, targets), "FiberDensitySampling-Worker");
+        Thread worker = new Thread(() -> sampleAsync(imageData, sidecar, targets), "FiberDensitySampling-Worker");
         worker.setDaemon(true);
         worker.start();
     }
@@ -142,7 +141,8 @@ public final class DensitySamplingCommand {
             double sidecarPxUm = sidecarCal != null && sidecarCal.hasPixelSizeMicrons()
                     ? sidecarCal.getAveragedPixelSizeMicrons()
                     : sourcePxUm;
-            double srcToSidecar = sourcePxUm / sidecarPxUm; // multiply source-pixel coords by this to get sidecar-pixel coords
+            double srcToSidecar =
+                    sourcePxUm / sidecarPxUm; // multiply source-pixel coords by this to get sidecar-pixel coords
             int sidecarW = sidecarServer.getWidth();
             int sidecarH = sidecarServer.getHeight();
             int nChannels = sidecarServer.nChannels();
@@ -179,8 +179,7 @@ public final class DensitySamplingCommand {
                     continue;
                 }
 
-                RegionRequest req = RegionRequest.createInstance(
-                        sidecarServer.getPath(), 1.0, x0, y0, rw, rh);
+                RegionRequest req = RegionRequest.createInstance(sidecarServer.getPath(), 1.0, x0, y0, rw, rh);
                 BufferedImage tile;
                 try {
                     tile = sidecarServer.readRegion(req);

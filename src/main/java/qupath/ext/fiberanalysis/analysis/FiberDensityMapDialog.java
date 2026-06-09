@@ -102,6 +102,7 @@ public final class FiberDensityMapDialog {
     private RadioButton modeChannelsRadio;
     private RadioButton modeSidecarRadio;
     private CheckBox autoReattachCheck;
+    private CheckBox smoothCheck;
 
     private Label validationBanner;
     private VBox validationBox;
@@ -272,16 +273,15 @@ public final class FiberDensityMapDialog {
 
         // --- Cross-session opt-in (only meaningful in Channels mode) ---
         autoReattachCheck = new CheckBox("Auto-reattach channels on image open");
-        autoReattachCheck.setTooltip(new Tooltip(
-                "When checked, a small marker file is written beside the sidecar. The\n"
+        autoReattachCheck.setTooltip(
+                new Tooltip("When checked, a small marker file is written beside the sidecar. The\n"
                         + "extension's image-open listener reads it on every future open of this\n"
                         + "image (in this project) and re-attaches the density channels without\n"
                         + "asking. To stop, run \"Stop auto-reattaching density channels\" or\n"
                         + "delete the .attach marker file beside the sidecar."));
         autoReattachCheck.disableProperty().bind(modeSidecarRadio.selectedProperty());
-        Label autoReattachHelp = new Label(
-                "Marker file: <sidecar>.attach (a few hundred bytes). Sidecar mode ignores\n"
-                        + "this checkbox -- the sampling command does not need an attach.");
+        Label autoReattachHelp = new Label("Marker file: <sidecar>.attach (a few hundred bytes). Sidecar mode ignores\n"
+                + "this checkbox -- the sampling command does not need an attach.");
         autoReattachHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         autoReattachHelp.setWrapText(true);
         autoReattachHelp.disableProperty().bind(modeSidecarRadio.selectedProperty());
@@ -294,6 +294,24 @@ public final class FiberDensityMapDialog {
                 + "in a later iteration of this dialog.");
         windowHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         windowHelp.setWrapText(true);
+
+        // --- Render style ---
+        Label renderLabel = new Label("Render style");
+        renderLabel.setStyle("-fx-font-weight: bold;");
+        smoothCheck = new CheckBox("Smooth (bilinear interpolation between window centres)");
+        smoothCheck.setSelected(false);
+        smoothCheck.setTooltip(new Tooltip("OFF: each window's value is replicated across its source-pixel\n"
+                + "footprint -- visible tile boundaries between windows.\n"
+                + "ON: values are bilinearly interpolated between adjacent window\n"
+                + "centres -- smooth heatmap. The underlying per-window data is\n"
+                + "identical; only the display interpolation changes. Both modes\n"
+                + "preserve the ring shape: corners outside the analysis zone stay\n"
+                + "transparent rather than bleeding toward zero."));
+        Label renderHelp = new Label("Adds no compute cost; smoothing is done at the bytes-to-disk step.\n"
+                + "Increase window overlap (above) to get more sample points per area\n"
+                + "if the smoothed map looks too coarse.");
+        renderHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
+        renderHelp.setWrapText(true);
 
         // --- Sidecar location ---
         Label sidecarLabel = new Label("Sidecar location");
@@ -309,9 +327,19 @@ public final class FiberDensityMapDialog {
         VBox modeBox = new VBox(
                 4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp, autoReattachCheck, autoReattachHelp);
         VBox winBox = new VBox(4, windowLabel, windowHelp);
+        VBox renderBox = new VBox(4, renderLabel, smoothCheck, renderHelp);
         VBox sideBox = new VBox(4, sidecarLabel, sidecarBody);
 
-        VBox content = new VBox(12, validationBox, modeBox, new Separator(), winBox, new Separator(), sideBox);
+        VBox content = new VBox(
+                12,
+                validationBox,
+                modeBox,
+                new Separator(),
+                winBox,
+                new Separator(),
+                renderBox,
+                new Separator(),
+                sideBox);
         content.setPadding(new Insets(0));
 
         ScrollPane scroll = new ScrollPane(content);
@@ -393,8 +421,12 @@ public final class FiberDensityMapDialog {
                 FiberAnalysisPreferences.invertIntensityProperty().get(),
                 FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
                 projectThresholdNorm,
-                autoReattach);
-        logger.info("Project density map: dispatching {} image(s), mode={}", entries.size(), channelsMode ? "Channels" : "Sidecar");
+                autoReattach,
+                smoothCheck != null && smoothCheck.isSelected());
+        logger.info(
+                "Project density map: dispatching {} image(s), mode={}",
+                entries.size(),
+                channelsMode ? "Channels" : "Sidecar");
 
         Runnable onComplete = null;
         if (channelsMode) {

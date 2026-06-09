@@ -103,6 +103,33 @@ sync with the JAR you installed. The Appose env (Pixi-managed) lives
 at `~/.local/share/appose/qupath-fiber-analysis/` and is built on
 first use.
 
+## Reproducing a run from disk
+
+Every analysis that writes files (per-annotation Run, Project density map,
+Project calibration) also drops three companion artifacts next to its
+outputs:
+
+- `params.json` -- pretty-printed JSON: extension version, timestamp,
+  run id, and every dialog control.
+- `params.txt` -- same key/value pairs as plain `key = value` lines; easy
+  to skim or grep.
+- `rerun.groovy` -- a Groovy script that re-executes the same analysis
+  headlessly. Project path, image name, and `params.json` path are baked
+  into the top of the file as string literals; edit them if the project
+  moves.
+
+To re-run from disk with no GUI:
+
+```
+~/path/to/QuPath script <output-dir>/rerun.groovy
+```
+
+The Groovy templates use the existing extension entry points (the same
+`runForAnnotations` / `runForEntries` / `FiberCalibrationRunner.run` the
+GUI dialogs call). Output goes to the same on-disk location as the
+original GUI-driven run -- a re-run replaces the previous run's files in
+place.
+
 ## Project density map (whole-slide)
 
 For density-of-fiber maps across an entire slide, use the separate

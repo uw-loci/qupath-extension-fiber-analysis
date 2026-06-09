@@ -98,22 +98,20 @@ public final class DensityChannelAttacher {
         if (project == null) {
             Dialogs.showErrorMessage(
                     "Fiber density attach",
-                    "No project is open. The sidecar lives under "
-                            + "<project>/fiber-analysis/density-maps/.");
+                    "No project is open. The sidecar lives under " + "<project>/fiber-analysis/density-maps/.");
             return false;
         }
         ProjectImageEntry<BufferedImage> entry = project.getEntry(imageData);
         if (entry == null) {
-            Dialogs.showErrorMessage(
-                    "Fiber density attach", "Current image is not part of the open project.");
+            Dialogs.showErrorMessage("Fiber density attach", "Current image is not part of the open project.");
             return false;
         }
         Path sidecar = DensitySidecar.sidecarPathFor(project, entry);
         if (!DensitySidecar.exists(sidecar)) {
             Dialogs.showErrorMessage(
                     "Fiber density attach",
-                    "No density sidecar for this image yet. Run \"Project density map...\" first.\n\n"
-                            + "Expected: " + sidecar);
+                    "No density sidecar for this image yet. Run \"Project density map...\" first.\n\n" + "Expected: "
+                            + sidecar);
             return false;
         }
         if (confirmForRgb && imageData.getServer().isRGB()) {
@@ -130,8 +128,8 @@ public final class DensityChannelAttacher {
             return true;
         } catch (Exception ex) {
             logger.error("Density attach failed", ex);
-            Platform.runLater(() ->
-                    Dialogs.showErrorMessage("Fiber density attach", "Attach failed: " + ex.getMessage()));
+            Platform.runLater(
+                    () -> Dialogs.showErrorMessage("Fiber density attach", "Attach failed: " + ex.getMessage()));
             return false;
         }
     }
@@ -186,7 +184,8 @@ public final class DensityChannelAttacher {
                         sourceWasRgb);
             } catch (IOException ex) {
                 logger.error("viewer.setImageData failed during density attach", ex);
-                Dialogs.showErrorMessage("Fiber density attach", "Setting the wrapped image failed: " + ex.getMessage());
+                Dialogs.showErrorMessage(
+                        "Fiber density attach", "Setting the wrapped image failed: " + ex.getMessage());
             }
         });
     }
