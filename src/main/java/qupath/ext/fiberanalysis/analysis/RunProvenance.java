@@ -281,12 +281,20 @@ public final class RunProvenance {
     }
 
     private static int countUnsubstituted(String body) {
+        // Only count ALL-CAPS-WITH-UNDERSCORES tokens as placeholders. Groovy
+        // GStrings in the template body (e.g. `${paramsJsonPath}` inside a
+        // println line) use lower-case variable names and would otherwise
+        // trip a false-positive warning every time.
         int count = 0;
         int i = 0;
         while ((i = body.indexOf("${", i)) >= 0) {
             int end = body.indexOf('}', i + 2);
             if (end < 0) break;
-            count++;
+            String token = body.substring(i + 2, end);
+            if (!token.isEmpty()
+                    && token.chars().allMatch(c -> (c >= 'A' && c <= 'Z') || c == '_' || (c >= '0' && c <= '9'))) {
+                count++;
+            }
             i = end + 1;
         }
         return count;
