@@ -206,6 +206,7 @@ public class FiberAnalysisWorkflow {
             }
 
             List<PathObject> allWindowDetections = new ArrayList<>();
+            List<PathObject> allCollagenDetections = new ArrayList<>();
 
             for (int i = 0; i < total; i++) {
                 PathObject ann = annotations.get(i);
@@ -217,6 +218,33 @@ public class FiberAnalysisWorkflow {
                     AnnotationResult res = shot.result;
                     completed++;
                     appendResult(res);
+
+                    // Collagen detections from the fiber mask: one detection per
+                    // connected component, classed CollagenAnalysis, parented
+                    // under the source annotation by hierarchy containment.
+                    if (params.collagenObjects()) {
+                        Path maskPng = res.outputDir().resolve("fiber_mask_overlay.png");
+                        if (Files.exists(maskPng)) {
+                            List<PathObject> collagenDets = CollagenObjectBuilder.build(
+                                    imageData,
+                                    maskPng,
+                                    res.regionOffsetX(),
+                                    res.regionOffsetY(),
+                                    i,
+                                    shot.runId,
+                                    paramsHash,
+                                    pixelSizeUm,
+                                    params.minFiberAreaUm2());
+                            allCollagenDetections.addAll(collagenDets);
+                            logger.info(
+                                    "Built {} CollagenAnalysis detections for annotation '{}'",
+                                    collagenDets.size(),
+                                    annName);
+                        } else {
+                            logger.info(
+                                    "Collagen-objects requested but fiber_mask_overlay.png missing for '{}'", annName);
+                        }
+                    }
 
                     // Optional: per-window detection objects from windows.json.
                     // Mirrors PPMPerpendicularityWorkflow.java:1243-1258 +
@@ -257,6 +285,18 @@ public class FiberAnalysisWorkflow {
                 HeadlessFx.runLater(() -> {
                     hierarchy.addObjects(toAdd);
                     logger.info("Added {} window detection objects to hierarchy", toAdd.size());
+                });
+            }
+
+            // Add all collagen (mask-derived) detections to the hierarchy in
+            // one shot. Hierarchy.addObjects resolves the parent annotation
+            // by containment.
+            if (!allCollagenDetections.isEmpty() && imageData.getHierarchy() != null) {
+                final PathObjectHierarchy hierarchy = imageData.getHierarchy();
+                final List<PathObject> toAdd = new ArrayList<>(allCollagenDetections);
+                HeadlessFx.runLater(() -> {
+                    hierarchy.addObjects(toAdd);
+                    logger.info("Added {} CollagenAnalysis detection objects to hierarchy", toAdd.size());
                 });
             }
 
@@ -555,7 +595,10 @@ public class FiberAnalysisWorkflow {
         // Output
         in.put("output_dir", outputDir.toString());
         in.put("heatmap_property", p.glcmHeatmapProp());
-        in.put("emit_fiber_mask_png", p.fiberMaskOverlay());
+        // Collagen object creation reads back the mask PNG alpha channel, so
+        // force the emission whenever objects are wanted even if the user
+        // turned the viewer overlay off.
+        in.put("emit_fiber_mask_png", p.fiberMaskOverlay() || p.collagenObjects());
         in.put("emit_straightness_png", p.straightnessHeatmap());
         in.put("emit_glcm_png", p.glcmHeatmap());
         in.put("emit_morph_summary", p.morphSummary());
@@ -851,6 +894,7 @@ public class FiberAnalysisWorkflow {
         m.put("morphSummary", p.morphSummary());
         m.put("jsonSidecar", p.jsonSidecar());
         m.put("emitNpz", p.emitNpz());
+        m.put("collagenObjects", p.collagenObjects());
         return m;
     }
 

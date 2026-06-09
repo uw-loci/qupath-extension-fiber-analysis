@@ -120,6 +120,7 @@ public final class FiberAnalysisDialog {
     private ComboBox<String> classifierNameCombo;
     private ComboBox<String> objectClassCombo;
     private TextField maskFileField;
+    private CheckBox collagenObjectsCheck;
 
     // -- Section 3 --
     private CheckBox windowEnabledCheck;
@@ -890,6 +891,29 @@ public final class FiberAnalysisDialog {
                 .disableProperty()
                 .bind(segExistingRadio.selectedProperty().not());
 
+        // -- Section 2 follow-on: turn the segmented mask into hierarchy --
+        // One detection per fiber blob (mask split into connected components),
+        // classed CollagenAnalysis, parented under the source annotation.
+        // Bold "Create" mirrors the per-window checkbox styling in Section 3.
+        Label cBold = new Label("Create");
+        cBold.setStyle("-fx-font-weight: bold;");
+        Label cRest = new Label(" collagen detection objects (split, classed CollagenAnalysis)");
+        HBox collagenLabel = new HBox(cBold, cRest);
+        collagenLabel.setAlignment(Pos.CENTER_LEFT);
+        collagenObjectsCheck = new CheckBox();
+        collagenObjectsCheck.setGraphic(collagenLabel);
+        collagenObjectsCheck.setAccessibleText(
+                "Create collagen detection objects, split into connected components, classed CollagenAnalysis");
+        collagenObjectsCheck.setSelected(
+                FiberAnalysisPreferences.collagenObjectsProperty().get());
+        applyTooltip(
+                collagenObjectsCheck,
+                "After segmentation, trace the fiber mask into one detection object per connected blob,"
+                        + " parented under the source annotation, classified as CollagenAnalysis."
+                        + " On by default. The same parameters that drive analysis drive these objects --"
+                        + " filtering / classifying them downstream is the easy way to act on the segmented fibers.");
+        content.getChildren().add(collagenObjectsCheck);
+
         return SectionBuilder.createSection("2. Fiber segmentation", true, content);
     }
 
@@ -1558,7 +1582,8 @@ public final class FiberAnalysisDialog {
                 glcmHeatmapProperty.getValue(),
                 morphSummaryCheck.isSelected(),
                 jsonSidecarCheck.isSelected(),
-                emitNpzCheck.isSelected());
+                emitNpzCheck.isSelected(),
+                collagenObjectsCheck.isSelected());
     }
 
     /**
@@ -1597,6 +1622,7 @@ public final class FiberAnalysisDialog {
         FiberAnalysisPreferences.windowSizeUmProperty().set(windowSizeSpinner.getValue());
         FiberAnalysisPreferences.windowOverlapPercentProperty().set(windowOverlapSpinner.getValue());
         FiberAnalysisPreferences.windowObjectsProperty().set(windowObjectsCheck.isSelected());
+        FiberAnalysisPreferences.collagenObjectsProperty().set(collagenObjectsCheck.isSelected());
         FiberAnalysisPreferences.minWindowCoveragePercentProperty().set(minWindowCoverageSpinner.getValue());
 
         FiberAnalysisPreferences.straightnessEnabledProperty().set(straightnessEnabledCheck.isSelected());

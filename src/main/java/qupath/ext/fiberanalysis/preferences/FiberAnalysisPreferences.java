@@ -68,6 +68,11 @@ public class FiberAnalysisPreferences {
     public static final double DEFAULT_WINDOW_SIZE_UM = 15.0;
     public static final int DEFAULT_WINDOW_OVERLAP_PERCENT = 0;
     public static final boolean DEFAULT_WINDOW_OBJECTS = false;
+    // Trace each per-annotation fiber mask into split connected-component
+    // detections (one per fiber blob) under the source annotation, classed
+    // as CollagenAnalysis. ON by default so the analyzed fibers are
+    // immediately queryable / classifiable in the hierarchy.
+    public static final boolean DEFAULT_COLLAGEN_OBJECTS = true;
     // Minimum fiber coverage % per window for it to be reported. Below this,
     // the window is excluded from PathObject creation AND its heatmap cell
     // is rendered transparent. Default 5% suppresses the corners-of-rounded-
@@ -148,6 +153,7 @@ public class FiberAnalysisPreferences {
     private static DoubleProperty windowSizeUm;
     private static IntegerProperty windowOverlapPercent;
     private static BooleanProperty windowObjects;
+    private static BooleanProperty collagenObjects;
     private static DoubleProperty minWindowCoveragePercent;
 
     private static BooleanProperty straightnessEnabled;
@@ -235,6 +241,7 @@ public class FiberAnalysisPreferences {
         windowOverlapPercent =
                 PathPrefs.createPersistentPreference(PREFIX + "windowOverlapPercent", DEFAULT_WINDOW_OVERLAP_PERCENT);
         windowObjects = PathPrefs.createPersistentPreference(PREFIX + "windowObjects", DEFAULT_WINDOW_OBJECTS);
+        collagenObjects = PathPrefs.createPersistentPreference(PREFIX + "collagenObjects", DEFAULT_COLLAGEN_OBJECTS);
         minWindowCoveragePercent = PathPrefs.createPersistentPreference(
                 PREFIX + "minWindowCoveragePercent", DEFAULT_MIN_WINDOW_COVERAGE_PERCENT);
 
@@ -385,6 +392,10 @@ public class FiberAnalysisPreferences {
 
     public static BooleanProperty windowObjectsProperty() {
         return windowObjects;
+    }
+
+    public static BooleanProperty collagenObjectsProperty() {
+        return collagenObjects;
     }
 
     public static DoubleProperty minWindowCoveragePercentProperty() {

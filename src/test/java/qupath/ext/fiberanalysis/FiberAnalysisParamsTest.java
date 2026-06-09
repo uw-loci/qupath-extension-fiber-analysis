@@ -23,15 +23,16 @@ import qupath.ext.fiberanalysis.analysis.FiberAnalysisParams;
 class FiberAnalysisParamsTest {
 
     /**
-     * Section count totals from 02_ui_design.md sections 1-7:
-     *   S1 = 4, S2 = 13, S3 = 4, S4 = 4, S5 = 11, S6 = 9, S7 = 8
-     *   = 53 expected components. If this fails after a deliberate UI
+     * Section count totals from 02_ui_design.md sections 1-7 (post-2026-06):
+     *   S1 = 6, S2 = 17 (incl. collagenObjects tail), S3 = 5, S4 = 4,
+     *   S5 = 11, S6 = 9, S7 = 8
+     *   = 60 expected components. If this fails after a deliberate UI
      *     change, update both this test and 02_ui_design.md.
      */
     @Test
     void recordHasExpectedComponentCount() {
         RecordComponent[] components = FiberAnalysisParams.class.getRecordComponents();
-        assertThat(components).hasSize(53);
+        assertThat(components).hasSize(60);
     }
 
     @Test

@@ -110,7 +110,13 @@ public record FiberAnalysisParams(
         String glcmHeatmapProp,
         boolean morphSummary,
         boolean jsonSidecar,
-        boolean emitNpz) {
+        boolean emitNpz,
+        // Section 2 follow-on: trace the per-annotation fiber mask into
+        // split connected-component detection objects classed as
+        // CollagenAnalysis. Independent of the per-window detection toggle
+        // (Section 3) -- this one is one detection per fiber blob, classed
+        // as collagen, regardless of windowing.
+        boolean collagenObjects) {
 
     /**
      * Builds a {@link FiberAnalysisParams} populated from current preference values.
@@ -183,6 +189,7 @@ public record FiberAnalysisParams(
                 FiberAnalysisPreferences.glcmHeatmapPropProperty().get(),
                 FiberAnalysisPreferences.morphSummaryProperty().get(),
                 FiberAnalysisPreferences.jsonSidecarProperty().get(),
-                FiberAnalysisPreferences.emitNpzProperty().get());
+                FiberAnalysisPreferences.emitNpzProperty().get(),
+                FiberAnalysisPreferences.collagenObjectsProperty().get());
     }
 }

@@ -376,7 +376,8 @@ public final class FiberAnalysisBatchDialog {
                 base.glcmHeatmapProp(),
                 base.morphSummary(),
                 base.jsonSidecar(),
-                base.emitNpz());
+                base.emitNpz(),
+                base.collagenObjects());
     }
 
     private void runBatch(FiberAnalysisParams params, List<ProjectImageEntry<BufferedImage>> entries) {
@@ -537,7 +538,8 @@ public final class FiberAnalysisBatchDialog {
                 str(obj, "glcmHeatmapProp", "contrast"),
                 bool(obj, "morphSummary", true),
                 bool(obj, "jsonSidecar", true),
-                bool(obj, "emitNpz", false));
+                bool(obj, "emitNpz", false),
+                bool(obj, "collagenObjects", true));
     }
 
     private static String str(JsonObject o, String key, String def) {
