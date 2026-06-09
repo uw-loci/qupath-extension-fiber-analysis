@@ -160,11 +160,19 @@ public class ApposeFiberService {
 
                 report(statusCallback, "Building pixi environment (this may take several minutes)...");
 
+                // Note: do NOT pass .flags(List.of("--frozen")) here. Appose
+                // appends those flags before the pixi subcommand
+                // (`pixi --frozen ...`), but pixi only accepts `--frozen`
+                // AFTER the subcommand (`pixi install --frozen`), so the
+                // builder-time invocation fails with "unexpected argument
+                // '--frozen' found". The explicit `pixi install --frozen`
+                // call in installFiberLibrary() below already enforces
+                // strict lockfile-pinning at install time, which is what
+                // we actually wanted.
                 environment = Appose.pixi()
                         .content(pixiToml)
                         .scheme("pixi.toml")
                         .name(ENV_NAME)
-                        .flags(List.of("--frozen"))
                         .logDebug()
                         .build();
 
@@ -234,9 +242,27 @@ public class ApposeFiberService {
             }
 
         } catch (Exception e) {
+            // Match failure signatures against the full cause chain -- pixi's
+            // BuildException only says "pixi build failed" at the top; the
+            // actionable Windows file-lock text lives in a nested cause.
+            String fullMsg = collectCauseMessages(e);
             initError = e.getMessage();
             initialized = false;
             logger.error("Failed to initialize Fiber Analysis Appose: {}", e.getMessage(), e);
+            if (looksLikeWindowsFileLock(fullMsg)) {
+                logger.warn(
+                        "Pixi env install hit a Windows file lock; manual recovery required\n{}",
+                        windowsFileLockAdvice(ENV_NAME));
+                report(statusCallback, "Pixi env install failed: Windows file lock. See recovery steps.");
+                try {
+                    qupath.fx.dialogs.Dialogs.showWarningNotification(
+                            "Fiber Analysis",
+                            "Pixi env install failed: a file was locked by another process. Close QuPath,"
+                                    + " delete the .pixi folder, and relaunch. See the log for full recovery steps.");
+                } catch (Exception fxEx) {
+                    // FX not running; log advice already emitted.
+                }
+            }
             throw e instanceof IOException ? (IOException) e : new IOException(e);
         }
     }
@@ -751,6 +777,50 @@ public class ApposeFiberService {
                 return reader.lines().collect(Collectors.joining("\n"));
             }
         }
+    }
+
+    /** Concatenate the message of a throwable and its entire cause chain.
+     *  pixi's BuildException only says "pixi build failed" at the top; the
+     *  actionable "failed to link ... os error 32" text lives in a nested
+     *  cause, so failure-signature detection must see the whole chain. */
+    private static String collectCauseMessages(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        int guard = 0;
+        for (Throwable c = t; c != null && guard < 20; c = c.getCause(), guard++) {
+            if (c.getMessage() != null) {
+                sb.append(c.getMessage()).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    /** True when the Pixi build failed because Windows held an exclusive lock
+     *  on a file the conda link step needed to replace (canonical signature:
+     *  "failed to link" + "os error 32" / "being used by another process").
+     *  Do NOT auto-wipe -- the blocking process may still be writing. */
+    private static boolean looksLikeWindowsFileLock(String message) {
+        if (message == null) return false;
+        return message.contains("failed to link")
+                && (message.contains("os error 32") || message.contains("being used by another process"));
+    }
+
+    /** Recovery instructions for the Windows file-lock failure mode during the
+     *  Pixi env install. Surfaced to the log; a short notification points here. */
+    private static String windowsFileLockAdvice(String envName) {
+        return "The Python environment could not finish building because another"
+                + " process is holding a file open inside the env directory.\n\n"
+                + "RECOVERY STEPS (Windows):\n"
+                + "  1. Close QuPath completely (File -> Quit).\n"
+                + "  2. Open Task Manager -- end any leftover java.exe or python.exe"
+                + " running under your user.\n"
+                + "  3. In PowerShell:\n"
+                + "       Remove-Item -Recurse -Force \"$env:USERPROFILE\\.local\\share\\appose\\"
+                + envName + "\\.pixi\"\n"
+                + "  4. (If step 3 fails: reboot Windows -- guaranteed to release every file handle.)\n"
+                + "  5. (Optional) Add an antivirus exclusion for"
+                + " %USERPROFILE%\\.local\\share\\appose\\ to prevent repeat occurrences.\n"
+                + "  6. Relaunch QuPath. The env will rebuild from the bundled lock and the"
+                + " link step will succeed.";
     }
 
     private static void report(Consumer<String> callback, String message) {
