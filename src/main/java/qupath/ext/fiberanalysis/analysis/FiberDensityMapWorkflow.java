@@ -210,12 +210,49 @@ public final class FiberDensityMapWorkflow {
 
         int windowPx = Math.max(2, (int) Math.round(spec.windowSizeUm / pxUm));
         double overlapFrac = Math.max(0.0, Math.min(0.95, spec.windowOverlapPercent / 100.0));
-        int stridePx = Math.max(1, (int) Math.round(windowPx * (1.0 - overlapFrac)));
+        int stridePxWindow = Math.max(1, (int) Math.round(windowPx * (1.0 - overlapFrac)));
 
-        // Slide-wide grid dimensions, computed the same way fiberlib.windows.compute_windows does:
-        // Hw = (H - windowPx) / stridePx + 1 (floor; partial trailing windows are dropped).
-        int gridH = Math.max(0, (srcH - windowPx) / stridePx + 1);
-        int gridW = Math.max(0, (srcW - windowPx) / stridePx + 1);
+        boolean pixelMode = "pixel".equals(spec.densityMode);
+        int gridH;
+        int gridW;
+        int stridePx;
+        if (pixelMode) {
+            // Per-pixel mode: accumulator is at source resolution, stride = 1.
+            // Memory cost grows with srcW * srcH; preflight to avoid OOM.
+            gridH = srcH;
+            gridW = srcW;
+            stridePx = 1;
+            int nChannels = DensityChannelSpec.defaultChannels().size();
+            long memBytes = DensityMapJobSpec.estimatePerPixelMemoryBytes(srcW, srcH, nChannels);
+            long maxHeap = Runtime.getRuntime().maxMemory();
+            // Refuse if the accumulator alone would consume > 50% of max heap.
+            long memCap = maxHeap / 2L;
+            if (memBytes > memCap) {
+                throw new IOException(String.format(
+                        java.util.Locale.ROOT,
+                        "Per-pixel density on %dx%d image with %d channels needs ~%.1f GB of heap"
+                                + " (max heap %.1f GB, cap %.1f GB). Re-run in window mode, run on a"
+                                + " smaller image / cropped region, or increase QuPath's max heap.",
+                        srcW,
+                        srcH,
+                        nChannels,
+                        memBytes / 1.0e9,
+                        maxHeap / 1.0e9,
+                        memCap / 1.0e9));
+            }
+            logger.info(
+                    "Per-pixel density: accumulator ~{} MB ({}x{} x {} channels x 6 bytes)",
+                    memBytes / (1024L * 1024L),
+                    srcW,
+                    srcH,
+                    nChannels);
+        } else {
+            // Slide-wide grid dimensions, computed the same way fiberlib.windows.compute_windows does:
+            // Hw = (H - windowPx) / stridePx + 1 (floor; partial trailing windows are dropped).
+            stridePx = stridePxWindow;
+            gridH = Math.max(0, (srcH - windowPx) / stridePx + 1);
+            gridW = Math.max(0, (srcW - windowPx) / stridePx + 1);
+        }
         if (gridH == 0 || gridW == 0) {
             throw new IOException("Image is smaller than one window in at least one dimension (window_px=" + windowPx
                     + "; image=" + srcW + "x" + srcH + ")");
@@ -245,13 +282,19 @@ public final class FiberDensityMapWorkflow {
                     int tww = Math.min(tilePx, srcW - tileX);
                     if (tww <= 0) continue;
 
-                    // For honest per-window stats we need the tile to be the full width
-                    // of an integer number of windows; the last tile in a row / column
-                    // may be smaller, in which case some trailing windows are partial
-                    // and the Python side will simply produce fewer windows for that
-                    // tile. We accumulate into whatever indices the tile contributes.
-                    int tileGridW = (tww - windowPx) / stridePx + 1;
-                    int tileGridH = (thh - windowPx) / stridePx + 1;
+                    // Pixel mode: each tile's per-pixel arrays have shape
+                    // (thh, tww) -- one cell per source pixel. Window mode:
+                    // the tile produces (Hw, Ww) per-window cells; the last
+                    // tile in a row/column may be partial.
+                    int tileGridW;
+                    int tileGridH;
+                    if (pixelMode) {
+                        tileGridW = tww;
+                        tileGridH = thh;
+                    } else {
+                        tileGridW = (tww - windowPx) / stridePx + 1;
+                        tileGridH = (thh - windowPx) / stridePx + 1;
+                    }
                     if (tileGridW <= 0 || tileGridH <= 0) {
                         doneTiles++;
                         continue;
@@ -408,6 +451,7 @@ public final class FiberDensityMapWorkflow {
         if (spec.projectThresholdNorm != null) {
             in.put("project_threshold_norm", spec.projectThresholdNorm);
         }
+        in.put("density_mode", spec.densityMode);
         in.put("output_npz_path", outNpz.toString());
         return in;
     }
@@ -570,6 +614,15 @@ public final class FiberDensityMapWorkflow {
          */
         public final boolean smoothInterpolation;
 
+        /**
+         * Density compute mode: "window" (per-window aggregation; cheap, blocky)
+         * or "pixel" (per-pixel local-neighborhood density via uniform_filter;
+         * one value per source pixel, smooth). Pixel mode allocates a slide-wide
+         * float[] per channel sized to source dimensions -- see
+         * {@link #estimatePerPixelMemoryBytes} before running on WSIs.
+         */
+        public final String densityMode;
+
         public DensityMapJobSpec(
                 double windowSizeUm,
                 double windowOverlapPercent,
@@ -585,7 +638,8 @@ public final class FiberDensityMapWorkflow {
                 double rollingBallRadiusUm,
                 Double projectThresholdNorm,
                 boolean writeAutoReattachMarker,
-                boolean smoothInterpolation) {
+                boolean smoothInterpolation,
+                String densityMode) {
             this.windowSizeUm = windowSizeUm;
             this.windowOverlapPercent = windowOverlapPercent;
             this.segChannel = segChannel;
@@ -601,6 +655,12 @@ public final class FiberDensityMapWorkflow {
             this.projectThresholdNorm = projectThresholdNorm;
             this.writeAutoReattachMarker = writeAutoReattachMarker;
             this.smoothInterpolation = smoothInterpolation;
+            String mode = densityMode == null ? "window" : densityMode.trim().toLowerCase();
+            if (!"window".equals(mode) && !"pixel".equals(mode)) {
+                throw new IllegalArgumentException(
+                        "densityMode must be 'window' or 'pixel', got '" + densityMode + "'");
+            }
+            this.densityMode = mode;
         }
 
         /** Ordered echo of every spec field (for params.json / params.txt). */
@@ -621,7 +681,18 @@ public final class FiberDensityMapWorkflow {
             m.put("projectThresholdNorm", projectThresholdNorm);
             m.put("writeAutoReattachMarker", writeAutoReattachMarker);
             m.put("smoothInterpolation", smoothInterpolation);
+            m.put("densityMode", densityMode);
             return m;
+        }
+
+        /**
+         * Estimated heap cost (bytes) for a per-pixel run at the given source
+         * dimensions. Float accumulator + uint16 quantized grid per channel.
+         */
+        public static long estimatePerPixelMemoryBytes(int srcW, int srcH, int nChannels) {
+            long cells = (long) srcW * (long) srcH;
+            // 4 bytes per float accumulator + 2 bytes per uint16 quantized grid.
+            return cells * 6L * (long) nChannels;
         }
 
         /**
@@ -652,7 +723,8 @@ public final class FiberDensityMapWorkflow {
                             ? p.get("projectThresholdNorm").getAsDouble()
                             : null,
                     jbool(p, "writeAutoReattachMarker", false),
-                    jbool(p, "smoothInterpolation", false));
+                    jbool(p, "smoothInterpolation", false),
+                    jstring(p, "densityMode", "window"));
         }
 
         private static String jstring(com.google.gson.JsonObject o, String k, String def) {

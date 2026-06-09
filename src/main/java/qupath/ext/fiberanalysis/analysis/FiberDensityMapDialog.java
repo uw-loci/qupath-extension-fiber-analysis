@@ -104,6 +104,10 @@ public final class FiberDensityMapDialog {
     private CheckBox autoReattachCheck;
     private CheckBox smoothCheck;
 
+    private ToggleGroup densityModeGroup;
+    private RadioButton windowModeRadio;
+    private RadioButton pixelModeRadio;
+
     private Label validationBanner;
     private VBox validationBox;
     private Button runBtn;
@@ -295,11 +299,42 @@ public final class FiberDensityMapDialog {
         windowHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         windowHelp.setWrapText(true);
 
+        // --- Density mode ---
+        Label densityModeLabel = new Label("Density mode");
+        densityModeLabel.setStyle("-fx-font-weight: bold;");
+        densityModeGroup = new ToggleGroup();
+        windowModeRadio = new RadioButton("Per-window (fast; values are constant across each window)");
+        pixelModeRadio = new RadioButton("Per-pixel (true density; one value per source pixel)");
+        windowModeRadio.setToggleGroup(densityModeGroup);
+        pixelModeRadio.setToggleGroup(densityModeGroup);
+        windowModeRadio.setSelected(true);
+        windowModeRadio.setTooltip(
+                new Tooltip("Per-window: aggregate every metric across the window grid. Cheap and scales\n"
+                        + "to any slide size. The map looks tiled at the window granularity (e.g. 15 um\n"
+                        + "windows show 15 um cells); use the 'Smooth' option below to interpolate\n"
+                        + "between window centres."));
+        pixelModeRadio.setTooltip(new Tooltip("Per-pixel: compute local-neighborhood density at every source pixel\n"
+                + "(uniform_filter, stride 1). Smooth, physically meaningful density.\n"
+                + "Allocates a slide-wide float[] per channel -- ~700 MB for a 5000x5000\n"
+                + "image with 7 channels; refuses to run if it would exceed half of\n"
+                + "QuPath's max heap. Use window mode for very large slides.\n"
+                + "Note: ridge_count is NaN in this mode (skeleton length carries the\n"
+                + "same fiber-density information per pixel)."));
+        Label densityModeHelp = new Label("Per-pixel is what you usually want for visualization.\n"
+                + "Per-window is faster and is required for whole-slide runs that would\n"
+                + "exceed available memory in per-pixel mode.");
+        densityModeHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
+        densityModeHelp.setWrapText(true);
+
         // --- Render style ---
         Label renderLabel = new Label("Render style");
         renderLabel.setStyle("-fx-font-weight: bold;");
         smoothCheck = new CheckBox("Smooth (bilinear interpolation between window centres)");
         smoothCheck.setSelected(false);
+        // Bilinear smoothing is a window-mode concept; in pixel mode the data
+        // is already at source resolution and bilinear-between-centres is
+        // identity. Disable the toggle when pixel mode is active.
+        smoothCheck.disableProperty().bind(pixelModeRadio.selectedProperty());
         smoothCheck.setTooltip(new Tooltip("OFF: each window's value is replicated across its source-pixel\n"
                 + "footprint -- visible tile boundaries between windows.\n"
                 + "ON: values are bilinearly interpolated between adjacent window\n"
@@ -327,6 +362,7 @@ public final class FiberDensityMapDialog {
         VBox modeBox = new VBox(
                 4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp, autoReattachCheck, autoReattachHelp);
         VBox winBox = new VBox(4, windowLabel, windowHelp);
+        VBox densityModeBox = new VBox(4, densityModeLabel, windowModeRadio, pixelModeRadio, densityModeHelp);
         VBox renderBox = new VBox(4, renderLabel, smoothCheck, renderHelp);
         VBox sideBox = new VBox(4, sidecarLabel, sidecarBody);
 
@@ -336,6 +372,8 @@ public final class FiberDensityMapDialog {
                 modeBox,
                 new Separator(),
                 winBox,
+                new Separator(),
+                densityModeBox,
                 new Separator(),
                 renderBox,
                 new Separator(),
@@ -422,7 +460,8 @@ public final class FiberDensityMapDialog {
                 FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
                 projectThresholdNorm,
                 autoReattach,
-                smoothCheck != null && smoothCheck.isSelected());
+                smoothCheck != null && smoothCheck.isSelected(),
+                pixelModeRadio != null && pixelModeRadio.isSelected() ? "pixel" : "window");
         logger.info(
                 "Project density map: dispatching {} image(s), mode={}",
                 entries.size(),
