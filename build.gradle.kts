@@ -13,7 +13,7 @@ plugins {
 qupathExtension {
     name = "qupath-extension-fiber-analysis"
     group = "io.github.uw-loci"
-    version = "0.1.0"
+    version = "0.1.1"
     description = "Testbed QuPath extension for fiber straightness, TWOMBLI-derived morphometrics, and GLCM texture on segmented collagen fibers."
     automaticModule = "io.github.uw.loci.extension.fiberanalysis"
 }
