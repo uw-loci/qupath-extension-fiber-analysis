@@ -259,7 +259,16 @@ public final class FiberDensityMapWorkflow {
         }
 
         // Per-channel float accumulators (slide-wide). NaN = no data.
-        List<DensityChannelSpec> channels = DensityChannelSpec.defaultChannels();
+        // Fiber channels come first (filled by the tile loop below), then
+        // optional object-density channels (one per selected class, filled
+        // after the tile loop completes).
+        List<DensityChannelSpec> channels = new ArrayList<>(DensityChannelSpec.defaultChannels());
+        int nFiberChannels = channels.size();
+        if (spec.includeObjectDensity) {
+            for (String cls : spec.objectDensityClasses) {
+                channels.add(DensityChannelSpec.forObjectClass(cls));
+            }
+        }
         float[][] accum = new float[channels.size()][gridW * gridH];
         for (float[] arr : accum) java.util.Arrays.fill(arr, Float.NaN);
 
@@ -354,6 +363,25 @@ public final class FiberDensityMapWorkflow {
                 });
             } catch (IOException ignored) {
                 // tmp tree walked off underneath us; nothing to do.
+            }
+        }
+
+        // Object-density channels: compute one full grid per selected class
+        // and slot it into the trailing positions of `accum`. Uses the same
+        // grid geometry (windowPx, stridePx, gridW, gridH) as the fiber
+        // channels so QuPath's channel list shows them side-by-side at the
+        // identical neighborhood scale.
+        if (spec.includeObjectDensity && !spec.objectDensityClasses.isEmpty()) {
+            progress.setSub("Computing object-density channels...");
+            Map<String, float[]> objDensities = ObjectDensityComputer.compute(
+                    data, spec.objectDensityClasses, srcW, srcH, windowPx, stridePx, gridW, gridH);
+            int idx = nFiberChannels;
+            for (String cls : spec.objectDensityClasses) {
+                float[] grid = objDensities.get(cls);
+                if (grid != null) {
+                    System.arraycopy(grid, 0, accum[idx], 0, Math.min(grid.length, accum[idx].length));
+                }
+                idx++;
             }
         }
 
@@ -494,6 +522,9 @@ public final class FiberDensityMapWorkflow {
 
         for (int c = 0; c < channels.size(); c++) {
             String key = channels.get(c).npzKey;
+            // Object-density channels are filled by ObjectDensityComputer after
+            // the tile loop completes; they are not in the per-tile npz.
+            if (key == null) continue;
             NpzReader.Entry e = npz.get(key);
             if (e == null) {
                 logger.warn("Tile npz missing key '{}' -- channel will keep NaN", key);
@@ -623,6 +654,17 @@ public final class FiberDensityMapWorkflow {
          */
         public final String densityMode;
 
+        /**
+         * When true, the sidecar grows additional channels: one per class
+         * name in {@link #objectDensityClasses}, computed as the fraction
+         * of pixels in the local box that fall inside any object of that
+         * class. Same window-size / mode / stride as the fiber channels.
+         */
+        public final boolean includeObjectDensity;
+
+        /** Class names (e.g. "CollagenAnalysis", "Tumor: Stroma") to compute as object-density channels. */
+        public final List<String> objectDensityClasses;
+
         public DensityMapJobSpec(
                 double windowSizeUm,
                 double windowOverlapPercent,
@@ -639,7 +681,9 @@ public final class FiberDensityMapWorkflow {
                 Double projectThresholdNorm,
                 boolean writeAutoReattachMarker,
                 boolean smoothInterpolation,
-                String densityMode) {
+                String densityMode,
+                boolean includeObjectDensity,
+                List<String> objectDensityClasses) {
             this.windowSizeUm = windowSizeUm;
             this.windowOverlapPercent = windowOverlapPercent;
             this.segChannel = segChannel;
@@ -661,6 +705,10 @@ public final class FiberDensityMapWorkflow {
                         "densityMode must be 'window' or 'pixel', got '" + densityMode + "'");
             }
             this.densityMode = mode;
+            this.includeObjectDensity = includeObjectDensity;
+            this.objectDensityClasses = objectDensityClasses == null
+                    ? java.util.Collections.emptyList()
+                    : List.copyOf(objectDensityClasses);
         }
 
         /** Ordered echo of every spec field (for params.json / params.txt). */
@@ -682,6 +730,8 @@ public final class FiberDensityMapWorkflow {
             m.put("writeAutoReattachMarker", writeAutoReattachMarker);
             m.put("smoothInterpolation", smoothInterpolation);
             m.put("densityMode", densityMode);
+            m.put("includeObjectDensity", includeObjectDensity);
+            m.put("objectDensityClasses", objectDensityClasses);
             return m;
         }
 
@@ -724,7 +774,22 @@ public final class FiberDensityMapWorkflow {
                             : null,
                     jbool(p, "writeAutoReattachMarker", false),
                     jbool(p, "smoothInterpolation", false),
-                    jstring(p, "densityMode", "window"));
+                    jstring(p, "densityMode", "window"),
+                    jbool(p, "includeObjectDensity", false),
+                    jstringList(p, "objectDensityClasses"));
+        }
+
+        private static List<String> jstringList(com.google.gson.JsonObject o, String key) {
+            if (o == null || !o.has(key) || o.get(key).isJsonNull()) return java.util.Collections.emptyList();
+            com.google.gson.JsonElement el = o.get(key);
+            if (!el.isJsonArray()) return java.util.Collections.emptyList();
+            com.google.gson.JsonArray arr = el.getAsJsonArray();
+            List<String> out = new ArrayList<>(arr.size());
+            for (int i = 0; i < arr.size(); i++) {
+                com.google.gson.JsonElement item = arr.get(i);
+                if (item != null && !item.isJsonNull()) out.add(item.getAsString());
+            }
+            return out;
         }
 
         private static String jstring(com.google.gson.JsonObject o, String k, String def) {

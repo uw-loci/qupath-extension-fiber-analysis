@@ -29,25 +29,54 @@ import java.util.List;
  */
 public final class DensityChannelSpec {
 
+    /**
+     * For fiber channels, the npz array key {@code density_tile.py} writes
+     * under. For object-density channels, {@code null} -- their values come
+     * from {@link ObjectDensityComputer}, not the per-tile npz.
+     */
     public final String npzKey;
+
     public final String channelName;
     public final String unit; // free-text, for OME-XML description; null if unitless
 
-    private DensityChannelSpec(String npzKey, String channelName, String unit) {
+    /**
+     * For object-density channels, the {@code PathClass.toString()} the
+     * channel was computed for. {@code null} for fiber channels. Used by
+     * the workflow to route the channel through {@link ObjectDensityComputer}
+     * instead of npz accumulation.
+     */
+    public final String objectClassName;
+
+    private DensityChannelSpec(String npzKey, String channelName, String unit, String objectClassName) {
         this.npzKey = npzKey;
         this.channelName = channelName;
         this.unit = unit;
+        this.objectClassName = objectClassName;
+    }
+
+    /** Convenience: is this a class-presence channel rather than a fiber-derived one. */
+    public boolean isObjectDensity() {
+        return objectClassName != null;
     }
 
     /** Default v1 channel set in canonical order. */
     public static List<DensityChannelSpec> defaultChannels() {
         return List.of(
-                new DensityChannelSpec("fiber_coverage_percent", "Fiber coverage (%)", "%"),
-                new DensityChannelSpec("hdm", "HDM", null),
-                new DensityChannelSpec("ridge_count", "Ridge count", null),
-                new DensityChannelSpec("skeleton_length_um", "Skeleton length (um)", "um"),
-                new DensityChannelSpec("branch_points", "Branch points", null),
-                new DensityChannelSpec("mean_angle_deg", "Mean angle (deg)", "deg"),
-                new DensityChannelSpec("order_parameter", "Order parameter", null));
+                new DensityChannelSpec("fiber_coverage_percent", "Fiber coverage (%)", "%", null),
+                new DensityChannelSpec("hdm", "HDM", null, null),
+                new DensityChannelSpec("ridge_count", "Ridge count", null, null),
+                new DensityChannelSpec("skeleton_length_um", "Skeleton length (um)", "um", null),
+                new DensityChannelSpec("branch_points", "Branch points", null, null),
+                new DensityChannelSpec("mean_angle_deg", "Mean angle (deg)", "deg", null),
+                new DensityChannelSpec("order_parameter", "Order parameter", null, null));
+    }
+
+    /**
+     * Build an object-density channel for the given class. Channel name
+     * is prefixed with "Object density:" so it's visually distinct from
+     * fiber channels in QuPath's channel list and OME-XML.
+     */
+    public static DensityChannelSpec forObjectClass(String className) {
+        return new DensityChannelSpec(null, "Object density: " + className, "fraction", className);
     }
 }

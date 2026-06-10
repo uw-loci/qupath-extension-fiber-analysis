@@ -108,6 +108,9 @@ public final class FiberDensityMapDialog {
     private RadioButton windowModeRadio;
     private RadioButton pixelModeRadio;
 
+    private CheckBox objectDensityCheck;
+    private javafx.scene.control.ListView<String> objectDensityClassesList;
+
     private Label validationBanner;
     private VBox validationBox;
     private Button runBtn;
@@ -359,10 +362,36 @@ public final class FiberDensityMapDialog {
         sidecarBody.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         sidecarBody.setWrapText(true);
 
+        // --- Object-density channels (optional) ---
+        Label objDensLabel = new Label("Object-density channels (optional)");
+        objDensLabel.setStyle("-fx-font-weight: bold;");
+        objectDensityCheck = new CheckBox("Also include object-density channels");
+        objectDensityCheck.setSelected(false);
+        objectDensityCheck.setTooltip(
+                new Tooltip("For each selected class below, add one density channel to the sidecar.\n"
+                        + "Per pixel: fraction of the local window covered by ANY object of that class\n"
+                        + "(annotation or detection; union of their footprints). Same window-size knob\n"
+                        + "as the fiber channels above, so densities are directly comparable.\n"
+                        + "Uses an integral-image box filter -- fast regardless of window size."));
+        objectDensityClassesList = new javafx.scene.control.ListView<>();
+        objectDensityClassesList.getSelectionModel().setSelectionMode(javafx.scene.control.SelectionMode.MULTIPLE);
+        objectDensityClassesList.setPrefHeight(100);
+        objectDensityClassesList
+                .disableProperty()
+                .bind(objectDensityCheck.selectedProperty().not());
+        populateObjectDensityClassList(gui != null ? gui.getProject() : null);
+        Label objDensHelp = new Label(
+                "Ctrl/Shift-click to pick multiple classes. Each adds one channel: 'Object density: <ClassName>'.\n"
+                        + "Useful for showing where CollagenAnalysis detections (or any class) accumulate next to\n"
+                        + "the fiber-quantity channels above.");
+        objDensHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
+        objDensHelp.setWrapText(true);
+
         VBox modeBox = new VBox(
                 4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp, autoReattachCheck, autoReattachHelp);
         VBox winBox = new VBox(4, windowLabel, windowHelp);
         VBox densityModeBox = new VBox(4, densityModeLabel, windowModeRadio, pixelModeRadio, densityModeHelp);
+        VBox objDensBox = new VBox(4, objDensLabel, objectDensityCheck, objectDensityClassesList, objDensHelp);
         VBox renderBox = new VBox(4, renderLabel, smoothCheck, renderHelp);
         VBox sideBox = new VBox(4, sidecarLabel, sidecarBody);
 
@@ -374,6 +403,8 @@ public final class FiberDensityMapDialog {
                 winBox,
                 new Separator(),
                 densityModeBox,
+                new Separator(),
+                objDensBox,
                 new Separator(),
                 renderBox,
                 new Separator(),
@@ -461,7 +492,12 @@ public final class FiberDensityMapDialog {
                 projectThresholdNorm,
                 autoReattach,
                 smoothCheck != null && smoothCheck.isSelected(),
-                pixelModeRadio != null && pixelModeRadio.isSelected() ? "pixel" : "window");
+                pixelModeRadio != null && pixelModeRadio.isSelected() ? "pixel" : "window",
+                objectDensityCheck != null && objectDensityCheck.isSelected(),
+                objectDensityCheck != null && objectDensityCheck.isSelected()
+                        ? new ArrayList<>(
+                                objectDensityClassesList.getSelectionModel().getSelectedItems())
+                        : java.util.Collections.emptyList());
         logger.info(
                 "Project density map: dispatching {} image(s), mode={}",
                 entries.size(),
@@ -622,6 +658,49 @@ public final class FiberDensityMapDialog {
         List<String> parts = new ArrayList<>();
         for (PixelType t : types) parts.add(t == null ? "unknown" : t.toString());
         return String.join(", ", parts);
+    }
+
+    // ---------- object-density class enumeration ----------
+
+    /**
+     * Walk every project image's hierarchy on a background thread and
+     * collect the set of PathClass names actually attached to annotations
+     * or detections. Updates {@code objectDensityClassesList} on the FX
+     * thread. We avoid the project's class-manager directly because the
+     * class manager often holds defaults the user has not actually
+     * applied -- we only want classes that exist somewhere in the
+     * hierarchy.
+     */
+    private void populateObjectDensityClassList(Project<BufferedImage> project) {
+        if (project == null) return;
+        Thread t = new Thread(
+                () -> {
+                    Set<String> seen = new java.util.TreeSet<>();
+                    for (ProjectImageEntry<BufferedImage> entry : project.getImageList()) {
+                        if (Thread.currentThread().isInterrupted()) return;
+                        try {
+                            ImageData<BufferedImage> data = entry.readImageData();
+                            if (data == null || data.getHierarchy() == null) continue;
+                            for (qupath.lib.objects.PathObject po :
+                                    data.getHierarchy().getAnnotationObjects()) {
+                                qupath.lib.objects.classes.PathClass pc = po.getPathClass();
+                                if (pc != null) seen.add(pc.toString());
+                            }
+                            for (qupath.lib.objects.PathObject po :
+                                    data.getHierarchy().getDetectionObjects()) {
+                                qupath.lib.objects.classes.PathClass pc = po.getPathClass();
+                                if (pc != null) seen.add(pc.toString());
+                            }
+                        } catch (Exception ex) {
+                            logger.debug("Could not read hierarchy for {}: {}", entry.getImageName(), ex.getMessage());
+                        }
+                    }
+                    List<String> names = new ArrayList<>(seen);
+                    Platform.runLater(() -> objectDensityClassesList.getItems().setAll(names));
+                },
+                "Density-ObjectClass-Scanner");
+        t.setDaemon(true);
+        t.start();
     }
 
     // ---------- background pixel-type detector ----------
