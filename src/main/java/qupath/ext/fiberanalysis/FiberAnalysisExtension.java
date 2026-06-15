@@ -294,7 +294,7 @@ public class FiberAnalysisExtension implements QuPathExtension {
         });
 
         // Whole-slide density-map output across multiple project images. Writes
-        // a uint16 pyramid OME-TIFF sidecar per image; the user picks whether
+        // a float32 pyramid OME-TIFF sidecar per image; the user picks whether
         // to attach it as channels (changes how the base image renders) or
         // keep it as a separate sidecar with sampling commands (preserves the
         // native display). Validation rules for the type / mode combos live

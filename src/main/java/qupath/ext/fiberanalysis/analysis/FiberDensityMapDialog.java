@@ -354,11 +354,12 @@ public final class FiberDensityMapDialog {
         // --- Sidecar location ---
         Label sidecarLabel = new Label("Sidecar location");
         sidecarLabel.setStyle("-fx-font-weight: bold;");
-        Label sidecarBody = new Label("Per image, a tiled uint16 pyramid OME-TIFF is written to\n"
+        Label sidecarBody = new Label("Per image, a tiled float32 pyramid OME-TIFF is written to\n"
                 + "    <project>/fiber-analysis/density-maps/<image>_density.ome.tif\n"
-                + "LZW-compressed; empty regions encoded as the no-data sentinel (raw=0,\n"
-                + "channel scale + offset preserved in OME-XML so real units round-trip).\n"
-                + "Expected size for a 100k x 100k slide with 8 channels: ~10-40 MB per image.");
+                + "LZW-compressed; NaN is the no-data sentinel; channel values are the\n"
+                + "physical values directly (Fiber coverage (%) reads 0..100, etc.) so they\n"
+                + "show up as data in QuPath's channel histograms.\n"
+                + "Expected size for a 100k x 100k slide with 8 channels: ~20-80 MB per image.");
         sidecarBody.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         sidecarBody.setWrapText(true);
 
@@ -427,7 +428,7 @@ public final class FiberDensityMapDialog {
 
         runBtn = new Button("Compute density maps");
         runBtn.setDefaultButton(true);
-        runBtn.setTooltip(new Tooltip("Tile-stream each selected image, write a uint16 quantized pyramid OME-TIFF\n"
+        runBtn.setTooltip(new Tooltip("Tile-stream each selected image, write a float32 pyramid OME-TIFF\n"
                 + "sidecar per image, and either attach as channels (Channels mode) or\n"
                 + "expose via the sampling command (Sidecar mode)."));
         runBtn.setOnAction(e -> onRun());

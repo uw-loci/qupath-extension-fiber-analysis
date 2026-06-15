@@ -385,26 +385,13 @@ public final class FiberDensityMapWorkflow {
             }
         }
 
-        // Quantize each channel into uint16 with sentinel 0 = no-data.
-        short[][] grids = new short[channels.size()][gridW * gridH];
-        List<DensityTiffWriter.ChannelQuant> quants = new ArrayList<>(channels.size());
-        for (int c = 0; c < channels.size(); c++) {
-            DensityTiffWriter.ChannelQuant q = quantize(accum[c], grids[c]);
-            quants.add(q);
-            logger.info(
-                    "Quantized channel {} ({}): scale={}, offset={}",
-                    c,
-                    channels.get(c).channelName,
-                    q.scale,
-                    q.offset);
-        }
-
         // Sidecar is written at SOURCE pixel dimensions (not grid dimensions)
         // via nearest-neighbour upsampling inside DensityTiffWriter. This
         // keeps Attach / Sample / standalone-open all in identity source-pixel
         // coords -- a 68x68 sidecar opened standalone would otherwise look
         // miniscule next to its 2048x2048 source. LZW absorbs the replicated
-        // blocks efficiently.
+        // blocks efficiently. Channels are written as float32 directly, so
+        // the values on disk ARE the physical values (no quantization).
 
         String safeName = sanitize(entry.getImageName());
         Path outPath = outRoot.resolve(safeName + "_density.ome.tif");
@@ -417,8 +404,7 @@ public final class FiberDensityMapWorkflow {
                 gridH,
                 stridePx,
                 channels,
-                grids,
-                quants,
+                accum,
                 spec.smoothInterpolation);
         // Drop / refresh the auto-reattach marker. We intentionally do not
         // delete an existing marker when the user runs without the checkbox
@@ -541,55 +527,6 @@ public final class FiberDensityMapWorkflow {
                 }
             }
         }
-    }
-
-    /**
-     * Linearly quantize the float accumulator into uint16 raw values:
-     * sentinel 0 for NaN cells, otherwise scale into [1, 65535].
-     * Returns the scale + offset so {@code real = raw * scale + offset}.
-     */
-    static DensityTiffWriter.ChannelQuant quantize(float[] src, short[] dst) {
-        double min = Double.POSITIVE_INFINITY;
-        double max = Double.NEGATIVE_INFINITY;
-        boolean any = false;
-        for (float v : src) {
-            if (Float.isNaN(v) || Float.isInfinite(v)) continue;
-            any = true;
-            if (v < min) min = v;
-            if (v > max) max = v;
-        }
-        if (!any) {
-            // Channel is empty -- write all-zero, scale = 1, offset = 0.
-            java.util.Arrays.fill(dst, (short) 0);
-            return new DensityTiffWriter.ChannelQuant(1.0, 0.0);
-        }
-        if (max - min < 1e-12) {
-            // Constant channel -- map every valid cell to the midpoint of
-            // [1, 65535] and encode the constant via offset.
-            for (int i = 0; i < src.length; i++) {
-                float v = src[i];
-                dst[i] = (Float.isNaN(v) || Float.isInfinite(v)) ? (short) 0 : (short) 32768;
-            }
-            return new DensityTiffWriter.ChannelQuant(0.0, min);
-        }
-        // Map [min, max] into [1, 65535]: raw = round(1 + (v - min) * (65534 / (max - min))).
-        double range = max - min;
-        double slope = 65534.0 / range;
-        // real = (raw - 1) / slope + min  ==  raw * (1/slope) + (min - 1/slope)
-        double scale = 1.0 / slope;
-        double offset = min - 1.0 * scale;
-        for (int i = 0; i < src.length; i++) {
-            float v = src[i];
-            if (Float.isNaN(v) || Float.isInfinite(v)) {
-                dst[i] = 0;
-                continue;
-            }
-            long raw = Math.round(1.0 + (v - min) * slope);
-            if (raw < 1) raw = 1;
-            if (raw > 65535) raw = 65535;
-            dst[i] = (short) (raw & 0xffff);
-        }
-        return new DensityTiffWriter.ChannelQuant(scale, offset);
     }
 
     private static Path resolveProjectDir(Project<BufferedImage> project) {
@@ -737,12 +674,12 @@ public final class FiberDensityMapWorkflow {
 
         /**
          * Estimated heap cost (bytes) for a per-pixel run at the given source
-         * dimensions. Float accumulator + uint16 quantized grid per channel.
+         * dimensions. One float accumulator per channel; the writer streams
+         * tiles to disk so there is no additional staging buffer.
          */
         public static long estimatePerPixelMemoryBytes(int srcW, int srcH, int nChannels) {
             long cells = (long) srcW * (long) srcH;
-            // 4 bytes per float accumulator + 2 bytes per uint16 quantized grid.
-            return cells * 6L * (long) nChannels;
+            return cells * 4L * (long) nChannels;
         }
 
         /**

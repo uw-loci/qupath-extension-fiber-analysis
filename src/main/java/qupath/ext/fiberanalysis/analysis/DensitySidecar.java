@@ -32,15 +32,24 @@ import qupath.lib.projects.ProjectImageEntry;
  *
  * <p>The sidecar is an OME-TIFF at
  * {@code <project>/fiber-analysis/density-maps/<sanitized-name>_density.ome.tif}.
- * Per-channel quantization is encoded in the OME-XML image description as a
- * plain-text block (one row per channel, {@code [N] name=...; scale=...; offset=...; unit=...}).
- * Parsed back here for use by the sampling command.
+ * Pixel type is float32; NaN is the no-data sentinel; channel values are
+ * already in physical units. The OME-XML description block lists channels
+ * (one row per channel, {@code [N] name=...; unit=...}) which are parsed
+ * back for the sampling command. Legacy uint16 sidecars also carried
+ * {@code scale=...; offset=...} per channel; the parser still accepts those
+ * rows for back-compat reads but new writes do not emit them.
  */
 public final class DensitySidecar {
 
     private static final Logger logger = LoggerFactory.getLogger(DensitySidecar.class);
 
-    /** Per-channel descriptor read back from the sidecar's OME-XML description. */
+    /**
+     * Per-channel descriptor read back from the sidecar's OME-XML description.
+     *
+     * <p>{@code scale}/{@code offset} are kept for legacy uint16 sidecars that
+     * encoded {@code real = raw * scale + offset}; new float32 sidecars
+     * default to {@code scale=1.0, offset=0.0} (values already physical).
+     */
     public static final class ChannelInfo {
         public final int index;
         public final String name;
@@ -190,11 +199,12 @@ public final class DensitySidecar {
 
     /** Visible for tests: extract channel rows from the OME-XML description block. */
     static List<ChannelInfo> parseChannelInfos(String desc) {
-        // Row shape:  [<idx>] name=<name>; scale=<scale>; offset=<offset>[; unit=<unit>]
-        // Name may contain spaces and parentheses; scale/offset are
-        // %.10g-formatted (positive or negative, with optional exponent).
+        // Row shape (float32, current): [<idx>] name=<name>[; unit=<unit>]
+        // Row shape (uint16 legacy):    [<idx>] name=<name>; scale=<s>; offset=<o>[; unit=<unit>]
+        // scale/offset are optional -- new sidecars default to 1.0/0.0
+        // because the on-disk values are already physical.
         Pattern p = Pattern.compile(
-                "\\[(\\d+)]\\s*name=(.+?);\\s*scale=([\\-+0-9.eE]+);\\s*offset=([\\-+0-9.eE]+)(?:;\\s*unit=([^\\r\\n;]+))?",
+                "\\[(\\d+)]\\s*name=(.+?)(?:;\\s*scale=([\\-+0-9.eE]+);\\s*offset=([\\-+0-9.eE]+))?(?:;\\s*unit=([^\\r\\n;]+))?",
                 Pattern.MULTILINE);
         Matcher m = p.matcher(desc);
         List<ChannelInfo> out = new ArrayList<>();
@@ -202,8 +212,8 @@ public final class DensitySidecar {
             try {
                 int idx = Integer.parseInt(m.group(1));
                 String name = m.group(2).trim();
-                double scale = Double.parseDouble(m.group(3));
-                double offset = Double.parseDouble(m.group(4));
+                double scale = m.group(3) == null ? 1.0 : Double.parseDouble(m.group(3));
+                double offset = m.group(4) == null ? 0.0 : Double.parseDouble(m.group(4));
                 String unit = m.group(5);
                 if (unit != null) unit = unit.trim();
                 out.add(new ChannelInfo(idx, name, scale, offset, unit));
@@ -217,22 +227,22 @@ public final class DensitySidecar {
 
     /**
      * Average the valid pixels of one channel across an entire BufferedImage
-     * tile. {@code raw=0} is treated as no-data (sentinel) and skipped. Returns
+     * tile. {@code NaN} is treated as no-data (sentinel) and skipped. Returns
      * NaN when every pixel in the tile is no-data for this channel.
      */
     public static double meanValidChannel(BufferedImage tile, int channelIndex) {
         if (tile == null) return Double.NaN;
         int w = tile.getWidth();
         int h = tile.getHeight();
-        int[] samples = tile.getRaster().getSamples(0, 0, w, h, channelIndex, (int[]) null);
-        long sum = 0L;
+        float[] samples = tile.getRaster().getSamples(0, 0, w, h, channelIndex, (float[]) null);
+        double sum = 0.0;
         long count = 0L;
-        for (int v : samples) {
-            if (v <= 0) continue; // sentinel 0 = no data
+        for (float v : samples) {
+            if (Float.isNaN(v)) continue;
             sum += v;
             count++;
         }
         if (count == 0) return Double.NaN;
-        return (double) sum / (double) count;
+        return sum / (double) count;
     }
 }

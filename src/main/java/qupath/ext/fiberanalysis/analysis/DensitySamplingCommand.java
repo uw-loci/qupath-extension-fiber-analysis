@@ -203,17 +203,17 @@ public final class DensitySamplingCommand {
                         && "Rectangle".equalsIgnoreCase(roi.getRoiName());
                 double sidecarToSrc = sidecarPxUm / sourcePxUm;
 
-                long[] sumPerChannel = new long[channelsToSample];
+                double[] sumPerChannel = new double[channelsToSample];
                 long[] countPerChannel = new long[channelsToSample];
 
                 int tileW = tile.getWidth();
                 int tileH = tile.getHeight();
-                // Read all channels in one pass via separate getSamples calls;
-                // this is cheap on the tiny sidecar tile and avoids a per-pixel
-                // n-channel decode loop.
-                int[][] perChannelSamples = new int[channelsToSample][];
+                // Sidecar is float32. Pull samples as float[] and skip NaN
+                // (no-data sentinel). Values are already physical -- no scale
+                // or offset reapplication.
+                float[][] perChannelSamples = new float[channelsToSample][];
                 for (int c = 0; c < channelsToSample; c++) {
-                    perChannelSamples[c] = tile.getRaster().getSamples(0, 0, tileW, tileH, c, (int[]) null);
+                    perChannelSamples[c] = tile.getRaster().getSamples(0, 0, tileW, tileH, c, (float[]) null);
                 }
 
                 for (int ty = 0; ty < tileH; ty++) {
@@ -228,9 +228,9 @@ public final class DensitySamplingCommand {
                         }
                         int idx = ty * tileW + tx;
                         for (int c = 0; c < channelsToSample; c++) {
-                            int raw = perChannelSamples[c][idx];
-                            if (raw <= 0) continue; // sentinel
-                            sumPerChannel[c] += raw;
+                            float v = perChannelSamples[c][idx];
+                            if (Float.isNaN(v)) continue;
+                            sumPerChannel[c] += v;
                             countPerChannel[c] += 1L;
                         }
                     }
@@ -239,14 +239,9 @@ public final class DensitySamplingCommand {
                 // Write per-channel measurements on this object.
                 for (int c = 0; c < channelsToSample; c++) {
                     String name = MEASUREMENT_PREFIX + channelInfos.get(c).name;
-                    double real;
-                    if (countPerChannel[c] == 0L) {
-                        real = Double.NaN;
-                    } else {
-                        double meanRaw = (double) sumPerChannel[c] / (double) countPerChannel[c];
-                        real = meanRaw * channelInfos.get(c).scale + channelInfos.get(c).offset;
-                    }
-                    obj.getMeasurementList().put(name, real);
+                    double mean =
+                            countPerChannel[c] == 0L ? Double.NaN : sumPerChannel[c] / (double) countPerChannel[c];
+                    obj.getMeasurementList().put(name, mean);
                 }
                 done++;
             }
