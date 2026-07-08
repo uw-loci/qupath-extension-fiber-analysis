@@ -269,6 +269,12 @@ public final class FiberDensityMapWorkflow {
                 channels.add(DensityChannelSpec.forObjectClass(cls));
             }
         }
+        int nAfterObject = channels.size();
+        if (spec.includePixelPositivity) {
+            for (PixelPositivitySpec pps : spec.pixelPositivitySpecs) {
+                channels.add(DensityChannelSpec.forPixelPositivity(pps));
+            }
+        }
         float[][] accum = new float[channels.size()][gridW * gridH];
         for (float[] arr : accum) java.util.Arrays.fill(arr, Float.NaN);
 
@@ -382,6 +388,23 @@ public final class FiberDensityMapWorkflow {
                     System.arraycopy(grid, 0, accum[idx], 0, Math.min(grid.length, accum[idx].length));
                 }
                 idx++;
+            }
+        }
+
+        // Pixel-positivity channels: for each row, stream the source, threshold
+        // into a source-resolution binary mask, box-filter into the output grid.
+        // Same window / stride / grid geometry as the fiber + object channels
+        // so QuPath's channel list stays consistent.
+        if (spec.includePixelPositivity && !spec.pixelPositivitySpecs.isEmpty()) {
+            progress.setSub("Computing pixel-positivity channels...");
+            List<float[]> posGrids = PixelPositivityComputer.compute(
+                    server, spec.pixelPositivitySpecs, srcW, srcH, windowPx, stridePx, gridW, gridH);
+            for (int i = 0; i < posGrids.size(); i++) {
+                float[] grid = posGrids.get(i);
+                int dst = nAfterObject + i;
+                if (grid != null && dst < accum.length) {
+                    System.arraycopy(grid, 0, accum[dst], 0, Math.min(grid.length, accum[dst].length));
+                }
             }
         }
 
@@ -602,6 +625,17 @@ public final class FiberDensityMapWorkflow {
         /** Class names (e.g. "CollagenAnalysis", "Tumor: Stroma") to compute as object-density channels. */
         public final List<String> objectDensityClasses;
 
+        /**
+         * When true, the sidecar grows additional channels: one per row in
+         * {@link #pixelPositivitySpecs}, computed as the fraction of pixels
+         * in the local box that pass the row's {@code channel op threshold}
+         * rule. Same window-size / mode / stride as the fiber channels.
+         */
+        public final boolean includePixelPositivity;
+
+        /** Per-row positivity rules (source channel + operator + threshold). */
+        public final List<PixelPositivitySpec> pixelPositivitySpecs;
+
         public DensityMapJobSpec(
                 double windowSizeUm,
                 double windowOverlapPercent,
@@ -620,7 +654,9 @@ public final class FiberDensityMapWorkflow {
                 boolean smoothInterpolation,
                 String densityMode,
                 boolean includeObjectDensity,
-                List<String> objectDensityClasses) {
+                List<String> objectDensityClasses,
+                boolean includePixelPositivity,
+                List<PixelPositivitySpec> pixelPositivitySpecs) {
             this.windowSizeUm = windowSizeUm;
             this.windowOverlapPercent = windowOverlapPercent;
             this.segChannel = segChannel;
@@ -646,6 +682,10 @@ public final class FiberDensityMapWorkflow {
             this.objectDensityClasses = objectDensityClasses == null
                     ? java.util.Collections.emptyList()
                     : List.copyOf(objectDensityClasses);
+            this.includePixelPositivity = includePixelPositivity;
+            this.pixelPositivitySpecs = pixelPositivitySpecs == null
+                    ? java.util.Collections.emptyList()
+                    : List.copyOf(pixelPositivitySpecs);
         }
 
         /** Ordered echo of every spec field (for params.json / params.txt). */
@@ -669,6 +709,20 @@ public final class FiberDensityMapWorkflow {
             m.put("densityMode", densityMode);
             m.put("includeObjectDensity", includeObjectDensity);
             m.put("objectDensityClasses", objectDensityClasses);
+            m.put("includePixelPositivity", includePixelPositivity);
+            // Serialize positivity specs as an ordered list of maps -- easier to
+            // read in params.txt than one long string, and Gson round-trips
+            // Map<String, Object> cleanly for params.json.
+            java.util.List<Map<String, Object>> posMaps = new ArrayList<>(pixelPositivitySpecs.size());
+            for (PixelPositivitySpec pps : pixelPositivitySpecs) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("channelIndex", pps.channelIndex);
+                row.put("channelName", pps.channelName);
+                row.put("op", pps.op);
+                row.put("threshold", pps.threshold);
+                posMaps.add(row);
+            }
+            m.put("pixelPositivitySpecs", posMaps);
             return m;
         }
 
@@ -713,7 +767,34 @@ public final class FiberDensityMapWorkflow {
                     jbool(p, "smoothInterpolation", false),
                     jstring(p, "densityMode", "window"),
                     jbool(p, "includeObjectDensity", false),
-                    jstringList(p, "objectDensityClasses"));
+                    jstringList(p, "objectDensityClasses"),
+                    jbool(p, "includePixelPositivity", false),
+                    jpositivityList(p, "pixelPositivitySpecs"));
+        }
+
+        private static List<PixelPositivitySpec> jpositivityList(com.google.gson.JsonObject o, String key) {
+            if (o == null || !o.has(key) || o.get(key).isJsonNull()) return java.util.Collections.emptyList();
+            com.google.gson.JsonElement el = o.get(key);
+            if (!el.isJsonArray()) return java.util.Collections.emptyList();
+            com.google.gson.JsonArray arr = el.getAsJsonArray();
+            List<PixelPositivitySpec> out = new ArrayList<>(arr.size());
+            for (int i = 0; i < arr.size(); i++) {
+                com.google.gson.JsonElement item = arr.get(i);
+                if (item == null || !item.isJsonObject()) continue;
+                com.google.gson.JsonObject row = item.getAsJsonObject();
+                try {
+                    out.add(new PixelPositivitySpec(
+                            jint(row, "channelIndex", 0),
+                            jstring(row, "channelName", null),
+                            jstring(row, "op", PixelPositivitySpec.OP_GT),
+                            jdouble(row, "threshold", 0.0)));
+                } catch (IllegalArgumentException iae) {
+                    // Skip malformed rows -- the run should still succeed with
+                    // the remaining valid entries.
+                    logger.warn("Skipping malformed pixel-positivity spec row: {}", iae.getMessage());
+                }
+            }
+            return out;
         }
 
         private static List<String> jstringList(com.google.gson.JsonObject o, String key) {

@@ -111,6 +111,12 @@ public final class FiberDensityMapDialog {
     private CheckBox objectDensityCheck;
     private javafx.scene.control.ListView<String> objectDensityClassesList;
 
+    private CheckBox pixelPositivityCheck;
+    private VBox pixelPositivityRowsBox;
+    private final List<PositivityRowUi> pixelPositivityRowUis = new ArrayList<>();
+    private final List<PixelPositivitySpec> pixelPositivityRows = new ArrayList<>();
+    private final List<ChannelChoice> pixelPositivityChannels = new ArrayList<>();
+
     private Label validationBanner;
     private VBox validationBox;
     private Button runBtn;
@@ -388,6 +394,9 @@ public final class FiberDensityMapDialog {
         objDensHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         objDensHelp.setWrapText(true);
 
+        // --- Pixel-positivity channels (optional) ---
+        VBox pixPosBox = buildPixelPositivitySection();
+
         VBox modeBox = new VBox(
                 4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp, autoReattachCheck, autoReattachHelp);
         VBox winBox = new VBox(4, windowLabel, windowHelp);
@@ -406,6 +415,8 @@ public final class FiberDensityMapDialog {
                 densityModeBox,
                 new Separator(),
                 objDensBox,
+                new Separator(),
+                pixPosBox,
                 new Separator(),
                 renderBox,
                 new Separator(),
@@ -477,6 +488,8 @@ public final class FiberDensityMapDialog {
         boolean channelsMode = modeChannelsRadio != null && modeChannelsRadio.isSelected();
         boolean autoReattach = channelsMode && autoReattachCheck != null && autoReattachCheck.isSelected();
 
+        materializePositivityRows();
+
         FiberDensityMapWorkflow.DensityMapJobSpec spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
                 FiberAnalysisPreferences.windowSizeUmProperty().get(),
                 FiberAnalysisPreferences.windowOverlapPercentProperty().get(),
@@ -498,6 +511,10 @@ public final class FiberDensityMapDialog {
                 objectDensityCheck != null && objectDensityCheck.isSelected()
                         ? new ArrayList<>(
                                 objectDensityClassesList.getSelectionModel().getSelectedItems())
+                        : java.util.Collections.emptyList(),
+                pixelPositivityCheck != null && pixelPositivityCheck.isSelected(),
+                pixelPositivityCheck != null && pixelPositivityCheck.isSelected()
+                        ? new ArrayList<>(pixelPositivityRows)
                         : java.util.Collections.emptyList());
         logger.info(
                 "Project density map: dispatching {} image(s), mode={}",
@@ -702,6 +719,172 @@ public final class FiberDensityMapDialog {
                 "Density-ObjectClass-Scanner");
         t.setDaemon(true);
         t.start();
+    }
+
+    // ---------- pixel-positivity channel section ----------
+
+    /** Immutable label+index pair; toString drives the ChoiceBox display. */
+    private static final class ChannelChoice {
+        final int index;
+        final String name;
+
+        ChannelChoice(int index, String name) {
+            this.index = index;
+            this.name = name == null || name.isBlank() ? "Channel " + index : name;
+        }
+
+        @Override
+        public String toString() {
+            return "[" + index + "] " + name;
+        }
+    }
+
+    /**
+     * One editable row: channel choice + op choice + threshold field + remove
+     * button. Materialised into a {@link PixelPositivitySpec} at submit time
+     * so we do not have to keep the underlying model in sync on every keystroke.
+     */
+    private final class PositivityRowUi {
+        final javafx.scene.control.ChoiceBox<ChannelChoice> channelBox = new javafx.scene.control.ChoiceBox<>();
+        final javafx.scene.control.ChoiceBox<String> opBox = new javafx.scene.control.ChoiceBox<>();
+        final javafx.scene.control.TextField thresholdField = new javafx.scene.control.TextField();
+        final javafx.scene.control.Button removeBtn = new javafx.scene.control.Button("X");
+        final HBox row;
+
+        PositivityRowUi() {
+            channelBox.getItems().setAll(pixelPositivityChannels);
+            if (!pixelPositivityChannels.isEmpty()) {
+                channelBox.getSelectionModel().selectFirst();
+            }
+            channelBox.setPrefWidth(220);
+
+            opBox.getItems().addAll(">", "<");
+            opBox.getSelectionModel().selectFirst();
+            opBox.setPrefWidth(60);
+
+            thresholdField.setPromptText("Threshold");
+            thresholdField.setPrefWidth(90);
+
+            removeBtn.setTooltip(new Tooltip("Remove this positivity rule."));
+
+            row = new HBox(6, new Label("Channel"), channelBox, opBox, thresholdField, removeBtn);
+            row.setAlignment(Pos.CENTER_LEFT);
+
+            removeBtn.setOnAction(e -> {
+                pixelPositivityRowUis.remove(this);
+                pixelPositivityRowsBox.getChildren().remove(row);
+            });
+        }
+
+        /**
+         * Read the row's controls into a spec, or return null if the row is
+         * incomplete (no channel selected or threshold empty / not numeric).
+         */
+        PixelPositivitySpec toSpec() {
+            ChannelChoice ch = channelBox.getSelectionModel().getSelectedItem();
+            if (ch == null) return null;
+            String opDisp = opBox.getSelectionModel().getSelectedItem();
+            if (opDisp == null) opDisp = ">";
+            String op = ">".equals(opDisp) ? PixelPositivitySpec.OP_GT : PixelPositivitySpec.OP_LT;
+            String rawThr = thresholdField.getText();
+            if (rawThr == null || rawThr.isBlank()) return null;
+            double thr;
+            try {
+                thr = Double.parseDouble(rawThr.trim());
+            } catch (NumberFormatException nfe) {
+                return null;
+            }
+            return new PixelPositivitySpec(ch.index, ch.name, op, thr);
+        }
+    }
+
+    /**
+     * Build the "Pixel-positivity channels" section: checkbox, column of
+     * rules, "+ Add row" button, help text. Called once from {@code show()}.
+     */
+    private VBox buildPixelPositivitySection() {
+        Label header = new Label("Pixel-positivity channels (optional)");
+        header.setStyle("-fx-font-weight: bold;");
+
+        pixelPositivityCheck = new CheckBox("Also include pixel-positivity channels");
+        pixelPositivityCheck.setSelected(false);
+        pixelPositivityCheck.setTooltip(new Tooltip("For each row below, add one density channel to the sidecar.\n"
+                + "Per pixel: fraction of the local window where the row's source-channel value\n"
+                + "meets the threshold rule. Same window-size knob as the fiber channels, so\n"
+                + "densities are directly comparable."));
+
+        pixelPositivityRowsBox = new VBox(4);
+        pixelPositivityRowsBox
+                .disableProperty()
+                .bind(pixelPositivityCheck.selectedProperty().not());
+
+        Button addBtn = new Button("+ Add row");
+        addBtn.disableProperty().bind(pixelPositivityCheck.selectedProperty().not());
+        addBtn.setOnAction(e -> addPositivityRow());
+        addBtn.setTooltip(new Tooltip("Add another positivity rule. Each row becomes one output channel."));
+
+        Label help = new Label("Each row adds one channel: 'Pixel positive: <ch> > <thr>'. Channel indices come from\n"
+                + "the currently-open image; if you have no image open, they come from the first\n"
+                + "project image. Thresholds are on raw sample values -- 0..255 for 8-bit, 0..65535\n"
+                + "for uint16 fluorescence, etc.");
+        help.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
+        help.setWrapText(true);
+
+        populatePositivityChannelChoices();
+
+        VBox box = new VBox(4, header, pixelPositivityCheck, pixelPositivityRowsBox, addBtn, help);
+        return box;
+    }
+
+    private void addPositivityRow() {
+        PositivityRowUi ui = new PositivityRowUi();
+        pixelPositivityRowUis.add(ui);
+        pixelPositivityRowsBox.getChildren().add(ui.row);
+    }
+
+    /**
+     * Populate the row-level channel dropdowns from the current image (or the
+     * first project image as fallback). Runs synchronously; the server open
+     * is cheap for a project entry and we only need the channel metadata.
+     */
+    private void populatePositivityChannelChoices() {
+        pixelPositivityChannels.clear();
+        ImageServer<BufferedImage> server = null;
+        try {
+            if (gui != null && gui.getImageData() != null) {
+                server = gui.getImageData().getServer();
+            } else if (gui != null && gui.getProject() != null) {
+                for (ProjectImageEntry<BufferedImage> entry : gui.getProject().getImageList()) {
+                    try (ImageServer<BufferedImage> s = entry.readImageData().getServer()) {
+                        server = s;
+                        break;
+                    } catch (Exception ignore) {
+                        // Try the next entry.
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            logger.debug("Could not resolve a project server for positivity channels: {}", ex.getMessage());
+        }
+        if (server != null) {
+            List<qupath.lib.images.servers.ImageChannel> chs =
+                    server.getMetadata().getChannels();
+            for (int i = 0; i < chs.size(); i++) {
+                pixelPositivityChannels.add(new ChannelChoice(i, chs.get(i).getName()));
+            }
+        }
+    }
+
+    /**
+     * Walk row UIs, drop any malformed rows, and refresh
+     * {@link #pixelPositivityRows}. Called from {@link #onRun()}.
+     */
+    private void materializePositivityRows() {
+        pixelPositivityRows.clear();
+        for (PositivityRowUi ui : pixelPositivityRowUis) {
+            PixelPositivitySpec s = ui.toSpec();
+            if (s != null) pixelPositivityRows.add(s);
+        }
     }
 
     // ---------- background pixel-type detector ----------
