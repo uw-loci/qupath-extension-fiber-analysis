@@ -44,7 +44,7 @@ dependencies {
 
     // Appose for embedded Java-Python IPC with shared memory.
     // NOT shadowed -- Appose is on QuPath's classpath at runtime (DL classifier precedent).
-    implementation("org.apposed:appose:0.11.0")
+    implementation("org.apposed:appose:0.12.0")
 
     // Bio-Formats for the density-map sidecar writer (DensityTiffWriter).
     // compileOnly because QuPath ships Bio-Formats at runtime via its own
