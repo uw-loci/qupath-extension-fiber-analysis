@@ -66,7 +66,6 @@ public class FiberAnalysisExtension implements QuPathExtension {
     private static final Version EXTENSION_QUPATH_VERSION = Version.parse("v0.7.0");
 
     private static final String DOC_RESOURCE = "/qupath/ext/fiberanalysis/documentation/fiber-analysis.md";
-    private static final String DOC_RELATIVE_PATH = "documentation/fiber-analysis.md";
     private static final String DOC_INSTALL_SUBDIR = "QuPath/v0.7/extensions/fiber-analysis-docs";
 
     private boolean installed = false;
@@ -155,14 +154,17 @@ public class FiberAnalysisExtension implements QuPathExtension {
         // Register persistent preferences (idempotent if called twice in dev mode).
         FiberAnalysisPreferences.installPreferences();
 
-        // Extract the bundled user-guide markdown to two locations:
-        //   1. A stable per-user directory (so it survives between QuPath launches
-        //      regardless of where the JVM was started from).
-        //   2. A best-effort copy at <cwd>/documentation/fiber-analysis.md so the
-        //      dialog's existing relative-path-based Help button finds it without
-        //      requiring a dialog edit. If the cwd is not writable (e.g. the
-        //      QuPath bin directory under Program Files), the copy is skipped
-        //      silently and users still have option 1 via the log message.
+        // Extract the bundled user-guide markdown to a stable per-user directory
+        // and publish its absolute path via a system property, which is what the
+        // dialog's Help button reads first.
+        //
+        // This used to ALSO mirror the file to <cwd>/documentation/fiber-analysis.md.
+        // That path is relative, so it resolved against the JVM's working directory
+        // and created a stray documentation/ folder in whatever repo QuPath was
+        // launched from -- the QuPath bin dir, the monorepo root, an unrelated
+        // extension checkout. Those strays then got committed by accident. The
+        // mirror existed only to feed a fallback in openHelp() that the per-user
+        // path already covers, so it is gone.
         extractBundledDocumentation();
 
         // Build the menu on the FX thread.
@@ -212,10 +214,12 @@ public class FiberAnalysisExtension implements QuPathExtension {
 
     /**
      * Copies the bundled {@code fiber-analysis.md} resource out of the JAR to a
-     * stable per-user location, and best-effort to a CWD-relative copy that the
-     * existing Help button (which uses {@code Path.of("documentation/fiber-analysis.md")})
-     * can pick up. The per-user location is logged so users can find the doc
-     * even if the CWD copy fails.
+     * stable per-user location under the user's home directory, and publishes the
+     * absolute path as the {@code qupath.ext.fiberanalysis.docPath} system
+     * property. {@code FiberAnalysisDialog.openHelp()} reads that property first.
+     * <p>
+     * Everything written here is under {@code user.home} -- never relative to the
+     * working directory, which changes with however QuPath was launched.
      */
     private void extractBundledDocumentation() {
         // 1. Stable per-user location.
@@ -237,25 +241,6 @@ public class FiberAnalysisExtension implements QuPathExtension {
         } catch (IOException e) {
             logger.warn("Could not extract bundled user guide to {}: {}", userDocPath, e.getMessage());
             return;
-        }
-
-        // 2. Best-effort CWD copy (so the dialog's existing relative-path Help
-        //    button works without editing the dialog). Failures here are silent
-        //    because the CWD is often not writable (Program Files on Windows).
-        try {
-            Path cwdDocPath = Paths.get(DOC_RELATIVE_PATH);
-            Path cwdDocDir = cwdDocPath.getParent();
-            if (cwdDocDir != null) {
-                Files.createDirectories(cwdDocDir);
-            }
-            Files.copy(userDocPath, cwdDocPath, StandardCopyOption.REPLACE_EXISTING);
-            logger.debug("Also mirrored user guide to CWD-relative {}", cwdDocPath);
-        } catch (IOException e) {
-            logger.debug(
-                    "Could not mirror user guide to CWD-relative path (this is fine; "
-                            + "the per-user copy at {} is the canonical location): {}",
-                    userDocPath,
-                    e.getMessage());
         }
     }
 

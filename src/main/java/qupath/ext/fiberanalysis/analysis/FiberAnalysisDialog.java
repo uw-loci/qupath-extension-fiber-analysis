@@ -2021,17 +2021,21 @@ public final class FiberAnalysisDialog {
     }
 
     private void openHelp() {
-        // Try in order: (1) CWD-relative source-tree path (dev launches),
-        // (2) the documentation folder beside the JAR file
-        // (~/QuPath/v0.7/extensions/../documentation when shipped), (3) fall back
-        // to an info notification telling the user where to look.
+        // Try in order: (1) the per-user copy the extension extracts at startup
+        // and advertises via a system property, (2) the documentation folder
+        // beside the JAR (~/QuPath/v0.7/extensions/../documentation when shipped),
+        // (3) fall back to an info notification telling the user where to look.
+        //
+        // A CWD-relative candidate used to sit between (1) and (2), fed by a
+        // startup mirror that wrote documentation/fiber-analysis.md into whatever
+        // directory QuPath was launched from. That mirror littered unrelated repos
+        // and has been removed, so nothing writes there any more.
         String rel = "documentation/fiber-analysis.md";
         List<Path> candidates = new ArrayList<>();
         String published = System.getProperty("qupath.ext.fiberanalysis.docPath");
         if (published != null && !published.isBlank()) {
             candidates.add(Path.of(published));
         }
-        candidates.add(Path.of(rel));
         try {
             java.net.URL loc = FiberAnalysisDialog.class
                     .getProtectionDomain()
