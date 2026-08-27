@@ -72,6 +72,16 @@ tasks.shadowJar {
     mergeServiceFiles()
 }
 
+// Keep locally-compiled Python bytecode out of the JAR. src/main/resources holds
+// the fiberlib sources, and running the pytest suite (or importing fiberlib in a
+// dev shell) leaves __pycache__/*.pyc next to them. Those are gitignored but
+// processResources copies from the working tree, so without this they ship --
+// and ApposeFiberService.listResourcesUnder() enumerates EVERY jar entry under
+// fiberlib/, so they get unpacked into the user's Appose env as well.
+tasks.processResources {
+    exclude("**/__pycache__/**")
+}
+
 tasks.withType<JavaCompile> {
     options.release.set(21) // QuPath 0.7 runs on Java 21; pin bytecode target so any build JDK emits loadable classes
     options.compilerArgs.add("-Xlint:deprecation")

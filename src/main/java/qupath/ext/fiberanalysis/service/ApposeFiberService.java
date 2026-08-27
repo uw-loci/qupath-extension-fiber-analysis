@@ -90,6 +90,14 @@ public class ApposeFiberService {
     private String initError;
     private Thread shutdownHook;
 
+    /**
+     * On-disk directory CONTAINING the unpacked {@code fiberlib} package.
+     * Held as a field (not just a local in {@link #initialize}) because
+     * {@link #restartWorker()} has to rebuild the same init script for the
+     * fresh worker.
+     */
+    private Path fiberlibDir;
+
     private ApposeFiberService() {}
 
     public static synchronized ApposeFiberService getInstance() {
@@ -124,8 +132,27 @@ public class ApposeFiberService {
         return installedFiberlibVersion;
     }
 
+    /**
+     * True when the service is initialized AND its Python worker subprocess is
+     * still alive.
+     *
+     * <p>The {@code isAlive()} half matters: a worker that has died (OOM-killed,
+     * crashed on a native import, killed by the user) leaves {@code initialized}
+     * true and {@code pythonService} non-null, so without this check every later
+     * call in the session fails inside Appose with no path to recovery. Callers
+     * that see {@code false} here re-run {@link #initialize} (the env is already
+     * built, so that is fast) or hit {@link #restartWorker()} via
+     * {@link #runTask}'s recovery path.
+     *
+     * <p>Note {@code Service.isAlive()} is false both for a worker that died and
+     * for one whose subprocess has not been spawned yet. Both
+     * {@link #initialize} and {@link #restartWorker()} spawn the subprocess
+     * before returning (via a verify / ping task), so a live service always
+     * reports true here.
+     */
     public boolean isAvailable() {
-        return initialized && initError == null && pythonService != null;
+        Service svc = pythonService;
+        return initialized && initError == null && svc != null && svc.isAlive();
     }
 
     public String getInitError() {
@@ -135,10 +162,23 @@ public class ApposeFiberService {
     /**
      * Builds the pixi environment, unpacks fiberlib resources, and starts the
      * Python service. Idempotent.
+     *
+     * <p>If a previous initialize succeeded but the worker subprocess has since
+     * died, this recreates just the worker rather than reporting "already
+     * initialized" and leaving the session permanently broken.
      */
     public synchronized void initialize(Consumer<String> statusCallback) throws IOException {
         if (initialized) {
-            report(statusCallback, "Already initialized");
+            if (isAvailable()) {
+                report(statusCallback, "Already initialized");
+                return;
+            }
+            // Initialized, but the worker subprocess is gone. The pixi env and
+            // the unpacked fiberlib are still on disk, so a worker restart is
+            // all that is needed -- and it is seconds, not minutes.
+            logger.warn("Fiber Analysis Python worker is not alive; recreating it");
+            report(statusCallback, "Python worker died; restarting it...");
+            restartWorker();
             return;
         }
 
@@ -184,43 +224,16 @@ public class ApposeFiberService {
                 // Unpack the bundled fiberlib package to a stable location
                 // on the env directory so the init script can sys.path it.
                 report(statusCallback, "Unpacking fiberlib analysis module...");
-                Path fiberlibDir = unpackFiberLib();
+                fiberlibDir = unpackFiberLib();
 
                 report(statusCallback, "Starting Python service...");
+                spawnWorker();
 
-                pythonService = environment.python();
-                pythonService.debug(msg -> {
-                    logger.info("[Fiber Python] {}", msg);
-                    qupath.ext.fiberanalysis.ui.PythonConsoleWindow.appendMessage(msg);
-                });
-
-                String initScript = "import numpy\n"
-                        + "fiberlib_dir = r'" + fiberlibDir.toString().replace("'", "\\'") + "'\n"
-                        + loadScript("init_fiber.py");
-                pythonService.init(initScript);
-
-                // Verify with a small task.
+                // Verify with a small task. This is also what spawns the
+                // subprocess (Appose starts it lazily on the first task), so
+                // isAvailable() reports true from here on.
                 report(statusCallback, "Verifying fiberlib...");
-                String verifyScript = "task.outputs['fiberlib_version'] = "
-                        + "fiberlib_version if 'fiberlib_version' in globals() else 'unknown'\n"
-                        + "task.outputs['init_error'] = str(init_error) if init_error else ''\n";
-
-                Task verifyTask = pythonService.task(verifyScript);
-                verifyTask.listen(event -> {
-                    if (event.responseType == ResponseType.FAILURE || event.responseType == ResponseType.CRASH) {
-                        logger.error("Verification task failed: {}", verifyTask.error);
-                    }
-                });
-                verifyTask.waitFor();
-
-                String fiberlibVersion = String.valueOf(verifyTask.outputs.get("fiberlib_version"));
-                String pythonInitError = String.valueOf(verifyTask.outputs.get("init_error"));
-
-                if (pythonInitError != null && !pythonInitError.isEmpty()) {
-                    throw new IOException("Python init failed: " + pythonInitError);
-                }
-
-                installedFiberlibVersion = fiberlibVersion;
+                String fiberlibVersion = verifyWorker();
                 logger.info("Fiber Analysis environment verified: fiberlib {}", fiberlibVersion);
 
                 String extVersion = GeneralTools.getPackageVersion(ApposeFiberService.class);
@@ -268,6 +281,168 @@ public class ApposeFiberService {
     }
 
     /**
+     * Creates the Python worker Service object and queues its init script.
+     * Does NOT spawn the subprocess -- Appose does that lazily on the first
+     * task ({@link #verifyWorker()} is what actually starts it).
+     *
+     * <p>Caller must hold the monitor and have the extension classloader set as
+     * TCCL. {@code import numpy} MUST stay the literal first line of the init
+     * string: on Windows an init script whose first statement is anything else
+     * has deadlocked the worker's stdin pump. Note {@code Service.init} REPLACES
+     * the init script rather than appending, and Appose rejects it outright once
+     * the subprocess is running -- so it is called exactly once per Service.
+     */
+    private void spawnWorker() throws IOException {
+        if (fiberlibDir == null) {
+            throw new IOException("Cannot start Python worker: fiberlib has not been unpacked");
+        }
+        pythonService = environment.python();
+        pythonService.debug(msg -> {
+            logger.info("[Fiber Python] {}", msg);
+            qupath.ext.fiberanalysis.ui.PythonConsoleWindow.appendMessage(msg);
+        });
+        String initScript = "import numpy\n"
+                + "fiberlib_dir = r'" + fiberlibDir.toString().replace("'", "\\'") + "'\n"
+                + loadScript("init_fiber.py");
+        pythonService.init(initScript);
+    }
+
+    /**
+     * Runs the small verification task against a freshly spawned worker. This
+     * is the call that actually starts the subprocess, so on return
+     * {@link #isAvailable()} sees a live process.
+     *
+     * <p>Caller must hold the monitor and have the extension classloader set as
+     * TCCL.
+     *
+     * @return the fiberlib version reported by the worker
+     * @throws IOException if the worker's Python-side init recorded an error
+     */
+    private String verifyWorker() throws IOException, InterruptedException, TaskException {
+        String verifyScript = "task.outputs['fiberlib_version'] = "
+                + "fiberlib_version if 'fiberlib_version' in globals() else 'unknown'\n"
+                + "task.outputs['init_error'] = str(init_error) if init_error else ''\n";
+
+        Task verifyTask = pythonService.task(verifyScript);
+        verifyTask.listen(event -> {
+            if (event.responseType == ResponseType.FAILURE || event.responseType == ResponseType.CRASH) {
+                logger.error("Verification task failed: {}", verifyTask.error);
+            }
+        });
+        verifyTask.waitFor();
+
+        String fiberlibVersion = String.valueOf(verifyTask.outputs.get("fiberlib_version"));
+        String pythonInitError = String.valueOf(verifyTask.outputs.get("init_error"));
+        if (pythonInitError != null && !pythonInitError.isEmpty() && !"null".equals(pythonInitError)) {
+            throw new IOException("Python init failed: " + pythonInitError);
+        }
+        installedFiberlibVersion = fiberlibVersion;
+        return fiberlibVersion;
+    }
+
+    /**
+     * Recreates ONLY the Python worker subprocess -- not the pixi environment,
+     * not the unpacked fiberlib.
+     *
+     * <p>This is the recovery for an Appose "thread death". A worker that has
+     * gone stale emits a FAILURE on its next task <em>before any Python runs</em>;
+     * Appose's {@code Service} then drops that task from its routing map and
+     * relaunches it as an unobservable zombie inside the same worker (every
+     * later event for it hits "No such task"). Retrying against that same worker
+     * therefore risks a second copy of the analysis running concurrently against
+     * the same output directory. Killing and recreating the worker terminates
+     * the zombie, so the retry runs alone.
+     *
+     * <p>The pixi env is already built and fiberlib is already on disk, so this
+     * is a subprocess respawn plus a re-run of {@code init_fiber.py} -- seconds,
+     * not the minutes a full {@link #initialize} would cost. The verification
+     * task at the end both confirms the fresh worker imports fiberlib and spawns
+     * the subprocess, keeping the {@link #isAvailable()} contract intact.
+     *
+     * @throws IOException if the environment is not built or the worker cannot
+     *                     be recreated
+     */
+    public synchronized void restartWorker() throws IOException {
+        restartWorker(null);
+    }
+
+    /**
+     * {@link #restartWorker()}, but a no-op when another thread already
+     * replaced the worker that {@code staleWorker} refers to.
+     *
+     * <p>Two tasks running concurrently can both hit the same stale worker and
+     * both ask for a restart. Without this guard the second restart would tear
+     * down the fresh worker the first one just built -- and the first thread's
+     * retry would then be submitting to a dead Service. Passing the exact
+     * Service instance the failing task ran on makes the second call recognise
+     * that the recovery already happened.
+     *
+     * @param staleWorker the Service the failed task was submitted to, or
+     *                    {@code null} to restart unconditionally
+     */
+    public synchronized void restartWorker(Service staleWorker) throws IOException {
+        if (environment == null) {
+            throw new IOException("Cannot restart worker: Appose environment not built");
+        }
+        if (staleWorker != null && pythonService != staleWorker) {
+            logger.info("Python worker was already replaced by another thread; skipping redundant restart");
+            return;
+        }
+        ClassLoader original = Thread.currentThread().getContextClassLoader();
+        Thread.currentThread().setContextClassLoader(ApposeFiberService.class.getClassLoader());
+        try {
+            // Tear down the stale worker: close stdin for a clean exit, then kill.
+            Service stale = pythonService;
+            pythonService = null;
+            if (stale != null) {
+                try {
+                    stale.close();
+                    long deadline = System.currentTimeMillis() + 3000;
+                    while (stale.isAlive() && System.currentTimeMillis() < deadline) {
+                        Thread.sleep(50);
+                    }
+                    if (stale.isAlive()) {
+                        stale.kill();
+                    }
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    try {
+                        stale.kill();
+                    } catch (Exception ignored) {
+                        // best effort
+                    }
+                    throw new IOException("Interrupted while tearing down the stale Python worker", ie);
+                } catch (Exception e) {
+                    logger.warn("Error tearing down stale worker: {}", e.getMessage());
+                    try {
+                        stale.kill();
+                    } catch (Exception ignored) {
+                        // best effort
+                    }
+                }
+            }
+
+            spawnWorker();
+            String version = verifyWorker();
+            logger.info("Fiber Analysis Appose worker restarted (fresh Python subprocess, fiberlib {})", version);
+            // A restart after a hard worker death leaves initialized==false;
+            // the env and fiberlib are intact, so mark the service usable again.
+            initialized = true;
+            initError = null;
+            registerShutdownHook();
+        } catch (IOException e) {
+            throw e;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while restarting the Fiber Analysis Python worker", ie);
+        } catch (Exception e) {
+            throw new IOException("Failed to restart Fiber Analysis Appose worker: " + e.getMessage(), e);
+        } finally {
+            Thread.currentThread().setContextClassLoader(original);
+        }
+    }
+
+    /**
      * Runs a named task script with the given inputs.
      *
      * @param scriptName script name without {@code .py} extension
@@ -287,27 +462,62 @@ public class ApposeFiberService {
         ClassLoader original = Thread.currentThread().getContextClassLoader();
         Thread.currentThread().setContextClassLoader(ApposeFiberService.class.getClassLoader());
         try {
-            // Appose "thread death" race: a previous task's Python worker
-            // thread can emit its cleanup/death event AFTER a new task is
-            // submitted, and Appose's UUID routing misattributes it to the
-            // new task. The new task's actual LAUNCH then arrives but is
-            // dropped because the FAILURE already removed the routing entry.
-            // Symptom: an immediate FAILURE("thread death") while the Python
-            // side is still running and producing output. Mirror the DL
-            // pixel classifier's retry pattern -- pause briefly to let the
-            // stale event drain, then resubmit with the same (already-built)
-            // script + inputs. Max two attempts.
+            // Appose "thread death" recovery. A worker that has gone stale
+            // emits FAILURE("thread death") on its next task BEFORE any Python
+            // runs; Appose then drops that task from its routing map and
+            // relaunches it inside the same worker as an unobservable zombie
+            // (every later event for it hits "No such task").
+            //
+            // Three things make the recovery correct, and all three are
+            // required:
+            //   1. RESTART THE WORKER FIRST. Resubmitting to the same worker
+            //      leaves the zombie running, so two copies of the analysis
+            //      would race on the same output directory. restartWorker()
+            //      kills the worker and takes the zombie with it.
+            //   2. RETRY ONLY WHEN NO PYTHON EVER RAN. The stale-worker race is
+            //      identifiable precisely because the FAILURE arrives before
+            //      the LAUNCH -- so if we saw a LAUNCH or an UPDATE for this
+            //      task, Python did start, the "thread death" is a real
+            //      mid-run death, and re-running would repeat side effects
+            //      (PNG/NPZ writes) rather than recover.
+            //   3. LOG THREAD-DEATH AT WARN, EVERYTHING ELSE AT ERROR. A
+            //      recovered thread-death is not an error; logging it as one
+            //      sends users chasing a non-problem.
             int maxAttempts = 2;
             TaskException last = null;
             for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-                Task task = pythonService.task(script, inputs);
+                // Capture the exact Service this attempt runs on, so a
+                // concurrent thread's restart cannot be double-applied. Read
+                // once: restartWorker() nulls the field mid-swap, and this
+                // method deliberately does not hold the monitor for the whole
+                // (potentially minutes-long) task.
+                Service submittedOn = pythonService;
+                if (submittedOn == null) {
+                    throw new IOException("Fiber task '" + scriptName
+                            + "' cannot start: the Python worker is being replaced. Retry the operation.");
+                }
+                Task task = submittedOn.task(script, inputs);
                 final int attemptCapture = attempt;
+                // Set from the event pump thread, read from this one.
+                final java.util.concurrent.atomic.AtomicBoolean pythonStarted =
+                        new java.util.concurrent.atomic.AtomicBoolean(false);
                 task.listen(event -> {
-                    if (event.responseType == ResponseType.CRASH) {
+                    if (event.responseType == ResponseType.LAUNCH || event.responseType == ResponseType.UPDATE) {
+                        pythonStarted.set(true);
+                    } else if (event.responseType == ResponseType.CRASH) {
                         logger.error("Fiber task '{}' CRASH (attempt {}): {}", scriptName, attemptCapture, task.error);
                     } else if (event.responseType == ResponseType.FAILURE) {
-                        logger.error(
-                                "Fiber task '{}' FAILURE (attempt {}): {}", scriptName, attemptCapture, task.error);
+                        String err = task.error == null ? "" : task.error;
+                        if (err.toLowerCase().contains("thread death") && !pythonStarted.get()) {
+                            logger.warn(
+                                    "Fiber task '{}' FAILURE (attempt {}): stale-worker 'thread death' before Python"
+                                            + " started: {}",
+                                    scriptName,
+                                    attemptCapture,
+                                    err);
+                        } else {
+                            logger.error("Fiber task '{}' FAILURE (attempt {}): {}", scriptName, attemptCapture, err);
+                        }
                     }
                 });
                 try {
@@ -323,20 +533,34 @@ public class ApposeFiberService {
                     last = te;
                     String msg = te.getMessage() == null ? "" : te.getMessage();
                     boolean isThreadDeath = msg.toLowerCase().contains("thread death");
-                    if (!isThreadDeath || attempt == maxAttempts) {
+                    boolean retryable = isThreadDeath && !pythonStarted.get() && attempt < maxAttempts;
+                    if (!retryable) {
+                        if (isThreadDeath && pythonStarted.get()) {
+                            logger.error(
+                                    "Fiber task '{}' died mid-run ('thread death' AFTER Python started) -- not retried,"
+                                            + " because a rerun would repeat whatever the script had already written.",
+                                    scriptName);
+                        }
                         throw new IOException("Fiber task '" + scriptName + "' failed: " + msg, te);
                     }
                     logger.warn(
-                            "Fiber task '{}' hit stale 'thread death' (attempt {}/{}); retrying after 250ms",
+                            "Fiber task '{}' hit stale-worker 'thread death' before Python started (attempt {}/{});"
+                                    + " restarting the Python worker to kill the zombie relaunch, then retrying once.",
                             scriptName,
                             attempt,
                             maxAttempts);
                     try {
-                        Thread.sleep(250);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        throw new IOException("Fiber task '" + scriptName + "' interrupted during retry backoff", ie);
+                        restartWorker(submittedOn);
+                    } catch (IOException re) {
+                        logger.error("Worker restart after thread-death failed: {}", re.getMessage());
+                        throw new IOException(
+                                "Fiber task '" + scriptName + "' failed: " + msg + " (worker restart also failed: "
+                                        + re.getMessage() + ")",
+                                te);
                     }
+                    // restartWorker() swaps the TCCL back to whatever it was on
+                    // entry; re-assert ours for the retry's JSON serialization.
+                    Thread.currentThread().setContextClassLoader(ApposeFiberService.class.getClassLoader());
                 }
             }
             // Unreachable: the loop either returns or throws.
@@ -538,9 +762,18 @@ public class ApposeFiberService {
                     + ". The extension JAR may be malformed.");
         }
 
+        int copied = 0;
         for (String resourcePath : entries) {
             String relative = resourcePath.substring(FIBERLIB_RESOURCE_BASE.length());
             if (relative.isEmpty() || relative.endsWith("/")) {
+                continue;
+            }
+            // Never unpack compiled bytecode. The build excludes __pycache__
+            // from the JAR, but an exploded dev classpath points straight at
+            // src/main/resources where pytest leaves .pyc files behind. Those
+            // were compiled by the developer's interpreter, not the env's, and
+            // have no business in a user's environment.
+            if (relative.contains("__pycache__/") || relative.endsWith(".pyc") || relative.endsWith(".pyo")) {
                 continue;
             }
             Path out = libDir.resolve(relative);
@@ -551,11 +784,12 @@ public class ApposeFiberService {
                     continue;
                 }
                 Files.copy(is, out, StandardCopyOption.REPLACE_EXISTING);
+                copied++;
             }
         }
 
         Files.writeString(marker, REQUIRED_FIBERLIB_VERSION, StandardCharsets.UTF_8);
-        logger.info("Unpacked {} fiberlib files to {}", entries.size(), libDir);
+        logger.info("Unpacked {} fiberlib files to {}", copied, libDir);
         return libParent;
     }
 
@@ -630,6 +864,7 @@ public class ApposeFiberService {
             "morphometrics.py",
             "texture.py",
             "render.py",
+            "pipeline.py",
             "io.py");
 
     /**
@@ -757,11 +992,26 @@ public class ApposeFiberService {
         }
     }
 
+    /**
+     * Guards every task submission. A worker that has died (OOM kill, native
+     * crash, user killed the process) would otherwise poison the rest of the
+     * session: {@code initialized} stays true, so nothing would ever rebuild
+     * it. When the env is still built we respawn just the worker instead of
+     * failing.
+     */
     private void ensureInitialized() throws IOException {
-        if (!isAvailable()) {
-            throw new IOException(
-                    "Fiber Analysis Appose service is not available" + (initError != null ? ": " + initError : ""));
+        if (isAvailable()) {
+            return;
         }
+        if (initialized && initError == null && environment != null && fiberlibDir != null) {
+            logger.warn("Fiber Analysis Python worker is not alive; recreating it before running the task");
+            restartWorker();
+            if (isAvailable()) {
+                return;
+            }
+        }
+        throw new IOException(
+                "Fiber Analysis Appose service is not available" + (initError != null ? ": " + initError : ""));
     }
 
     String loadScript(String scriptFileName) throws IOException {

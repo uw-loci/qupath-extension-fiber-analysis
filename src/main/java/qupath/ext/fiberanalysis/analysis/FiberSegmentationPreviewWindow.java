@@ -483,6 +483,14 @@ final class FiberSegmentationPreviewWindow {
                 setStatus(statusLabel, "Python error: " + result.get("error").getAsString());
                 return;
             }
+            if (result == null) {
+                // No payload means the task did not produce a segmentation. The
+                // overlay PNG has a fixed path, so falling through here would
+                // re-display the PREVIOUS preview's mask beside the NEW
+                // parameters -- a wrong answer that looks like a right one.
+                setStatus(statusLabel, "Preview failed: Python returned no result payload");
+                return;
+            }
 
             // Display the original region + the magenta overlay PNG produced by Python.
             BufferedImage baseImg = ImageIO.read(regionPng.toFile());
@@ -490,19 +498,14 @@ final class FiberSegmentationPreviewWindow {
             Image fxBase = SwingFXUtils.toFXImage(baseImg, null);
             Image fxOverlay = SwingFXUtils.toFXImage(overlayImg, null);
             final long elapsed = System.currentTimeMillis() - t0;
-            final String summary;
-            if (result != null) {
-                summary = String.format(
-                        Locale.ROOT,
-                        "Fiber: %d / %d px (%.1f%%) | Python %.0f ms | total %d ms",
-                        result.get("fiber_pixels").getAsInt(),
-                        result.get("total_pixels").getAsInt(),
-                        result.get("coverage_percent").getAsDouble(),
-                        result.get("ms_segment").getAsDouble(),
-                        elapsed);
-            } else {
-                summary = String.format(Locale.ROOT, "%d ms (no result payload)", elapsed);
-            }
+            final String summary = String.format(
+                    Locale.ROOT,
+                    "Fiber: %d / %d px (%.1f%%) | Python %.0f ms | total %d ms",
+                    result.get("fiber_pixels").getAsInt(),
+                    result.get("total_pixels").getAsInt(),
+                    result.get("coverage_percent").getAsDouble(),
+                    result.get("ms_segment").getAsDouble(),
+                    elapsed);
             Platform.runLater(() -> {
                 if (lastRequest.get() != requestId) return;
                 baseView.setImage(fxBase);

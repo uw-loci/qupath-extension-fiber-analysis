@@ -404,15 +404,25 @@ reverts after restart, two things to check:
 
 The bundled `pixi.toml` is missing the `appose` conda dep. Fixed in v0.2
 (2026-05-26). Re-run `Extensions > Fiber Analysis > Setup environment...`
--- the env will auto-rebuild because `syncPixiToml()` content-hashes the
-toml.
+-- the env will auto-rebuild because `ApposeFiberService.syncManifest()`
+compares the on-disk `pixi.toml` AND `pixi.lock` against the JAR-bundled
+copies and wipes `.pixi/` when either differs.
 
 ### "thread death" appears in the Python console
 
-Known Appose race -- a prior task's worker-thread cleanup event is
-misattributed to the next task's UUID. `ApposeFiberService.runTask` now
-retries on this (max 2 attempts). If you see it land repeatedly on the
-same task, file an issue with the console log.
+Known Appose race -- a stale worker emits `FAILURE("thread death")` on its
+next task *before any Python runs*, and Appose then relaunches that task
+inside the same worker as an untracked zombie.
+
+`ApposeFiberService.runTask` recovers from this automatically: it restarts
+the Python worker (which kills the zombie, so two copies of the analysis
+can never race on one output directory) and retries the task once on the
+fresh worker. It only does so when no `LAUNCH`/`UPDATE` event arrived for
+the task -- a "thread death" *after* Python started is a real mid-run
+death and is reported, not retried, because re-running would repeat
+whatever the script had already written. The recovered case logs at WARN;
+everything else logs at ERROR. If you see it land repeatedly on the same
+task, file an issue with the console log.
 
 ### Density-map: the sidecar TIFF opens but every pixel is "0"
 

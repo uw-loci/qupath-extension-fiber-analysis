@@ -222,7 +222,15 @@ public final class FiberDensityMapWorkflow {
             gridH = srcH;
             gridW = srcW;
             stridePx = 1;
-            int nChannels = DensityChannelSpec.defaultChannels().size();
+            // Count EVERY channel the accumulator will hold, not just the fiber
+            // ones. The object-density and pixel-positivity channels are
+            // appended below and are the same srcW*srcH size, so counting only
+            // the defaults let a run with several selected classes sail through
+            // the preflight and then OOM anyway -- which is exactly the failure
+            // this check exists to prevent.
+            int nChannels = DensityChannelSpec.defaultChannels().size()
+                    + (spec.includeObjectDensity ? spec.objectDensityClasses.size() : 0)
+                    + (spec.includePixelPositivity ? spec.pixelPositivitySpecs.size() : 0);
             long memBytes = DensityMapJobSpec.estimatePerPixelMemoryBytes(srcW, srcH, nChannels);
             long maxHeap = Runtime.getRuntime().maxMemory();
             // Refuse if the accumulator alone would consume > 50% of max heap.
