@@ -56,6 +56,15 @@ public final class ApposeEnvLocation {
 
     private static final Logger logger = LoggerFactory.getLogger(ApposeEnvLocation.class);
 
+    /**
+     * Name shown in this extension's dialogs.
+     * <p>
+     * This file is copied between the Appose extensions, so the one thing that
+     * must differ per repo is pulled out here. Every copy shipped naming QP-CAT
+     * instead, because the strings were inline and nothing pointed at them.
+     */
+    private static final String TITLE = "Fiber Analysis";
+
     private ApposeEnvLocation() {}
 
     /**
@@ -101,7 +110,7 @@ public final class ApposeEnvLocation {
         long bytes = sizeOf(oldDir);
         String size = bytes > 0 ? String.format("%.1f GB", bytes / 1e9) : "unknown size";
         boolean delete = Dialogs.showYesNoDialog(
-                "QP-CAT - remove the previous environment?",
+                TITLE + " - remove the previous environment?",
                 "A new Python environment has been built and verified at:\n\n"
                 + "    " + newDir + "\n\n"
                 + "The previous one is still on disk and is no longer used:\n\n"
@@ -151,7 +160,7 @@ public final class ApposeEnvLocation {
             if (failed > 0) {
                 logger.warn("Removed the previous environment at {} except {} item(s) "
                         + "-- delete the folder by hand if it is still there", dir, failed);
-                Dialogs.showWarningNotification("QP-CAT",
+                Dialogs.showWarningNotification(TITLE,
                         "Could not fully remove the previous environment; " + failed
                         + " item(s) remain at " + dir);
                 return false;
