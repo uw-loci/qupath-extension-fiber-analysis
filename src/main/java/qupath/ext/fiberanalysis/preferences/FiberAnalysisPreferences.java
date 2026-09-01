@@ -15,6 +15,8 @@ import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.StringProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.fx.prefs.controlsfx.PropertyItemBuilder;
+import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.prefs.PathPrefs;
 
 /**
@@ -30,6 +32,22 @@ public class FiberAnalysisPreferences {
 
     private static final Logger logger = LoggerFactory.getLogger(FiberAnalysisPreferences.class);
     private static final String PREFIX = "fiberanalysis.";
+
+    private static final String CATEGORY_ENV = "Fiber Analysis: Python environment";
+
+    // ==================== Python environment ====================
+    //
+    // DUPLICATED ACROSS THE APPOSE EXTENSIONS. The same pair of preferences and
+    // the same ApposeEnvLocation helper exist in QP-CAT, cellAPpose, the DL
+    // pixel classifier and PPM. No shared library yet -- see
+    // claude-reports/TODO_LIST.md, "shared Appose env-location library". Change
+    // all five together or they diverge.
+
+    /** Base dir for the Appose env; blank means the Appose default. */
+    private static javafx.beans.property.StringProperty envBaseDir;
+
+    /** Where an env was last successfully built. Bookkeeping, not a setting. */
+    private static javafx.beans.property.StringProperty envLastBuiltDir;
 
     // === Section 1 -- Search area ===
     public static final String DEFAULT_SEARCH_AREA = "selected";
@@ -205,6 +223,8 @@ public class FiberAnalysisPreferences {
         }
         logger.info("Installing Fiber Analysis preferences");
 
+        envBaseDir = PathPrefs.createPersistentPreference(PREFIX + "env.baseDir", "");
+        envLastBuiltDir = PathPrefs.createPersistentPreference(PREFIX + "env.lastBuiltDir", "");
         searchArea = PathPrefs.createPersistentPreference(PREFIX + "searchArea", DEFAULT_SEARCH_AREA);
         classFilter = PathPrefs.createPersistentPreference(PREFIX + "classFilter", DEFAULT_CLASS_FILTER);
         borderZoneUm = PathPrefs.createPersistentPreference(PREFIX + "borderZoneUm", DEFAULT_BORDER_ZONE_UM);
@@ -529,4 +549,56 @@ public class FiberAnalysisPreferences {
     public static BooleanProperty emitNpzProperty() {
         return emitNpz;
     }
+
+    /** Base dir for the Appose env, or "" for the Appose default. */
+    public static String getEnvBaseDir() {
+        installPreferences();
+        return envBaseDir.get();
+    }
+
+    public static void setEnvBaseDir(String v) {
+        installPreferences();
+        envBaseDir.set(v == null ? "" : v.strip());
+    }
+
+    /** Directory an env was last successfully built at; "" if none. */
+    public static String getEnvLastBuiltDir() {
+        installPreferences();
+        return envLastBuiltDir.get();
+    }
+
+    public static void setEnvLastBuiltDir(String v) {
+        installPreferences();
+        envLastBuiltDir.set(v == null ? "" : v);
+    }
+
+    /**
+     * Add the environment-location preference to QuPath's Preferences pane.
+     *
+     * <p>Separate from {@link #installPreferences()}, which only creates the
+     * persistent properties -- this extension previously exposed none of them in
+     * the pane at all.
+     */
+    public static synchronized void installPreferencePane(QuPathGUI qupath) {
+        if (qupath == null || paneInstalled) {
+            return;
+        }
+        installPreferences();
+        paneInstalled = true;
+        qupath.getPreferencePane().getPropertySheet().getItems().add(
+                new PropertyItemBuilder<>(envBaseDir, String.class)
+                        .propertyType(PropertyItemBuilder.PropertyType.DIRECTORY)
+                        .name("Python environment location")
+                        .category(CATEGORY_ENV)
+                        .description("Directory the Python environment is built under. Leave "
+                                + "blank for the default (~/.local/share/appose), which is right "
+                                + "on most machines. Set it when the home directory is "
+                                + "quota-limited -- on HPC and managed desktops an environment "
+                                + "this size fails there. Changing it builds a NEW environment; "
+                                + "the old one is left alone and you are asked about removing it "
+                                + "only after the new one works.")
+                        .build());
+    }
+
+    private static boolean paneInstalled = false;
 }

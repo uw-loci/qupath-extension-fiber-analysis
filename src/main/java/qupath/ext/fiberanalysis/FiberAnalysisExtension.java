@@ -153,6 +153,7 @@ public class FiberAnalysisExtension implements QuPathExtension {
 
         // Register persistent preferences (idempotent if called twice in dev mode).
         FiberAnalysisPreferences.installPreferences();
+        FiberAnalysisPreferences.installPreferencePane(qupath);
 
         // Extract the bundled user-guide markdown to a stable per-user directory
         // and publish its absolute path via a system property, which is what the
