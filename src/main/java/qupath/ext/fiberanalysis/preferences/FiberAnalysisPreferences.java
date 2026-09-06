@@ -585,8 +585,10 @@ public class FiberAnalysisPreferences {
         }
         installPreferences();
         paneInstalled = true;
-        qupath.getPreferencePane().getPropertySheet().getItems().add(
-                new PropertyItemBuilder<>(envBaseDir, String.class)
+        qupath.getPreferencePane()
+                .getPropertySheet()
+                .getItems()
+                .add(new PropertyItemBuilder<>(envBaseDir, String.class)
                         .propertyType(PropertyItemBuilder.PropertyType.DIRECTORY)
                         .name("Python environment location")
                         .category(CATEGORY_ENV)

@@ -1,14 +1,12 @@
 package qupath.ext.fiberanalysis.service;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import qupath.fx.dialogs.Dialogs;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import qupath.fx.dialogs.Dialogs;
 
 /**
  * Where an Appose environment is built, and what happens to the old one when
@@ -100,7 +98,7 @@ public final class ApposeEnvLocation {
         }
         try {
             if (newDir != null && Files.isSameFile(oldDir, newDir)) {
-                return false;                       // nothing was superseded
+                return false; // nothing was superseded
             }
         } catch (IOException e) {
             // Cannot prove they differ -> do not delete.
@@ -112,12 +110,12 @@ public final class ApposeEnvLocation {
         boolean delete = Dialogs.showYesNoDialog(
                 TITLE + " - remove the previous environment?",
                 "A new Python environment has been built and verified at:\n\n"
-                + "    " + newDir + "\n\n"
-                + "The previous one is still on disk and is no longer used:\n\n"
-                + "    " + oldDir + "  (" + size + ")\n\n"
-                + "Delete it? Choosing No keeps it, which is safe -- it simply uses "
-                + "the space. Nothing else refers to it, and you can remove it by hand "
-                + "later.");
+                        + "    " + newDir + "\n\n"
+                        + "The previous one is still on disk and is no longer used:\n\n"
+                        + "    " + oldDir + "  (" + size + ")\n\n"
+                        + "Delete it? Choosing No keeps it, which is safe -- it simply uses "
+                        + "the space. Nothing else refers to it, and you can remove it by hand "
+                        + "later.");
         if (!delete) {
             logger.info("Keeping the previous environment at {}", oldDir);
             return false;
@@ -128,13 +126,15 @@ public final class ApposeEnvLocation {
     /** Total size of a directory tree, or 0 if it cannot be measured. */
     public static long sizeOf(Path dir) {
         try (var walk = Files.walk(dir)) {
-            return walk.filter(Files::isRegularFile).mapToLong(p -> {
-                try {
-                    return Files.size(p);
-                } catch (IOException e) {
-                    return 0L;
-                }
-            }).sum();
+            return walk.filter(Files::isRegularFile)
+                    .mapToLong(p -> {
+                        try {
+                            return Files.size(p);
+                        } catch (IOException e) {
+                            return 0L;
+                        }
+                    })
+                    .sum();
         } catch (IOException e) {
             return 0L;
         }
@@ -149,20 +149,25 @@ public final class ApposeEnvLocation {
      */
     private static boolean deleteRecursively(Path dir) {
         try (var walk = Files.walk(dir)) {
-            long failed = walk.sorted(Comparator.reverseOrder()).filter(p -> {
-                try {
-                    Files.delete(p);
-                    return false;
-                } catch (IOException e) {
-                    return true;
-                }
-            }).count();
+            long failed = walk.sorted(Comparator.reverseOrder())
+                    .filter(p -> {
+                        try {
+                            Files.delete(p);
+                            return false;
+                        } catch (IOException e) {
+                            return true;
+                        }
+                    })
+                    .count();
             if (failed > 0) {
-                logger.warn("Removed the previous environment at {} except {} item(s) "
-                        + "-- delete the folder by hand if it is still there", dir, failed);
-                Dialogs.showWarningNotification(TITLE,
-                        "Could not fully remove the previous environment; " + failed
-                        + " item(s) remain at " + dir);
+                logger.warn(
+                        "Removed the previous environment at {} except {} item(s) "
+                                + "-- delete the folder by hand if it is still there",
+                        dir,
+                        failed);
+                Dialogs.showWarningNotification(
+                        TITLE,
+                        "Could not fully remove the previous environment; " + failed + " item(s) remain at " + dir);
                 return false;
             }
             logger.info("Removed the previous environment at {}", dir);

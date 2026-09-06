@@ -125,7 +125,8 @@ public class ApposeFiberService {
         if (svc != null && svc.environment != null) {
             return Path.of(svc.environment.base());
         }
-        return ApposeEnvLocation.resolve(qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences.getEnvBaseDir(), ENV_NAME);
+        return ApposeEnvLocation.resolve(
+                qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences.getEnvBaseDir(), ENV_NAME);
     }
 
     public String getInstalledFiberlibVersion() {
@@ -222,8 +223,7 @@ public class ApposeFiberService {
                 if (configuredDir != null) {
                     Files.createDirectories(configuredDir);
                     envBuilder.base(configuredDir.toFile());
-                    logger.info("Building the environment at the configured location: {}",
-                            configuredDir);
+                    logger.info("Building the environment at the configured location: {}", configuredDir);
                 }
                 environment = envBuilder.build();
 
