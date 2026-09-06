@@ -437,8 +437,9 @@ public final class FiberAnalysisDialog {
         classFilterLabel.setStyle(INDENT_STYLE);
         classFilterCombo = new CheckComboBox<>();
         classFilterCombo.setMaxWidth(Double.MAX_VALUE);
-        classFilterCombo.setTitle("All selected");
         FXUtils.installSelectAllOrNoneMenu(classFilterCombo);
+        classFilterCombo.getCheckModel().getCheckedItems().addListener((javafx.collections.ListChangeListener<String>)
+                c -> updateClassFilterTitle());
         applyTooltip(
                 classFilterCombo,
                 "Pick one or more QuPath classes. Only annotations whose class matches a checked entry"
@@ -1725,7 +1726,7 @@ public final class FiberAnalysisDialog {
                     if (pc == null || pc == PathClass.NULL_CLASS) {
                         hasUnclassified = true;
                     } else {
-                        classNames.add(pc.toString());
+                        classNames.add(AnnotationClassFilter.displayName(pc));
                     }
                 }
             }
@@ -1735,7 +1736,7 @@ public final class FiberAnalysisDialog {
             if (gui != null && gui.getProject() != null) {
                 for (PathClass pc : gui.getProject().getPathClasses()) {
                     if (pc == null || pc == PathClass.NULL_CLASS) continue;
-                    classNames.add(pc.toString());
+                    classNames.add(AnnotationClassFilter.displayName(pc));
                 }
             }
             // Last fallback: the global available-class list shown in QuPath's
@@ -1743,19 +1744,38 @@ public final class FiberAnalysisDialog {
             if (classNames.isEmpty() && gui != null && gui.getAvailablePathClasses() != null) {
                 for (PathClass pc : gui.getAvailablePathClasses()) {
                     if (pc == null || pc == PathClass.NULL_CLASS) continue;
-                    classNames.add(pc.toString());
+                    classNames.add(AnnotationClassFilter.displayName(pc));
                 }
             }
         } catch (Exception ex) {
             logger.debug("Could not populate class filter: {}", ex.getMessage());
         }
-        if (hasUnclassified) {
-            classFilterCombo.getItems().add("Unclassified");
+        if (hasUnclassified && !classNames.contains(AnnotationClassFilter.UNCLASSIFIED)) {
+            classFilterCombo.getItems().add(AnnotationClassFilter.UNCLASSIFIED);
         }
         classFilterCombo.getItems().addAll(classNames);
         for (String name : previouslyChecked) {
             int idx = classFilterCombo.getItems().indexOf(name);
             if (idx >= 0) classFilterCombo.getCheckModel().check(idx);
+        }
+        updateClassFilterTitle();
+    }
+
+    /**
+     * Keeps the class picker's button text honest. ControlsFX shows a non-null
+     * title INSTEAD of the checked items, so the title is cleared unless it is
+     * summarising an all-or-nothing state.
+     */
+    private void updateClassFilterTitle() {
+        if (classFilterCombo == null) return;
+        int checked = classFilterCombo.getCheckModel().getCheckedItems().size();
+        int total = classFilterCombo.getItems().size();
+        if (checked == 0) {
+            classFilterCombo.setTitle(total == 0 ? "No classes found" : "None checked");
+        } else if (checked == total) {
+            classFilterCombo.setTitle("All classes");
+        } else {
+            classFilterCombo.setTitle(null);
         }
     }
 
@@ -1858,28 +1878,15 @@ public final class FiberAnalysisDialog {
             case "all":
                 return all;
             case "class":
-                Set<String> wanted = parseClassFilter(params.classFilter());
+                Set<String> wanted = AnnotationClassFilter.parse(params.classFilter());
                 if (wanted.isEmpty()) return List.of();
                 return all.stream()
-                        .filter(o -> {
-                            PathClass pc = o.getPathClass();
-                            return pc != null && pc.getName() != null && wanted.contains(pc.getName());
-                        })
+                        .filter(o -> AnnotationClassFilter.matches(o, wanted))
                         .collect(Collectors.toList());
             case "selected":
             default:
                 return selectedAnnotations();
         }
-    }
-
-    private static Set<String> parseClassFilter(String csv) {
-        if (csv == null || csv.isBlank()) return java.util.Collections.emptySet();
-        Set<String> out = new java.util.LinkedHashSet<>();
-        for (String tok : csv.split(",")) {
-            String t = tok.trim();
-            if (!t.isEmpty()) out.add(t);
-        }
-        return out;
     }
 
     private static String noAnnotationsMessage(FiberAnalysisParams params) {

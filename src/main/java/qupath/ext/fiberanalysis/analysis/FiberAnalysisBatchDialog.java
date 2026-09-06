@@ -17,7 +17,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -48,7 +47,6 @@ import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.images.ImageData;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.classes.PathClass;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
 
@@ -443,13 +441,10 @@ public final class FiberAnalysisBatchDialog {
             case "all":
                 return all;
             case "class":
-                Set<String> wanted = parseClassFilter(params.classFilter());
+                Set<String> wanted = AnnotationClassFilter.parse(params.classFilter());
                 if (wanted.isEmpty()) return List.of();
                 return all.stream()
-                        .filter(o -> {
-                            PathClass pc = o.getPathClass();
-                            return pc != null && pc.getName() != null && wanted.contains(pc.getName());
-                        })
+                        .filter(o -> AnnotationClassFilter.matches(o, wanted))
                         .collect(Collectors.toList());
             case "selected":
             default:
@@ -458,16 +453,6 @@ public final class FiberAnalysisBatchDialog {
                 logger.info("Batch run: search area was 'selected'; falling back to all annotations on the image.");
                 return all;
         }
-    }
-
-    private static Set<String> parseClassFilter(String csv) {
-        if (csv == null || csv.isBlank()) return java.util.Collections.emptySet();
-        Set<String> out = new LinkedHashSet<>();
-        for (String tok : csv.split(",")) {
-            String t = tok.trim();
-            if (!t.isEmpty()) out.add(t);
-        }
-        return out;
     }
 
     /**

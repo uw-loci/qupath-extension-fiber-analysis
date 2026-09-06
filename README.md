@@ -102,6 +102,8 @@ at-a-glance reference.
 
 | Label | Section | Default | Units | What it does |
 |---|---|---|---|---|
+| Search area | 1. Search area | Selected annotations | -- | Which annotations to analyse: the viewer selection, every annotation on the image, or the classes checked below. |
+| Annotation class(es) | 1. Search area | (none checked) | -- | Classes to analyse when Search area is "Annotations of class...". Lists the full class name including derived-class colons ("Tumor: Stroma"); "Unclassified" matches annotations with no class assigned. |
 | Border zone width | 1. Search area | 50.0 | um | Distance from the annotation boundary that bounds the analysed zone. |
 | Zone mode | 1. Search area | outside | -- | Which side of the boundary to analyse (inside / outside / both). |
 | Use image pixel size | 1. Search area | checked | -- | Read pixel size from the QuPath image; uncheck to override. |

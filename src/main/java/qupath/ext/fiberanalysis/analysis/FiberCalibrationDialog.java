@@ -10,8 +10,6 @@
 package qupath.ext.fiberanalysis.analysis;
 
 import java.awt.image.BufferedImage;
-import java.util.LinkedHashSet;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -186,7 +184,8 @@ public final class FiberCalibrationDialog {
         classFilterField.setPromptText("(blank = all classes; e.g. Tumor, Stroma)");
         classFilterField.setTooltip(
                 new Tooltip("Comma-separated PathClass names. Only annotations with one of these classes"
-                        + " are included in the calibration pool."));
+                        + " are included in the calibration pool. 'Unclassified' matches annotations with"
+                        + " no class assigned."));
 
         channelCombo = new ComboBox<>(
                 FXCollections.observableArrayList("Raw intensity", "Hue (HSV)", "Saturation (HSV)", "Value (HSV)"));
@@ -293,7 +292,7 @@ public final class FiberCalibrationDialog {
         cfg.calibrationName = nameField.getText() == null ? "default" : nameField.getText();
         cfg.sampleSize = sampleAllCheck.isSelected() ? 0 : sampleSpinner.getValue();
         cfg.nameFilter = nameFilterField.getText() == null ? "" : nameFilterField.getText();
-        cfg.classFilter = parseClassFilter(classFilterField.getText());
+        cfg.classFilter = AnnotationClassFilter.parse(classFilterField.getText());
         cfg.segChannel = channelCombo.getValue();
         cfg.ridgeFilter = ridgeCombo.getValue();
         cfg.invertIntensity = invertCheck.isSelected();
@@ -352,16 +351,6 @@ public final class FiberCalibrationDialog {
                 "FiberCalibration");
         worker.setDaemon(true);
         worker.start();
-    }
-
-    private static Set<String> parseClassFilter(String csv) {
-        if (csv == null || csv.isBlank()) return java.util.Collections.emptySet();
-        Set<String> out = new LinkedHashSet<>();
-        for (String tok : csv.split(",")) {
-            String t = tok.trim();
-            if (!t.isEmpty()) out.add(t);
-        }
-        return out;
     }
 
     @SuppressWarnings("unchecked")

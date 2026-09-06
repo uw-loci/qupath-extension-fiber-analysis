@@ -34,7 +34,6 @@ import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
-import qupath.lib.objects.classes.PathClass;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
 import qupath.lib.regions.RegionRequest;
@@ -159,10 +158,8 @@ public final class FiberCalibrationRunner {
                 for (PathObject ann : data.getHierarchy().getAnnotationObjects()) {
                     if (ann == null || !ann.isAnnotation()) continue;
                     if (ann.getROI() == null) continue;
-                    if (!cfg.classFilter.isEmpty()) {
-                        PathClass pc = ann.getPathClass();
-                        String pcName = (pc != null && pc.getName() != null) ? pc.getName() : "";
-                        if (!cfg.classFilter.contains(pcName)) continue;
+                    if (!cfg.classFilter.isEmpty() && !AnnotationClassFilter.matches(ann, cfg.classFilter)) {
+                        continue;
                     }
                     pool.add(new EntryAnn(entry, data, ann));
                 }
