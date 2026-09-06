@@ -138,6 +138,7 @@ public final class FiberCalibrationRunner {
             // Phase 1: collect (entry, annotation) pairs that match the filters.
             String needle =
                     cfg.nameFilter == null ? "" : cfg.nameFilter.toLowerCase().trim();
+            var classPredicate = cfg.classFilter.isEmpty() ? null : AnnotationClassFilter.predicate(cfg.classFilter);
             List<EntryAnn> pool = new ArrayList<>();
             for (ProjectImageEntry<BufferedImage> entry : project.getImageList()) {
                 if (progress != null && progress.isCancelled()) {
@@ -158,9 +159,7 @@ public final class FiberCalibrationRunner {
                 for (PathObject ann : data.getHierarchy().getAnnotationObjects()) {
                     if (ann == null || !ann.isAnnotation()) continue;
                     if (ann.getROI() == null) continue;
-                    if (!cfg.classFilter.isEmpty() && !AnnotationClassFilter.matches(ann, cfg.classFilter)) {
-                        continue;
-                    }
+                    if (classPredicate != null && !classPredicate.test(ann)) continue;
                     pool.add(new EntryAnn(entry, data, ann));
                 }
             }

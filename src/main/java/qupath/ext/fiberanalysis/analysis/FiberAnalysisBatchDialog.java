@@ -18,7 +18,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.stream.Collectors;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleBooleanProperty;
@@ -441,11 +440,8 @@ public final class FiberAnalysisBatchDialog {
             case "all":
                 return all;
             case "class":
-                Set<String> wanted = AnnotationClassFilter.parse(params.classFilter());
-                if (wanted.isEmpty()) return List.of();
-                return all.stream()
-                        .filter(o -> AnnotationClassFilter.matches(o, wanted))
-                        .collect(Collectors.toList());
+                var wanted = AnnotationClassFilter.predicate(AnnotationClassFilter.parse(params.classFilter()));
+                return all.stream().filter(wanted).collect(Collectors.toList());
             case "selected":
             default:
                 // In batch context "selected" makes no sense -- a project entry is

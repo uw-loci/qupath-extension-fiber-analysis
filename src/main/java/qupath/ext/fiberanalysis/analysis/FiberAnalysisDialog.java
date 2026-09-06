@@ -1878,11 +1878,8 @@ public final class FiberAnalysisDialog {
             case "all":
                 return all;
             case "class":
-                Set<String> wanted = AnnotationClassFilter.parse(params.classFilter());
-                if (wanted.isEmpty()) return List.of();
-                return all.stream()
-                        .filter(o -> AnnotationClassFilter.matches(o, wanted))
-                        .collect(Collectors.toList());
+                var wanted = AnnotationClassFilter.predicate(AnnotationClassFilter.parse(params.classFilter()));
+                return all.stream().filter(wanted).collect(Collectors.toList());
             case "selected":
             default:
                 return selectedAnnotations();

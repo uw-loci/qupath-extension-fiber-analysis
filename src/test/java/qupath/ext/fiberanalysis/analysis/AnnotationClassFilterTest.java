@@ -30,41 +30,49 @@ class AnnotationClassFilterTest {
     }
 
     @Test
+    void sentinelIsQuPathsOwnNameForTheNullClass() {
+        assertThat(AnnotationClassFilter.UNCLASSIFIED).isEqualTo("Unclassified");
+        assertThat(PathClass.NULL_CLASS.toString()).isEqualTo(AnnotationClassFilter.UNCLASSIFIED);
+    }
+
+    @Test
     void unclassifiedAnnotationMatchesTheUnclassifiedEntry() {
-        assertThat(AnnotationClassFilter.matches(annotation(null), Set.of("Unclassified")))
+        assertThat(AnnotationClassFilter.predicate(Set.of("Unclassified")).test(annotation(null)))
                 .isTrue();
     }
 
     @Test
     void unclassifiedAnnotationIgnoredWhenOnlyRealClassesChecked() {
-        assertThat(AnnotationClassFilter.matches(annotation(null), Set.of("Tumor")))
+        assertThat(AnnotationClassFilter.predicate(Set.of("Tumor")).test(annotation(null)))
                 .isFalse();
     }
 
     @Test
     void classifiedAnnotationDoesNotMatchTheUnclassifiedEntry() {
         PathObject ann = annotation(PathClass.fromString("Tumor"));
-        assertThat(AnnotationClassFilter.matches(ann, Set.of("Unclassified"))).isFalse();
+        assertThat(AnnotationClassFilter.predicate(Set.of("Unclassified")).test(ann))
+                .isFalse();
     }
 
     @Test
     void derivedClassMatchesItsFullDisplayName() {
         PathClass derived = PathClass.fromArray("Tumor", "Stroma");
-        PathObject ann = annotation(derived);
         assertThat(derived.toString()).isEqualTo("Tumor: Stroma");
-        assertThat(AnnotationClassFilter.matches(ann, Set.of("Tumor: Stroma"))).isTrue();
+        assertThat(AnnotationClassFilter.predicate(Set.of("Tumor: Stroma")).test(annotation(derived)))
+                .isTrue();
     }
 
     @Test
-    void derivedClassAlsoMatchesItsBareName() {
+    void derivedClassDoesNotMatchItsBareName() {
         PathObject ann = annotation(PathClass.fromArray("Tumor", "Stroma"));
-        assertThat(AnnotationClassFilter.matches(ann, Set.of("Stroma"))).isTrue();
+        assertThat(AnnotationClassFilter.predicate(Set.of("Stroma")).test(ann)).isFalse();
     }
 
     @Test
     void emptyFilterMatchesNothing() {
-        assertThat(AnnotationClassFilter.matches(annotation(null), Set.of())).isFalse();
-        assertThat(AnnotationClassFilter.matches(annotation(PathClass.fromString("Tumor")), Set.of()))
+        assertThat(AnnotationClassFilter.predicate(Set.of()).test(annotation(null)))
+                .isFalse();
+        assertThat(AnnotationClassFilter.predicate(Set.of()).test(annotation(PathClass.fromString("Tumor"))))
                 .isFalse();
     }
 
