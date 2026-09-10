@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -79,7 +79,7 @@ __version__ = "0.2.6"
 #     image's own gray levels (4500 cuts at 4500, every region, every image).
 #     Otsu / triangle are unaffected -- a min-max stretch is affine, so it moved
 #     their threshold without moving the partition. threshold_scalar takes the
-#     divisor as manual_full_scale; new full_scale() mirrors _scale_to_unit.
+#     divisor as manual_full_scale; new full_scale() mirrors scale_to_unit.
 #     Rolling-ball no longer rescales by its own max on the absolute path.
 #   - scripts/calibrate_threshold.py: same change, and it matters more here --
 #     min-max stretching EACH region before pooling the histogram gave every
@@ -88,3 +88,15 @@ __version__ = "0.2.6"
 #     project-wide absolute one when no ridge filter is in play.
 #   - segmentation.py: resolved threshold logged at INFO for every method, so
 #     an otsu / triangle / project_otsu run records what it actually cut at.
+#
+# 0.2.7 (2026-09-10):
+#   - segmentation.py: _scale_to_unit is now public scale_to_unit, because two
+#     other modules needed it and had each grown their own wrong version.
+#   - pipeline.py rgb_to_value: scaled by dtype instead of dividing by 255
+#     unconditionally -- the same defect pick_channel's docstring says was fixed
+#     in 0.2.1, still live here. On a uint16 region it returned values up to
+#     257, and texture.quantise then divided by 255 a SECOND time to bring them
+#     back. 255*255 is 65025, not 65535, so GLCM ran on values ~0.8% low and
+#     only worked at all because both bugs were present.
+#   - texture.py quantise: trusts its documented [0,1] input and only clips.
+#     Also drops a dead `whole` assignment.

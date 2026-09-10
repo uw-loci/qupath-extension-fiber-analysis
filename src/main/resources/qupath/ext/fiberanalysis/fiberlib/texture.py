@@ -19,6 +19,7 @@ properties.
 A native ``entropy`` is added since scikit-image's ``graycoprops`` does
 not include it.
 """
+
 import logging
 from collections import OrderedDict
 
@@ -32,10 +33,10 @@ _ANGLES = [0.0, np.pi / 4.0, np.pi / 2.0, 3.0 * np.pi / 4.0]
 
 def quantise(image_scalar, levels):
     """Quantise a [0,1]-ish scalar image into 0..levels-1 uint8."""
-    arr = image_scalar.astype(np.float32)
-    if arr.max() > 1.0:
-        arr = arr / 255.0
-    arr = np.clip(arr, 0.0, 1.0)
+    # Callers pass a [0,1] scalar (see pipeline.rgb_to_value). Re-scaling here
+    # by an assumed 8-bit range is what made 16-bit sources depend on a
+    # compensating bug upstream; clip only, as a guard.
+    arr = np.clip(image_scalar.astype(np.float32), 0.0, 1.0)
     q = np.floor(arr * (levels - 1) + 0.5).astype(np.uint8)
     return q
 
@@ -72,7 +73,9 @@ def glcm_props_for_patch(patch_q, distances_px, levels, props):
     return out
 
 
-def compute_glcm_window(image_scalar, fiber_mask, window_grid, quant_levels, distances_px, props):
+def compute_glcm_window(
+    image_scalar, fiber_mask, window_grid, quant_levels, distances_px, props
+):
     """Per-window GLCM features.
 
     If ``window_grid`` is None, returns a single dict with one scalar per
@@ -83,10 +86,14 @@ def compute_glcm_window(image_scalar, fiber_mask, window_grid, quant_levels, dis
     q_masked = np.where(fiber_mask, q, 0).astype(np.uint8)
 
     if window_grid is None:
-        whole = q_masked[fiber_mask] if fiber_mask.any() else np.zeros((0,), dtype=np.uint8)
-        # graycomatrix needs a 2D array; fall back to whole-image if no mask.
+        # graycomatrix needs a 2D array, so the masked image goes in whole --
+        # background reads as level 0 rather than being dropped.
         single = glcm_props_for_patch(q_masked, distances_px, quant_levels, props)
-        return {"per_window": {p: np.array([[v]], dtype=np.float32) for p, v in single.items()}}
+        return {
+            "per_window": {
+                p: np.array([[v]], dtype=np.float32) for p, v in single.items()
+            }
+        }
 
     grid_shape = window_grid["grid_shape"]
     window_px = int(window_grid["window_px"])

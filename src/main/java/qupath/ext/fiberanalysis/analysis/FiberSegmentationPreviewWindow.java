@@ -422,13 +422,8 @@ final class FiberSegmentationPreviewWindow {
             });
 
             RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, x, y, w, h);
-            BufferedImage img = server.readRegion(req);
-            if (img == null) {
-                setStatus(statusLabel, "readRegion returned null.");
-                return;
-            }
             Path regionPng = tempDir.resolve("region.png");
-            ImageIO.write(img, "PNG", regionPng.toFile());
+            SourceChannel.writeRegionPng(server, req, chanLabel, regionPng);
             Path overlayPng = tempDir.resolve("overlay.png");
 
             // If a newer request came in while we were reading, drop this one.

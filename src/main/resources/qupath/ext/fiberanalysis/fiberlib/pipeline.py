@@ -50,11 +50,16 @@ def parse_int_list(s):
 
 
 def rgb_to_value(rgb):
-    """Cheap value-channel extraction (max of RGB), returned as float32 in [0,1]."""
-    arr = rgb.astype(np.float32)
-    if arr.max() > 1.0:
-        arr = arr / 255.0
-    return arr.max(axis=-1)
+    """Cheap value-channel extraction (max of RGB), returned as float32 in [0,1].
+
+    Scales by dtype rather than assuming 8-bit. Dividing a uint16 image by 255
+    left the "value" 257x too large, which the texture path then papered over
+    by dividing by 255 a second time -- 255*255 is 65025, not 65535, so the
+    result was ~0.8% off and depended on both bugs staying in place.
+    """
+    from . import segmentation as _seg
+
+    return _seg.scale_to_unit(rgb).max(axis=-1)
 
 
 def sanitize_json(obj):

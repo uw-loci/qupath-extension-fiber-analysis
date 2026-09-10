@@ -382,49 +382,17 @@ public class FiberAnalysisWorkflow {
                 rh,
                 dilationPx);
 
-        // Read the region as RGB and write it to disk for the Python script.
-        // We avoid passing NDArrays through Appose for the first cut to keep
-        // the contract simple. A future iteration can switch to NDArray IPC
-        // for speed (pattern in PPMPerpendicularityWorkflow.bufferedImageToRGBNDArray).
+        // Written to disk rather than passed as an NDArray through Appose to keep
+        // the contract simple. A future iteration can switch to NDArray IPC for
+        // speed (pattern in PPMPerpendicularityWorkflow.bufferedImageToRGBNDArray).
         progress.setSub("Reading image region...");
         RegionRequest request = RegionRequest.createInstance(server.getPath(), 1.0, rx, ry, rw, rh);
-        BufferedImage region = server.readRegion(request);
-        if (region == null) {
-            throw new IOException("server.readRegion returned null for " + request + " (image dimensions "
-                    + server.getWidth() + "x" + server.getHeight() + ")");
-        }
 
         Path annDir = outputRoot.resolve(
                 String.format(Locale.ROOT, "annotation_%03d_%s", index, sanitizeAnnotationName(annotation.getName())));
         Files.createDirectories(annDir);
         Path regionPng = annDir.resolve("region.png");
-        // ImageIO.write returns false (no exception, no file written) when the
-        // BufferedImage type has no matching PNG writer -- TYPE_CUSTOM rasters
-        // from Bio-Formats for unusual pixel types are the usual culprit. If
-        // that happens, fall back to converting through a standard ARGB
-        // BufferedImage so the Python side gets a real file.
-        boolean wrote = javax.imageio.ImageIO.write(region, "PNG", regionPng.toFile());
-        if (!wrote) {
-            logger.warn(
-                    "ImageIO.write returned false for {} (type={}, {}x{}); converting via TYPE_INT_ARGB and retrying",
-                    regionPng.getFileName(),
-                    region.getType(),
-                    region.getWidth(),
-                    region.getHeight());
-            BufferedImage converted =
-                    new BufferedImage(region.getWidth(), region.getHeight(), BufferedImage.TYPE_INT_ARGB);
-            converted.getGraphics().drawImage(region, 0, 0, null);
-            wrote = javax.imageio.ImageIO.write(converted, "PNG", regionPng.toFile());
-            if (!wrote) {
-                throw new IOException("PNG writer rejected region image at " + regionPng
-                        + " (original type=" + region.getType()
-                        + ", fallback TYPE_INT_ARGB also rejected). Region was " + region.getWidth() + "x"
-                        + region.getHeight());
-            }
-        }
-        if (!Files.exists(regionPng) || Files.size(regionPng) == 0) {
-            throw new IOException("region.png missing or empty after write at " + regionPng);
-        }
+        SourceChannel.writeRegionPng(server, request, params.internalChannel(), regionPng);
 
         // Polygon boundary mask: rasterise the annotation's actual shape into a
         // binary PNG sized to the dilated region. v1 sent only the axis-aligned

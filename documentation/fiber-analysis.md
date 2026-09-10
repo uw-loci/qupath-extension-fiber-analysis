@@ -260,8 +260,9 @@ top-of-section radio button. The choice is binary at runtime; the
 disabled mode's controls stay visible but greyed.
 
 **Mode A: Segment within extension (Internal).** The image is
-projected onto a scalar **source channel** (Value of HSV by default,
-or Raw intensity / Hue / Saturation / Value / a named channel), then
+projected onto a scalar **source channel** -- Value of HSV by default,
+or Raw intensity / Hue / Saturation / Value derived from RGB, or any
+of the image's own channels listed by name -- then
 thresholded with **Otsu**, **Triangle**, or **Manual** at a chosen
 gray level. The manual cutoff is in the source image's **own gray
 levels**, so on a single-channel 16-bit image the spinner runs
@@ -282,11 +283,14 @@ Two limits worth knowing before choosing Manual:
   selected the manual value is read as that same fraction of full
   scale (4500 of 65535 = 6.9%) of the response's own range. Otsu and
   Triangle are unaffected either way.
-- A **multi-channel 16-bit source reaches the segmenter as 8-bit.**
-  Regions are handed to Python as PNG, and PIL has no 16-bit colour
-  mode, so a 16-bit RGB region is truncated on load (raw 4500 arrives
-  as 17). The spinner caps at 255 for those images to match what the
-  segmenter can actually see. Single-channel 16-bit survives intact.
+- On a multi-channel image, **name a channel to keep 16-bit
+  precision.** Regions are handed to Python as PNG, and PIL has no
+  16-bit colour mode, so a multi-band 16-bit region would be truncated
+  on load (raw 4500 arriving as 17). Selecting one of the image's own
+  channels in **Source channel** sends that single band instead, which
+  survives intact -- and the manual spinner then opens up to 0-65535.
+  The four derived choices (Raw intensity / Hue / Saturation / Value)
+  need all three colour bands, so they cap the spinner at 255.
 
 Practical guidance for mode A:
 

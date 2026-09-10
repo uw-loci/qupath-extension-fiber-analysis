@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-import javax.imageio.ImageIO;
 import org.apposed.appose.Service.Task;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -189,7 +188,7 @@ public final class FiberCalibrationRunner {
                 if (progress != null) {
                     progress.update("Extracting region " + (i + 1) + " of " + total, i, total);
                 }
-                Path png = extractRegion(ea, cfg.borderZoneUm, tempDir, i);
+                Path png = extractRegion(ea, cfg.borderZoneUm, cfg.segChannel, tempDir, i);
                 if (png != null) {
                     regionPngs.add(png.toAbsolutePath().toString());
                 }
@@ -358,7 +357,7 @@ public final class FiberCalibrationRunner {
      * Extracts one annotation's dilated region as a PNG. Returns null on
      * failure so the calibration can continue across the rest of the pool.
      */
-    private static Path extractRegion(EntryAnn ea, double borderZoneUm, Path tempDir, int index) {
+    private static Path extractRegion(EntryAnn ea, double borderZoneUm, String segChannel, Path tempDir, int index) {
         try {
             ImageServer<BufferedImage> server = ea.data.getServer();
             ROI roi = ea.ann.getROI();
@@ -383,10 +382,8 @@ public final class FiberCalibrationRunner {
             int rh = Math.min(server.getHeight() - ry, h + 2 * pad);
             if (rw <= 0 || rh <= 0) return null;
             RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, rx, ry, rw, rh);
-            BufferedImage img = server.readRegion(req);
-            if (img == null) return null;
             Path out = tempDir.resolve(String.format("region_%05d.png", index));
-            ImageIO.write(img, "PNG", out.toFile());
+            SourceChannel.writeRegionPng(server, req, segChannel, out);
             return out;
         } catch (Exception ex) {
             logger.warn("Region extraction failed for annotation {}: {}", index, ex.getMessage());

@@ -376,28 +376,36 @@ public final class FiberAnalysisDialog {
     }
 
     /**
-     * Upper bound for the manual threshold: the largest value the segmenter can
-     * actually see for the current image.
-     *
-     * <p>This is the bit depth that survives the region PNG round-trip, not the
-     * server's advertised depth. PIL has no 16-bit RGB mode, so a multi-channel
-     * 16-bit source reaches the segmenter as 8-bit and its usable range really
-     * is 0-255.
-     *
-     * @return 65535 for single-channel 16-bit sources, else 255
+     * @return the largest value the segmenter can see for the current image and
+     *     channel choice; see {@link SourceChannel#deliveredFullScale}
      */
     private int sourceFullScale() {
-        try {
-            if (gui == null || gui.getImageData() == null) return 255;
-            var server = gui.getImageData().getServer();
-            if (server == null || server.isRGB()) return 255;
-            if (server.getPixelType() == qupath.lib.images.servers.PixelType.UINT16 && server.nChannels() == 1) {
-                return 65535;
-            }
-        } catch (Exception ex) {
-            logger.debug("Could not read pixel type: {}", ex.getMessage());
+        if (gui == null || gui.getImageData() == null) return 255;
+        String channel = internalChannelCombo == null ? null : internalChannelCombo.getValue();
+        return SourceChannel.deliveredFullScale(gui.getImageData().getServer(), channel);
+    }
+
+    /**
+     * Fills the source-channel combo with the derived choices plus the current
+     * image's own channel names, keeping the previous pick when the new image
+     * still offers it and otherwise falling back to the saved preference.
+     */
+    private void populateChannelCombo() {
+        if (internalChannelCombo == null) return;
+        String previous = internalChannelCombo.getValue();
+        if (previous == null || previous.isBlank()) {
+            previous = FiberAnalysisPreferences.internalChannelProperty().get();
         }
-        return 255;
+        var server = gui == null || gui.getImageData() == null
+                ? null
+                : gui.getImageData().getServer();
+        internalChannelCombo.getItems().setAll(SourceChannel.choices(server));
+        if (internalChannelCombo.getItems().contains(previous)) {
+            internalChannelCombo.setValue(previous);
+        } else {
+            internalChannelCombo.setValue(SourceChannel.VALUE);
+        }
+        refreshManualThresholdRange();
     }
 
     /**
@@ -437,7 +445,7 @@ public final class FiberAnalysisDialog {
             // Class field so detach can use the same reference.
             selectionListener = (primary, previous, allSelected) -> {
                 refreshSelectionLabel();
-                refreshManualThresholdRange();
+                populateChannelCombo();
             };
             h.getSelectionModel().addPathObjectSelectionListener(selectionListener);
             listenerHierarchy = h;
@@ -620,17 +628,28 @@ public final class FiberAnalysisDialog {
         GridPane internalGrid = baseGrid();
         int row = 0;
 
-        internalChannelCombo = new ComboBox<>(FXCollections.observableArrayList(
-                "Raw intensity", "Hue (HSV)", "Saturation (HSV)", "Value (HSV)", "Let me pick channel..."));
-        internalChannelCombo.setValue(
-                FiberAnalysisPreferences.internalChannelProperty().get());
+        internalChannelCombo = new ComboBox<>();
+        internalChannelCombo.setMaxWidth(Double.MAX_VALUE);
         applyTooltip(
                 internalChannelCombo,
                 "Scalar channel the internal segmenter operates on. For brightfield/Picrosirius,"
-                        + " 'Value' is a sensible default; switch to 'Raw intensity' for single-channel fluorescence.");
+                        + " 'Value' is a sensible default; switch to 'Raw intensity' for single-channel"
+                        + " fluorescence. On a multi-channel image, naming one of its channels sends that"
+                        + " single band -- which is the only way a 16-bit source keeps its full precision,"
+                        + " because a multi-band PNG is loaded as 8-bit.");
+        Button channelRefreshBtn = new Button("Refresh");
+        channelRefreshBtn.setTooltip(installDelay(new Tooltip("Re-read the current image's channel list.")));
+        channelRefreshBtn.setOnAction(e -> populateChannelCombo());
+        HBox channelBox = new HBox(6, internalChannelCombo, channelRefreshBtn);
+        HBox.setHgrow(internalChannelCombo, Priority.ALWAYS);
+        channelBox.setAlignment(Pos.CENTER_LEFT);
         internalGrid.add(new Label("Source channel:"), 0, row);
-        internalGrid.add(internalChannelCombo, 1, row);
+        internalGrid.add(channelBox, 1, row);
         row++;
+        populateChannelCombo();
+        // A named channel on a 16-bit image raises the manual bound to 65535,
+        // so the spinner has to follow the choice, not just the image.
+        internalChannelCombo.valueProperty().addListener((o, a, b) -> refreshManualThresholdRange());
 
         thresholdMethodCombo = new ComboBox<>(
                 FXCollections.observableArrayList("Otsu", "Triangle", "Manual", "Project Otsu (calibrated)"));

@@ -108,6 +108,43 @@ tasks.test {
 }
 
 // ---------------------------------------------------------------------------
+// Python tests -- fiberlib ships in the jar and has no Java coverage, so the
+// pytest suite is the only thing testing it. `check` runs it, but skips loudly
+// rather than blocking when the interpreter on PATH lacks the scientific stack
+// (same posture the pre-push hook takes towards a missing JDK).
+// ---------------------------------------------------------------------------
+val fiberlibPythonTest by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Run the fiberlib pytest suite (src/test/python)."
+    workingDir = projectDir
+    commandLine("python3", "-m", "pytest", "src/test/python", "-q")
+    inputs.dir("src/test/python")
+    inputs.dir("src/main/resources/qupath/ext/fiberanalysis")
+    outputs.upToDateWhen { false }
+    onlyIf {
+        val available = try {
+            ProcessBuilder("python3", "-c", "import pytest, numpy, skimage")
+                .redirectErrorStream(true)
+                .start()
+                .waitFor() == 0
+        } catch (e: Exception) {
+            false
+        }
+        if (!available) {
+            logger.lifecycle(
+                "fiberlibPythonTest SKIPPED -- no python3 on PATH with pytest + numpy + scikit-image. " +
+                    "Install them (pip install --user pytest numpy scikit-image) to test fiberlib."
+            )
+        }
+        available
+    }
+}
+
+tasks.named("check") {
+    dependsOn(fiberlibPythonTest)
+}
+
+// ---------------------------------------------------------------------------
 // Spotless -- auto-formatting (gates the build via `check`)
 // ---------------------------------------------------------------------------
 spotless {

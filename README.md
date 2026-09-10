@@ -109,7 +109,7 @@ at-a-glance reference.
 | Use image pixel size | 1. Search area | checked | -- | Read pixel size from the QuPath image; uncheck to override. |
 | Override pixel size | 1. Search area | 0.5 | um/px | Forced pixel size when the image has no calibration (enabled only when "Use image pixel size" is off). |
 | Source (segmentation) | 2. Fiber segmentation | Segment within extension | -- | Internal segmenter vs. consume an existing fiber mask. |
-| Source channel | 2. Fiber segmentation | Value (HSV) | -- | Scalar channel the internal segmenter operates on. |
+| Source channel | 2. Fiber segmentation | Value (HSV) | -- | Scalar channel the internal segmenter operates on: Raw intensity / Hue / Saturation / Value derived from RGB, or one of the image's own channels by name. Naming a channel sends that single band, which is what lets a 16-bit source keep its full precision. |
 | Threshold method | 2. Fiber segmentation | Otsu | -- | Threshold algorithm applied to the source channel (Otsu / Triangle / Manual). |
 | Manual threshold | 2. Fiber segmentation | 128 | gray level | Cutoff in the source image's own gray levels -- on a single-channel 16-bit image the spinner runs 0-65535, so 4500 cuts at 4500. Enabled only when threshold method is Manual; with a ridge filter selected it is read as that fraction of full scale of the response range instead. |
 | Ridge filter | 2. Fiber segmentation | None | -- | Optional vesselness filter to enhance line-like structures (None / Frangi / Sato / Meijering). |

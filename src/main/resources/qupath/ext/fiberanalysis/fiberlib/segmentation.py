@@ -23,6 +23,7 @@ References used in this module:
     Meijering, E. et al. (2004). Design and validation of a tool for neurite
         tracing and analysis. Cytometry Part A 58(2).
 """
+
 import logging
 import os
 
@@ -62,10 +63,10 @@ def pick_channel(image, channel):
     after a min-max if out of range.
     """
     if image.ndim == 2:
-        return _scale_to_unit(image)
+        return scale_to_unit(image)
 
     key = _CHANNEL_KEYS.get(str(channel).strip().lower(), "value")
-    rgb_scaled = _scale_to_unit(image[..., :3])
+    rgb_scaled = scale_to_unit(image[..., :3])
     hsv = rgb2hsv(rgb_scaled)
     if key == "hue":
         return hsv[..., 0].astype(np.float32)
@@ -75,7 +76,7 @@ def pick_channel(image, channel):
     return hsv[..., 2].astype(np.float32)
 
 
-def _scale_to_unit(arr):
+def scale_to_unit(arr):
     """Coerce an array into a float32 scalar in [0, 1] regardless of bit depth.
 
     uint8  -> divide by 255
@@ -85,9 +86,9 @@ def _scale_to_unit(arr):
     """
     a = np.asarray(arr)
     if a.dtype == np.uint8:
-        return (a.astype(np.float32) / 255.0)
+        return a.astype(np.float32) / 255.0
     if a.dtype == np.uint16:
-        return (a.astype(np.float32) / 65535.0)
+        return a.astype(np.float32) / 65535.0
     af = a.astype(np.float32)
     mn = float(af.min())
     mx = float(af.max())
@@ -101,7 +102,7 @@ def _scale_to_unit(arr):
 def full_scale(image):
     """Return the divisor that puts ``image``'s dtype onto [0, 1].
 
-    Mirrors :func:`_scale_to_unit`, and is what a manual threshold entered in
+    Mirrors :func:`scale_to_unit`, and is what a manual threshold entered in
     the image's own gray levels must be divided by. Note PIL delivers a 16-bit
     RGB PNG as uint8, so a colour source is 255 here even when the slide is
     16-bit; the mask is built from what actually arrived, not from the
@@ -112,7 +113,7 @@ def full_scale(image):
 
     Returns:
         255.0 for uint8, 65535.0 for uint16, 1.0 otherwise (those are min-max
-        scaled into [0, 1] by :func:`_scale_to_unit`).
+        scaled into [0, 1] by :func:`scale_to_unit`).
     """
     a = np.asarray(image)
     if a.dtype == np.uint8:
@@ -129,7 +130,10 @@ def full_scale(image):
 
 # ---- ridge / vesselness filter ---------------------------------------------
 
-def apply_ridge_filter(image_scalar, name, sigma_min, sigma_max, sigma_step, black_ridges=False):
+
+def apply_ridge_filter(
+    image_scalar, name, sigma_min, sigma_max, sigma_step, black_ridges=False
+):
     """Run a scikit-image vesselness filter with a linear sigma sweep.
 
     ``black_ridges`` is the critical polarity flag. scikit-image's frangi /
@@ -160,15 +164,24 @@ def apply_ridge_filter(image_scalar, name, sigma_min, sigma_max, sigma_step, bla
         sigmas = [float(sigma_min)]
 
     if name == "frangi":
-        return skfilters.frangi(image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges))
+        return skfilters.frangi(
+            image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges)
+        )
     if name == "sato":
-        return skfilters.sato(image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges))
-    return skfilters.meijering(image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges))
+        return skfilters.sato(
+            image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges)
+        )
+    return skfilters.meijering(
+        image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges)
+    )
 
 
 # ---- thresholding ----------------------------------------------------------
 
-def threshold_scalar(arr, method, manual_threshold, project_threshold_norm=None, manual_full_scale=255.0):
+
+def threshold_scalar(
+    arr, method, manual_threshold, project_threshold_norm=None, manual_full_scale=255.0
+):
     """Pick a threshold and return a boolean foreground mask.
 
     Parameters:
@@ -216,6 +229,7 @@ def threshold_scalar(arr, method, manual_threshold, project_threshold_norm=None,
 
 # ---- entry points ----------------------------------------------------------
 
+
 def segment_internal(
     image,
     channel,
@@ -255,7 +269,12 @@ def segment_internal(
     # style image (dark fibers on bright background), which is exactly when
     # the vesselness filters should hunt for black ridges.
     enhanced = apply_ridge_filter(
-        scalar, ridge_filter, sigma_min, sigma_max, sigma_step, black_ridges=bool(invert_intensity)
+        scalar,
+        ridge_filter,
+        sigma_min,
+        sigma_max,
+        sigma_step,
+        black_ridges=bool(invert_intensity),
     )
     response = str(ridge_filter or "none").lower() in _RIDGE_FILTERS
     # One arithmetic rule either way: manual_threshold / manual_full_scale is
@@ -274,6 +293,7 @@ def segment_internal(
     if rolling_ball_radius and rolling_ball_radius > 0:
         try:
             from skimage.morphology import white_tophat, disk
+
             normed = white_tophat(normed, footprint=disk(int(rolling_ball_radius)))
             # Only a response is safe to rescale -- doing it on the absolute
             # scalar would put the gray levels back on a per-region scale.
@@ -285,7 +305,11 @@ def segment_internal(
             logger.warning("Rolling-ball failed: %s -- using raw scalar", exc)
 
     mask = threshold_scalar(
-        normed, threshold_method, manual_threshold, project_threshold_norm, manual_full_scale
+        normed,
+        threshold_method,
+        manual_threshold,
+        project_threshold_norm,
+        manual_full_scale,
     )
     mask = skmorph.binary_closing(mask, footprint=skmorph.disk(1))
     if min_fiber_area_px > 0:
@@ -308,6 +332,7 @@ def load_existing_mask(path, image_shape):
     elif ext in (".tif", ".tiff"):
         # PIL is already a dependency; avoid pulling tifffile.
         from PIL import Image
+
         arr = np.asarray(Image.open(path))
     else:
         raise ValueError(f"Unsupported mask file extension {ext!r}")

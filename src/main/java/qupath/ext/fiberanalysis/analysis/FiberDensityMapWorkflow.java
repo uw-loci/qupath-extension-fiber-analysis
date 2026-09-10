@@ -328,12 +328,13 @@ public final class FiberDensityMapWorkflow {
 
                     Path tilePng = workDir.resolve(String.format("tile_%04d_%04d.png", tx, ty));
                     RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, tileX, tileY, tww, thh);
-                    BufferedImage img = server.readRegion(req);
-                    if (img == null) {
+                    try {
+                        SourceChannel.writeRegionPng(server, req, spec.segChannel, tilePng);
+                    } catch (IOException ioe) {
+                        logger.warn("Tile ({},{}) skipped: {}", tileX, tileY, ioe.getMessage());
                         doneTiles++;
                         continue;
                     }
-                    javax.imageio.ImageIO.write(img, "PNG", tilePng.toFile());
 
                     Path tileNpz = workDir.resolve(String.format("tile_%04d_%04d.npz", tx, ty));
                     Map<String, Object> in = buildTileInputs(spec, pxUm, tilePng, tww, thh, tileNpz);
