@@ -276,6 +276,35 @@ cleaned: `binary_closing` to bridge 1-px gaps, then
 `remove_small_objects` at the **Min fiber area** (default 50 px).
 The clean mask is the fiber segmentation.
 
+### Large annotations are tiled automatically
+
+A region larger than 64 megapixels at the read scale is split into
+tiles and analysed a tile at a time, so tissue size is not a limit.
+Two limits made this necessary: Java cannot allocate a raster above
+`Integer.MAX_VALUE` samples, and PIL warns above roughly 89 MP. A
+15.5 x 12.5 mm SHG sample at 0.1732 um/px is 7.16 gigapixels, which is
+3.3x past the Java cap on its own.
+
+Tiles are placed on the window lattice and overlap by one window, so
+every window position an untiled run would produce is produced exactly
+once, at identical coordinates. The merged `windows.json` is therefore
+the one an untiled run would have written.
+
+Two consequences worth knowing:
+
+- **Per-fibre metrics are approximated.** A fibre crossing a tile seam
+  is truncated in both tiles, so tortuosity and fibre counts are
+  aggregated across tiles rather than measured end to end. Per-window
+  metrics (coverage, orientation, order parameter, GLCM) are exact.
+- **No annotation-level overlays for a tiled run.** At this size a
+  single full-resolution PNG cannot be allocated either. Per-tile
+  overlays are kept under `tiles/`.
+
+`Analysis downsample` remains the lever for trading detail against
+time. Note it runs out quickly for SHG: at 0.1732 um/px a 1 um fibre
+spans about 6 px, so a downsample of 2 already leaves under 3 px
+across the thinnest fibres.
+
 Two limits worth knowing before choosing Manual:
 
 - A **ridge filter changes what the number means.** A vesselness

@@ -10,6 +10,7 @@
 package qupath.ext.fiberanalysis.analysis;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -31,6 +32,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -83,6 +85,15 @@ import qupath.lib.roi.interfaces.ROI;
 public class FiberAnalysisWorkflow {
 
     private static final Logger logger = LoggerFactory.getLogger(FiberAnalysisWorkflow.class);
+
+    /**
+     * Largest region handed to Python in one piece, in read-scale pixels.
+     * Chosen to sit under BOTH limits that bite here: Java's
+     * Integer.MAX_VALUE raster cap, and PIL's decompression-bomb warning at
+     * roughly 89 MP. Anything larger is tiled, so tissue size stops being a
+     * failure mode.
+     */
+    private static final long TILE_BUDGET_PX = 64_000_000L;
 
     /** Windows reserved device names (case-insensitive) for the filename sanitiser. */
     private static final Set<String> WINDOWS_RESERVED = Set.of(
@@ -412,30 +423,47 @@ public class FiberAnalysisWorkflow {
                 readW,
                 readH,
                 String.format(Locale.ROOT, "%.1f", samples / 1e6));
-        if (samples > Integer.MAX_VALUE) {
-            // Refuse BEFORE readRegion. Left alone it spends minutes assembling
-            // tiles and then throws "Dimensions are too large" from deep inside
-            // AWT, naming neither the annotation nor the way out.
-            long needed = (long) Math.ceil(Math.sqrt((double) rw * rh / (double) Integer.MAX_VALUE));
-            throw new IOException(String.format(
-                    Locale.ROOT,
-                    "Annotation %d region is %,d x %,d px, which is %,d pixels at downsample %.1f -- past the %,d"
-                            + " Java can hold in one raster. Set 'Analysis downsample' to at least %d and re-run.",
+        Path annDir = outputRoot.resolve(
+                String.format(Locale.ROOT, "annotation_%03d_%s", index, sanitizeAnnotationName(annotation.getName())));
+        Files.createDirectories(annDir);
+
+        // Tile whenever the read would exceed one tile's budget. PIL warns above
+        // ~89 MP and Java caps a raster well below this region, so the budget is
+        // what keeps BOTH sides inside their limits regardless of tissue size.
+        int windowPx = TileGrid.windowPx(params.windowSizeUm(), pixelSizeEffUm);
+        int stridePx = TileGrid.stridePx(windowPx, params.windowOverlapPercent());
+        TileGrid grid = TileGrid.create((int) readW, (int) readH, windowPx, stridePx, TILE_BUDGET_PX);
+        if (grid.count() > 1) {
+            logger.info(
+                    "Annotation {}: {} MP exceeds the {} MP tile budget -- tiling into {} tiles"
+                            + " ({} px windows, {} px stride)",
                     index,
-                    rw,
-                    rh,
-                    samples,
+                    String.format(Locale.ROOT, "%.1f", samples / 1e6),
+                    TILE_BUDGET_PX / 1_000_000,
+                    grid.count(),
+                    windowPx,
+                    stridePx);
+            return runTiled(
+                    params,
+                    annotation,
+                    index,
+                    imageData,
+                    pixelSizeEffUm,
                     ds,
-                    Integer.MAX_VALUE,
-                    needed));
+                    rx,
+                    ry,
+                    x,
+                    y,
+                    w,
+                    h,
+                    grid,
+                    annDir,
+                    progress);
         }
 
         progress.setSub("Reading image region...");
         RegionRequest request = RegionRequest.createInstance(server.getPath(), ds, rx, ry, rw, rh);
 
-        Path annDir = outputRoot.resolve(
-                String.format(Locale.ROOT, "annotation_%03d_%s", index, sanitizeAnnotationName(annotation.getName())));
-        Files.createDirectories(annDir);
         Path regionPng = annDir.resolve("region.png");
         SourceChannel.writeRegionPng(server, request, params.internalChannel(), regionPng);
 
@@ -532,6 +560,253 @@ public class FiberAnalysisWorkflow {
         AnnotationResult annRes = new AnnotationResult(
                 index, displayName(annotation, index), annDir, overlays, summary, rx, ry, rw, rh, ds);
         return new OneShotResult(annRes, runId);
+    }
+
+    /**
+     * Runs one annotation as a grid of tiles and merges the per-window results.
+     *
+     * <p>Only per-window quantities merge exactly, which is why the merge is
+     * built on them: every window position is produced by exactly one tile (see
+     * {@link TileGrid}) at coordinates identical to an untiled run, so the
+     * merged window list is the one the untiled run would have produced.
+     *
+     * <p>Per-FIBRE quantities do not compose the same way. A fibre crossing a
+     * tile seam is truncated in both tiles, so tortuosity and fibre counts are
+     * aggregated across tiles as an approximation and flagged in the log. Full
+     * per-fibre fidelity needs seam-crossing fibre stitching, which is not done
+     * here.
+     *
+     * @param pixelSizeEffUm pixel size at the read scale (already includes ds)
+     * @param ds             read downsample
+     * @param rx             region origin X in full-image pixels
+     * @param ry             region origin Y in full-image pixels
+     * @param annX           annotation bbox X in full-image pixels
+     * @param annY           annotation bbox Y in full-image pixels
+     * @param annW           annotation bbox width in full-image pixels
+     * @param annH           annotation bbox height in full-image pixels
+     * @return the merged result for the annotation
+     * @throws IOException if a tile cannot be read or the merge cannot be written
+     */
+    private OneShotResult runTiled(
+            FiberAnalysisParams params,
+            PathObject annotation,
+            int index,
+            ImageData<BufferedImage> imageData,
+            double pixelSizeEffUm,
+            double ds,
+            int rx,
+            int ry,
+            int annX,
+            int annY,
+            int annW,
+            int annH,
+            TileGrid grid,
+            Path annDir,
+            ProgressUi progress)
+            throws IOException {
+
+        ImageServer<BufferedImage> server = imageData.getServer();
+        ROI roi = annotation.getROI();
+        Path tilesDir = annDir.resolve("tiles");
+        Files.createDirectories(tilesDir);
+
+        JsonArray mergedWindows = new JsonArray();
+        // Windows are deduped by their GLOBAL position: tiles overlap by a
+        // window so seam windows exist whole somewhere, and the overlap would
+        // otherwise emit them twice.
+        Set<Long> seenWindows = new HashSet<>();
+        List<Map<String, Double>> tileScalars = new ArrayList<>();
+        List<Integer> tileWindowCounts = new ArrayList<>();
+
+        ProgressEstimator est = new ProgressEstimator(grid.count());
+        String runId = "";
+        int failed = 0;
+
+        for (int t = 0; t < grid.count(); t++) {
+            if (progress.isCancelled()) {
+                logger.info("Annotation {}: cancelled after {} of {} tiles", index, t, grid.count());
+                break;
+            }
+            TileGrid.Box box = grid.tiles().get(t);
+            progress.setSub(
+                    String.format(Locale.ROOT, "Tile %d of %d at (%d,%d)", t + 1, grid.count(), box.x(), box.y()));
+            progress.setEstimate(est, "tiles");
+
+            Path tileDir = tilesDir.resolve(String.format(Locale.ROOT, "tile_%05d", t));
+            Files.createDirectories(tileDir);
+
+            // Tile origin in FULL-image pixels; the box is in read pixels.
+            int tileFullX = rx + (int) Math.round(box.x() * ds);
+            int tileFullY = ry + (int) Math.round(box.y() * ds);
+            int tileFullW = (int) Math.round(box.w() * ds);
+            int tileFullH = (int) Math.round(box.h() * ds);
+
+            try {
+                Path tilePng = tileDir.resolve("region.png");
+                RegionRequest req =
+                        RegionRequest.createInstance(server.getPath(), ds, tileFullX, tileFullY, tileFullW, tileFullH);
+                SourceChannel.writeRegionPng(server, req, params.internalChannel(), tilePng);
+
+                Path tileMask = tileDir.resolve("boundary_mask.png");
+                rasterisePolygonMask(roi, tileFullX, tileFullY, box.w(), box.h(), ds, tileMask);
+
+                Map<String, Object> in = buildScriptInputs(
+                        params,
+                        pixelSizeEffUm,
+                        tilePng,
+                        tileMask,
+                        tileDir,
+                        tileFullX,
+                        tileFullY,
+                        box.w(),
+                        box.h(),
+                        (int) Math.round((annX - tileFullX) / ds),
+                        (int) Math.round((annY - tileFullY) / ds),
+                        (int) Math.round(annW / ds),
+                        (int) Math.round(annH / ds));
+
+                Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", in);
+                Object json = task.outputs.get("result_json");
+                if (json == null) {
+                    throw new IOException("Python returned no result_json");
+                }
+                JsonObject result = new Gson().fromJson(String.valueOf(json), JsonObject.class);
+                if (result.has("error") && !result.get("error").isJsonNull()) {
+                    throw new IOException("Python error: " + result.get("error").getAsString());
+                }
+                if (runId.isEmpty() && result.has("run") && result.get("run").isJsonObject()) {
+                    JsonObject runBlock = result.getAsJsonObject("run");
+                    if (runBlock.has("run_id") && !runBlock.get("run_id").isJsonNull()) {
+                        runId = runBlock.get("run_id").getAsString();
+                    }
+                }
+
+                int kept = mergeTileWindows(tileDir.resolve("windows.json"), box, mergedWindows, seenWindows);
+                tileWindowCounts.add(kept);
+                tileScalars.add(flattenScalars(result));
+            } catch (Exception ex) {
+                failed++;
+                logger.warn("Annotation {} tile {} of {} failed: {}", index, t + 1, grid.count(), ex.getMessage());
+            }
+            est.unitCompleted();
+            progress.setEstimate(est, "tiles");
+        }
+
+        if (failed > 0) {
+            logger.warn(
+                    "Annotation {}: {} of {} tiles failed; merged results cover the rest", index, failed, grid.count());
+        }
+
+        int windowPx = TileGrid.windowPx(params.windowSizeUm(), pixelSizeEffUm);
+        int stridePx = TileGrid.stridePx(windowPx, params.windowOverlapPercent());
+        Path mergedJson = annDir.resolve("windows.json");
+        writeMergedWindows(mergedJson, mergedWindows, windowPx, stridePx, grid, params, pixelSizeEffUm);
+        logger.info(
+                "Annotation {}: merged {} windows from {} tiles into {}",
+                index,
+                mergedWindows.size(),
+                grid.count() - failed,
+                mergedJson.getFileName());
+
+        Map<String, Double> summary = aggregateTileScalars(tileScalars, tileWindowCounts);
+        // No annotation-level overlays for a tiled run: at this size a single
+        // full-resolution PNG cannot be allocated either. Per-tile overlays are
+        // left in place under tiles/.
+        AnnotationResult annRes = new AnnotationResult(
+                index,
+                displayName(annotation, index),
+                annDir,
+                new LinkedHashMap<>(),
+                summary,
+                rx,
+                ry,
+                (int) Math.round(grid.tiles().get(grid.count() - 1).x() * ds) + annW,
+                (int) Math.round(grid.tiles().get(grid.count() - 1).y() * ds) + annH,
+                ds);
+        return new OneShotResult(annRes, runId);
+    }
+
+    /**
+     * Reads one tile's windows.json and appends its windows in region-global
+     * read coordinates, skipping positions an overlapping tile already supplied.
+     *
+     * @return number of windows kept from this tile
+     */
+    private static int mergeTileWindows(Path tileWindowsJson, TileGrid.Box box, JsonArray out, Set<Long> seen)
+            throws IOException {
+        if (!Files.isRegularFile(tileWindowsJson)) return 0;
+        int kept = 0;
+        try (Reader reader = Files.newBufferedReader(tileWindowsJson)) {
+            JsonObject root = new Gson().fromJson(reader, JsonObject.class);
+            if (root == null || !root.has("windows")) return 0;
+            for (JsonElement el : root.getAsJsonArray("windows")) {
+                if (!el.isJsonObject()) continue;
+                JsonObject wObj = el.getAsJsonObject().deepCopy();
+                int gx = wObj.get("x").getAsInt() + box.x();
+                int gy = wObj.get("y").getAsInt() + box.y();
+                long key = ((long) gx << 32) | (gy & 0xFFFFFFFFL);
+                if (!seen.add(key)) continue;
+                wObj.addProperty("x", gx);
+                wObj.addProperty("y", gy);
+                out.add(wObj);
+                kept++;
+            }
+        }
+        return kept;
+    }
+
+    /** Writes the merged window list in the same schema a single-shot run produces. */
+    private static void writeMergedWindows(
+            Path outFile,
+            JsonArray windows,
+            int windowPx,
+            int stridePx,
+            TileGrid grid,
+            FiberAnalysisParams params,
+            double pixelSizeEffUm)
+            throws IOException {
+        JsonObject root = new JsonObject();
+        JsonObject meta = new JsonObject();
+        meta.addProperty("tiled", true);
+        meta.addProperty("n_tiles", grid.count());
+        meta.addProperty("pixel_size_um", pixelSizeEffUm);
+        meta.addProperty("window_size_um", params.windowSizeUm());
+        meta.addProperty("window_overlap_percent", params.windowOverlapPercent());
+        root.add("meta", meta);
+        root.addProperty("window_px", windowPx);
+        root.addProperty("stride_px", stridePx);
+        root.addProperty("window_um", params.windowSizeUm());
+        root.add("windows", windows);
+        Files.writeString(
+                outFile, new GsonBuilder().setPrettyPrinting().create().toJson(root));
+    }
+
+    /**
+     * Combines per-tile scalar summaries, weighting each tile by the number of
+     * windows it contributed so a sliver tile does not count as much as a full
+     * one. Per-fibre quantities are approximations here -- see
+     * {@link #runTiled}.
+     */
+    private static Map<String, Double> aggregateTileScalars(
+            List<Map<String, Double>> tileScalars, List<Integer> weights) {
+        Map<String, Double> weighted = new LinkedHashMap<>();
+        Map<String, Double> totalWeight = new LinkedHashMap<>();
+        for (int i = 0; i < tileScalars.size(); i++) {
+            double wgt = i < weights.size() ? Math.max(0, weights.get(i)) : 0;
+            if (wgt <= 0) continue;
+            for (Map.Entry<String, Double> e : tileScalars.get(i).entrySet()) {
+                Double v = e.getValue();
+                if (v == null || v.isNaN() || v.isInfinite()) continue;
+                weighted.merge(e.getKey(), v * wgt, Double::sum);
+                totalWeight.merge(e.getKey(), wgt, Double::sum);
+            }
+        }
+        Map<String, Double> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Double> e : weighted.entrySet()) {
+            double tw = totalWeight.getOrDefault(e.getKey(), 0.0);
+            if (tw > 0) out.put(e.getKey(), e.getValue() / tw);
+        }
+        return out;
     }
 
     /**
