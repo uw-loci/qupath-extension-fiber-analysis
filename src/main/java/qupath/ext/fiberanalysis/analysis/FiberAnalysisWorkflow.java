@@ -38,9 +38,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
@@ -208,15 +211,23 @@ public class FiberAnalysisWorkflow {
             List<PathObject> allWindowDetections = new ArrayList<>();
             List<PathObject> allCollagenDetections = new ArrayList<>();
 
+            ProgressEstimator annEstimator = new ProgressEstimator(total);
             for (int i = 0; i < total; i++) {
+                if (progress.isCancelled()) {
+                    logger.info("Fiber Analysis cancelled by user after {} of {} annotations", i, total);
+                    break;
+                }
                 PathObject ann = annotations.get(i);
                 String annName = displayName(ann, i);
                 progress.setMain("Annotation " + (i + 1) + " of " + total + ": " + annName, i, total);
+                progress.setEstimate(annEstimator, "annotations");
 
                 try {
                     OneShotResult shot = runOne(params, ann, i, imageData, pixelSizeUm, outputRoot, progress);
                     AnnotationResult res = shot.result;
                     completed++;
+                    annEstimator.unitCompleted();
+                    progress.setEstimate(annEstimator, "annotations");
                     appendResult(res);
 
                     // Collagen detections from the fiber mask: one detection per
@@ -234,7 +245,8 @@ public class FiberAnalysisWorkflow {
                                     shot.runId,
                                     paramsHash,
                                     pixelSizeUm,
-                                    params.minFiberAreaUm2());
+                                    params.minFiberAreaUm2(),
+                                    res.downsample());
                             allCollagenDetections.addAll(collagenDets);
                             logger.info(
                                     "Built {} CollagenAnalysis detections for annotation '{}'",
@@ -259,7 +271,8 @@ public class FiberAnalysisWorkflow {
                                     i,
                                     shot.runId,
                                     paramsHash,
-                                    params.minWindowCoveragePercent());
+                                    params.minWindowCoveragePercent(),
+                                    res.downsample());
                             allWindowDetections.addAll(windowDetections);
                             logger.info(
                                     "Created {} window detection objects for annotation '{}'",
@@ -385,8 +398,40 @@ public class FiberAnalysisWorkflow {
         // Written to disk rather than passed as an NDArray through Appose to keep
         // the contract simple. A future iteration can switch to NDArray IPC for
         // speed (pattern in PPMPerpendicularityWorkflow.bufferedImageToRGBNDArray).
+        double ds = Math.max(1.0, params.analysisDownsample());
+        long readW = (long) Math.ceil(rw / ds);
+        long readH = (long) Math.ceil(rh / ds);
+        long samples = readW * readH;
+        double pixelSizeEffUm = pixelSizeUm * ds;
+        logger.info(
+                "Annotation {}: pixel size {} um/px (effective {} at downsample {}), reading {}x{} = {} MP",
+                index,
+                String.format(Locale.ROOT, "%.5f", pixelSizeUm),
+                String.format(Locale.ROOT, "%.5f", pixelSizeEffUm),
+                String.format(Locale.ROOT, "%.1f", ds),
+                readW,
+                readH,
+                String.format(Locale.ROOT, "%.1f", samples / 1e6));
+        if (samples > Integer.MAX_VALUE) {
+            // Refuse BEFORE readRegion. Left alone it spends minutes assembling
+            // tiles and then throws "Dimensions are too large" from deep inside
+            // AWT, naming neither the annotation nor the way out.
+            long needed = (long) Math.ceil(Math.sqrt((double) rw * rh / (double) Integer.MAX_VALUE));
+            throw new IOException(String.format(
+                    Locale.ROOT,
+                    "Annotation %d region is %,d x %,d px, which is %,d pixels at downsample %.1f -- past the %,d"
+                            + " Java can hold in one raster. Set 'Analysis downsample' to at least %d and re-run.",
+                    index,
+                    rw,
+                    rh,
+                    samples,
+                    ds,
+                    Integer.MAX_VALUE,
+                    needed));
+        }
+
         progress.setSub("Reading image region...");
-        RegionRequest request = RegionRequest.createInstance(server.getPath(), 1.0, rx, ry, rw, rh);
+        RegionRequest request = RegionRequest.createInstance(server.getPath(), ds, rx, ry, rw, rh);
 
         Path annDir = outputRoot.resolve(
                 String.format(Locale.ROOT, "annotation_%03d_%s", index, sanitizeAnnotationName(annotation.getName())));
@@ -400,10 +445,26 @@ public class FiberAnalysisWorkflow {
         // concave / curved annotations and matches PPM's rasterize_geojson_to_mask
         // semantics without dragging in a separate Python rasteriser.
         Path boundaryPng = annDir.resolve("boundary_mask.png");
-        rasterisePolygonMask(roi, rx, ry, rw, rh, boundaryPng);
+        rasterisePolygonMask(roi, rx, ry, (int) readW, (int) readH, ds, boundaryPng);
 
+        // Python works entirely in READ-scale pixels, so every geometry handed
+        // over is divided by the downsample and the pixel size multiplied by it.
+        // Region OFFSETS stay in full-image coords -- they are only echoed back
+        // for provenance, never added to a read-scale coordinate.
         Map<String, Object> inputs = buildScriptInputs(
-                params, pixelSizeUm, regionPng, boundaryPng, annDir, rx, ry, rw, rh, x - rx, y - ry, w, h);
+                params,
+                pixelSizeEffUm,
+                regionPng,
+                boundaryPng,
+                annDir,
+                rx,
+                ry,
+                (int) readW,
+                (int) readH,
+                (int) Math.round((x - rx) / ds),
+                (int) Math.round((y - ry) / ds),
+                (int) Math.round(w / ds),
+                (int) Math.round(h / ds));
 
         progress.setSub("Running fiber analysis (Python)...");
         Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", inputs);
@@ -468,8 +529,8 @@ public class FiberAnalysisWorkflow {
             }
         }
 
-        AnnotationResult annRes =
-                new AnnotationResult(index, displayName(annotation, index), annDir, overlays, summary, rx, ry, rw, rh);
+        AnnotationResult annRes = new AnnotationResult(
+                index, displayName(annotation, index), annDir, overlays, summary, rx, ry, rw, rh, ds);
         return new OneShotResult(annRes, runId);
     }
 
@@ -842,6 +903,7 @@ public class FiberAnalysisWorkflow {
         m.put("zoneMode", p.zoneMode());
         m.put("useImagePixelSize", p.useImagePixelSize());
         m.put("pixelSizeOverrideUm", p.pixelSizeOverrideUm());
+        m.put("analysisDownsample", p.analysisDownsample());
         m.put("segSource", p.segSource());
         m.put("internalChannel", p.internalChannel());
         m.put("thresholdMethod", p.thresholdMethod());
@@ -1039,18 +1101,22 @@ public class FiberAnalysisWorkflow {
      * This sidesteps GeoJSON serialisation entirely while still respecting concave,
      * curved, and multi-part annotations.
      */
-    static void rasterisePolygonMask(ROI roi, int regionX, int regionY, int regionW, int regionH, Path outputPng)
+    static void rasterisePolygonMask(
+            ROI roi, int regionX, int regionY, int maskW, int maskH, double downsample, Path outputPng)
             throws IOException {
-        BufferedImage mask = new BufferedImage(regionW, regionH, BufferedImage.TYPE_BYTE_GRAY);
+        BufferedImage mask = new BufferedImage(maskW, maskH, BufferedImage.TYPE_BYTE_GRAY);
         Graphics2D g = mask.createGraphics();
         try {
             // Clear to zero (BYTE_GRAY initialises to zero already, but be explicit).
             g.setComposite(AlphaComposite.Src);
             g.setColor(Color.BLACK);
-            g.fillRect(0, 0, regionW, regionH);
+            g.fillRect(0, 0, maskW, maskH);
 
-            // Translate full-image coords -> region-local coords.
-            g.setTransform(AffineTransform.getTranslateInstance(-regionX, -regionY));
+            // Full-image coords -> region-local, then down to the read scale.
+            // Order matters: scale AFTER translating, or the origin shifts too.
+            AffineTransform at = AffineTransform.getScaleInstance(1.0 / downsample, 1.0 / downsample);
+            at.translate(-regionX, -regionY);
+            g.setTransform(at);
 
             // Anti-alias OFF for a crisp binary mask (no anti-aliased grey edges).
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
@@ -1085,7 +1151,8 @@ public class FiberAnalysisWorkflow {
             int annotationIndex,
             String runId,
             String paramsHash,
-            double minWindowCoveragePercent) {
+            double minWindowCoveragePercent,
+            double downsample) {
         List<PathObject> out = new ArrayList<>();
         try (Reader reader = Files.newBufferedReader(windowsJsonPath)) {
             JsonObject root = new Gson().fromJson(reader, JsonObject.class);
@@ -1119,10 +1186,13 @@ public class FiberAnalysisWorkflow {
                         continue;
                     }
                 }
-                int wx = w.get("x").getAsInt() + offsetX;
-                int wy = w.get("y").getAsInt() + offsetY;
-                int ww = w.get("w").getAsInt();
-                int wh = w.get("h").getAsInt();
+                // windows.json is in READ-scale pixels; the offset is in full-image
+                // pixels. Scale before adding, or every window collapses toward
+                // the region origin at anything but downsample 1.
+                int wx = (int) Math.round(w.get("x").getAsInt() * downsample) + offsetX;
+                int wy = (int) Math.round(w.get("y").getAsInt() * downsample) + offsetY;
+                int ww = (int) Math.round(w.get("w").getAsInt() * downsample);
+                int wh = (int) Math.round(w.get("h").getAsInt() * downsample);
 
                 ROI rect = ROIs.createRectangleROI(wx, wy, ww, wh, ImagePlane.getDefaultPlane());
                 PathObject det = PathObjects.createDetectionObject(rect, windowClass);
@@ -1277,6 +1347,10 @@ public class FiberAnalysisWorkflow {
         private ProgressBar mainBar;
         private Label subLabel;
         private ProgressBar subBar;
+        private Label etaLabel;
+        // Set on the FX thread by the Cancel button, polled by the worker.
+        private final java.util.concurrent.atomic.AtomicBoolean cancelled =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
 
         ProgressUi(Window owner, int totalAnnotations) {
             this.headless = !HeadlessFx.isReady();
@@ -1288,6 +1362,8 @@ public class FiberAnalysisWorkflow {
             this.mainBar = new ProgressBar(0);
             this.subLabel = new Label("");
             this.subBar = new ProgressBar();
+            this.etaLabel = new Label("");
+            etaLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
 
             this.stage = new Stage();
             stage.setTitle("Fiber Analysis");
@@ -1301,9 +1377,46 @@ public class FiberAnalysisWorkflow {
             subBar.setPrefWidth(420);
             subBar.setProgress(-1); // indeterminate by default
 
-            VBox root = new VBox(8, mainLabel, mainBar, subLabel, subBar);
+            Button cancelBtn = new Button("Cancel");
+            cancelBtn.setOnAction(e -> {
+                cancelled.set(true);
+                cancelBtn.setDisable(true);
+                mainLabel.setText("Cancelling after the current step...");
+            });
+            HBox cancelRow = new HBox(cancelBtn);
+            cancelRow.setAlignment(Pos.CENTER_RIGHT);
+
+            VBox root = new VBox(8, mainLabel, mainBar, subLabel, subBar, etaLabel, cancelRow);
             root.setPadding(new Insets(12));
             stage.setScene(new Scene(root));
+            // Closing the window is a cancel, not a detach -- otherwise the run
+            // keeps going with no way left to stop it.
+            stage.setOnCloseRequest(e -> cancelled.set(true));
+        }
+
+        /** True once the user asked to stop; workers poll this between units. */
+        boolean isCancelled() {
+            return cancelled.get();
+        }
+
+        /**
+         * Shows unit counts and time left under the sub-bar, and makes the
+         * sub-bar determinate so a long single annotation stops looking hung.
+         *
+         * @param est   estimator driving the numbers
+         * @param units plural noun for the unit, e.g. "tiles"
+         */
+        void setEstimate(ProgressEstimator est, String units) {
+            String text = est.statusText(units);
+            double frac = est.fraction();
+            if (headless) {
+                logger.info("  {}", text);
+                return;
+            }
+            HeadlessFx.runLater(() -> {
+                etaLabel.setText(text);
+                subBar.setProgress(frac);
+            });
         }
 
         void show() {

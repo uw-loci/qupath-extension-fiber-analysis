@@ -97,6 +97,8 @@ public final class FiberAnalysisDialog {
     private RadioButton zoneBoth;
     private CheckBox useImagePixelSizeCheck;
     private Spinner<Double> pixelSizeOverrideSpinner;
+    private Spinner<Double> analysisDownsampleSpinner;
+    private Label regionEstimateLabel;
 
     // -- Section 2 --
     private ToggleGroup segSourceGroup;
@@ -426,6 +428,84 @@ public final class FiberAnalysisDialog {
         }
     }
 
+    /**
+     * Reports the largest region this run will read, at the chosen downsample,
+     * and whether it can be read at all. Java caps a raster at
+     * Integer.MAX_VALUE samples, so an oversized annotation previously spent
+     * minutes inside readRegion before throwing "Dimensions are too large"
+     * with no hint of what to change.
+     */
+    private void refreshRegionEstimate() {
+        if (regionEstimateLabel == null) return;
+        String text;
+        try {
+            text = describeLargestRegion();
+        } catch (Exception ex) {
+            logger.debug("Could not estimate region size: {}", ex.getMessage());
+            text = "";
+        }
+        final String t = text;
+        if (Platform.isFxApplicationThread()) {
+            regionEstimateLabel.setText(t);
+        } else {
+            Platform.runLater(() -> regionEstimateLabel.setText(t));
+        }
+    }
+
+    private String describeLargestRegion() {
+        if (gui == null || gui.getImageData() == null) return "";
+        double pxUm = resolveDialogPixelSizeUm();
+        double downsample = analysisDownsampleSpinner == null ? 1.0 : analysisDownsampleSpinner.getValue();
+        double dilationPx = borderZoneSpinner == null ? 0 : borderZoneSpinner.getValue() / Math.max(pxUm, 1e-9);
+        int pad = (int) Math.ceil(dilationPx) + 5;
+
+        long bestW = 0;
+        long bestH = 0;
+        for (PathObject ann : selectedAnnotations()) {
+            if (ann.getROI() == null) continue;
+            long w = (long) Math.ceil(ann.getROI().getBoundsWidth()) + 2L * pad;
+            long h = (long) Math.ceil(ann.getROI().getBoundsHeight()) + 2L * pad;
+            if (w * h > bestW * bestH) {
+                bestW = w;
+                bestH = h;
+            }
+        }
+        if (bestW <= 0 || bestH <= 0) return "";
+
+        long readW = (long) Math.ceil(bestW / downsample);
+        long readH = (long) Math.ceil(bestH / downsample);
+        long samples = readW * readH;
+        String size = String.format(
+                Locale.ROOT,
+                "Largest region: %,d x %,d px -> reads %,d x %,d (%.1f MP) at downsample %.0f",
+                bestW,
+                bestH,
+                readW,
+                readH,
+                samples / 1e6,
+                downsample);
+        if (samples > Integer.MAX_VALUE) {
+            double needed = Math.ceil(Math.sqrt((double) bestW * bestH / (double) Integer.MAX_VALUE));
+            return size + "  -- TOO LARGE TO READ. Raise the downsample to at least " + (long) needed + ".";
+        }
+        return size + "  (dilation " + pad + " px from a " + String.format(Locale.ROOT, "%.4f", pxUm)
+                + " um/px pixel size)";
+    }
+
+    /** Pixel size the run will use, mirroring resolvePixelSizeUm on the workflow side. */
+    private double resolveDialogPixelSizeUm() {
+        if (useImagePixelSizeCheck != null && !useImagePixelSizeCheck.isSelected()) {
+            return pixelSizeOverrideSpinner.getValue();
+        }
+        try {
+            var cal = gui.getImageData().getServer().getPixelCalibration();
+            if (cal != null && cal.hasPixelSizeMicrons()) return cal.getAveragedPixelSizeMicrons();
+        } catch (Exception ex) {
+            logger.debug("No pixel calibration: {}", ex.getMessage());
+        }
+        return pixelSizeOverrideSpinner == null ? 0.5 : pixelSizeOverrideSpinner.getValue();
+    }
+
     private void refreshSelectionLabel() {
         if (selectionLabel == null) return;
         int selectedCount = selectedAnnotations().size();
@@ -446,6 +526,7 @@ public final class FiberAnalysisDialog {
             selectionListener = (primary, previous, allSelected) -> {
                 refreshSelectionLabel();
                 populateChannelCombo();
+                refreshRegionEstimate();
             };
             h.getSelectionModel().addPathObjectSelectionListener(selectionListener);
             listenerHierarchy = h;
@@ -589,6 +670,30 @@ public final class FiberAnalysisDialog {
         grid.add(overrideLabel, 0, row);
         grid.add(pixelSizeOverrideSpinner, 1, row);
         row++;
+
+        Label downsampleLabel = new Label("Analysis downsample:");
+        analysisDownsampleSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
+                1.0, 64.0, FiberAnalysisPreferences.analysisDownsampleProperty().get(), 1.0));
+        analysisDownsampleSpinner.setEditable(true);
+        applyTooltip(
+                analysisDownsampleSpinner,
+                "Read the region at 1/N resolution. 1 = full resolution. Raising it is the lever for"
+                        + " very large annotations: the pixels read drop by N squared, so 4 turns a"
+                        + " 16-fold-too-big region into one that fits and runs 16x faster. All micron"
+                        + " measurements stay correct -- the effective pixel size is scaled with it --"
+                        + " but fibres thinner than the downsampled pixel are lost, so raise it only"
+                        + " until the preview stops resolving your fibres.");
+        analysisDownsampleSpinner.valueProperty().addListener((o, a, b) -> refreshRegionEstimate());
+        grid.add(downsampleLabel, 0, row);
+        grid.add(analysisDownsampleSpinner, 1, row);
+        row++;
+
+        regionEstimateLabel = new Label("");
+        regionEstimateLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
+        regionEstimateLabel.setWrapText(true);
+        grid.add(regionEstimateLabel, 0, row, 2, 1);
+        row++;
+        refreshRegionEstimate();
 
         return SectionBuilder.createSection("1. Search area", true, grid);
     }
@@ -1599,6 +1704,7 @@ public final class FiberAnalysisDialog {
                 zoneMode,
                 useImagePixelSizeCheck.isSelected(),
                 pixelOverride,
+                analysisDownsampleSpinner.getValue(),
                 // Section 2
                 segSource,
                 internalChannelCombo.getValue(),
@@ -1674,6 +1780,7 @@ public final class FiberAnalysisDialog {
                 .set(zoneInside.isSelected() ? "inside" : zoneBoth.isSelected() ? "both" : "outside");
         FiberAnalysisPreferences.useImagePixelSizeProperty().set(useImagePixelSizeCheck.isSelected());
         FiberAnalysisPreferences.pixelSizeOverrideUmProperty().set(pixelSizeOverrideSpinner.getValue());
+        FiberAnalysisPreferences.analysisDownsampleProperty().set(analysisDownsampleSpinner.getValue());
 
         FiberAnalysisPreferences.segSourceProperty().set(segInternalRadio.isSelected() ? "internal" : "existing");
         FiberAnalysisPreferences.internalChannelProperty().set(internalChannelCombo.getValue());

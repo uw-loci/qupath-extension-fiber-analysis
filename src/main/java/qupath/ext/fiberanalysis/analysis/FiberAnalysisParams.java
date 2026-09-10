@@ -31,6 +31,12 @@ public record FiberAnalysisParams(
         String zoneMode, // "inside" | "outside" | "both"
         boolean useImagePixelSize,
         double pixelSizeOverrideUm,
+        // Region read downsample. 1.0 reads full resolution; higher values read
+        // fewer pixels, which is how an annotation larger than Java's raster
+        // cap becomes analysable at all. Every micron-denominated parameter is
+        // converted using pixelSizeUm * analysisDownsample, so physical
+        // measurements stay correct as this changes.
+        double analysisDownsample,
 
         // Section 2 -- Segmentation
         String segSource, // "internal" | "existing"
@@ -130,6 +136,7 @@ public record FiberAnalysisParams(
                 FiberAnalysisPreferences.zoneModeProperty().get(),
                 FiberAnalysisPreferences.useImagePixelSizeProperty().get(),
                 FiberAnalysisPreferences.pixelSizeOverrideUmProperty().get(),
+                FiberAnalysisPreferences.analysisDownsampleProperty().get(),
                 // Section 2
                 FiberAnalysisPreferences.segSourceProperty().get(),
                 FiberAnalysisPreferences.internalChannelProperty().get(),

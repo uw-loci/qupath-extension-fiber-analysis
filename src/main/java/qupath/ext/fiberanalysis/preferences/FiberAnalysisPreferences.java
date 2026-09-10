@@ -57,6 +57,9 @@ public class FiberAnalysisPreferences {
     public static final boolean DEFAULT_USE_IMAGE_PIXEL_SIZE = true;
     public static final double DEFAULT_PIXEL_SIZE_OVERRIDE_UM = 0.5;
 
+    /** 1.0 = full resolution. Raising it is the user's lever for trading detail against time. */
+    public static final double DEFAULT_ANALYSIS_DOWNSAMPLE = 1.0;
+
     // === Section 2 -- Segmentation ===
     public static final String DEFAULT_SEG_SOURCE = "internal";
     public static final String DEFAULT_INTERNAL_CHANNEL = "Raw intensity";
@@ -149,6 +152,7 @@ public class FiberAnalysisPreferences {
     private static StringProperty zoneMode;
     private static BooleanProperty useImagePixelSize;
     private static DoubleProperty pixelSizeOverrideUm;
+    private static DoubleProperty analysisDownsample;
 
     private static StringProperty segSource;
     private static StringProperty internalChannel;
@@ -233,6 +237,8 @@ public class FiberAnalysisPreferences {
                 PathPrefs.createPersistentPreference(PREFIX + "useImagePixelSize", DEFAULT_USE_IMAGE_PIXEL_SIZE);
         pixelSizeOverrideUm =
                 PathPrefs.createPersistentPreference(PREFIX + "pixelSizeOverrideUm", DEFAULT_PIXEL_SIZE_OVERRIDE_UM);
+        analysisDownsample =
+                PathPrefs.createPersistentPreference(PREFIX + "analysisDownsample", DEFAULT_ANALYSIS_DOWNSAMPLE);
 
         segSource = PathPrefs.createPersistentPreference(PREFIX + "segSource", DEFAULT_SEG_SOURCE);
         internalChannel = PathPrefs.createPersistentPreference(PREFIX + "internalChannel", DEFAULT_INTERNAL_CHANNEL);
@@ -332,6 +338,10 @@ public class FiberAnalysisPreferences {
 
     public static DoubleProperty pixelSizeOverrideUmProperty() {
         return pixelSizeOverrideUm;
+    }
+
+    public static DoubleProperty analysisDownsampleProperty() {
+        return analysisDownsample;
     }
 
     public static StringProperty segSourceProperty() {

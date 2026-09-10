@@ -26,8 +26,11 @@ import java.util.Map;
  *                         (e.g. {@code "straightness.mean_tortuosity"} -> 1.18)
  * @param regionOffsetX    image-coordinate X offset of the analysed region
  * @param regionOffsetY    image-coordinate Y offset of the analysed region
- * @param regionW          width of the analysed region in pixels
- * @param regionH          height of the analysed region in pixels
+ * @param regionW          width of the analysed region in FULL-image pixels
+ * @param regionH          height of the analysed region in FULL-image pixels
+ * @param downsample       scale the region was READ at; region-local pixel
+ *                         coordinates must be multiplied by this to land back
+ *                         in image coordinates
  */
 public record AnnotationResult(
         int index,
@@ -38,4 +41,5 @@ public record AnnotationResult(
         int regionOffsetX,
         int regionOffsetY,
         int regionW,
-        int regionH) {}
+        int regionH,
+        double downsample) {}

@@ -108,6 +108,7 @@ at-a-glance reference.
 | Zone mode | 1. Search area | outside | -- | Which side of the boundary to analyse (inside / outside / both). |
 | Use image pixel size | 1. Search area | checked | -- | Read pixel size from the QuPath image; uncheck to override. |
 | Override pixel size | 1. Search area | 0.5 | um/px | Forced pixel size when the image has no calibration (enabled only when "Use image pixel size" is off). |
+| Analysis downsample | 1. Search area | 1.0 | -- | Read the region at 1/N resolution. Pixels read fall by N squared, which is what makes an annotation larger than Java's raster cap analysable. Micron measurements stay correct (the effective pixel size is scaled with it); fibres thinner than the downsampled pixel are lost. |
 | Source (segmentation) | 2. Fiber segmentation | Segment within extension | -- | Internal segmenter vs. consume an existing fiber mask. |
 | Source channel | 2. Fiber segmentation | Value (HSV) | -- | Scalar channel the internal segmenter operates on: Raw intensity / Hue / Saturation / Value derived from RGB, or one of the image's own channels by name. Naming a channel sends that single band, which is what lets a 16-bit source keep its full precision. |
 | Threshold method | 2. Fiber segmentation | Otsu | -- | Threshold algorithm applied to the source channel (Otsu / Triangle / Manual). |

@@ -63,6 +63,8 @@ final class CollagenObjectBuilder {
      * @param maskPng        path to fiber_mask_overlay.png
      * @param regionOffsetX  region X offset in image-pixel coordinates
      * @param regionOffsetY  region Y offset in image-pixel coordinates
+     * @param downsample     scale the mask was produced at; mask pixels are
+     *                       multiplied by this to reach image coordinates
      * @param annotationIndex 0-based annotation index in the run (for measurement provenance)
      * @param runId          Python-generated UUID for this annotation run
      * @param paramsHash     parameters hash for this run
@@ -79,7 +81,8 @@ final class CollagenObjectBuilder {
             String runId,
             String paramsHash,
             double pixelSizeUm,
-            double minAreaUm2) {
+            double minAreaUm2,
+            double downsample) {
 
         BufferedImage img;
         try {
@@ -115,7 +118,13 @@ final class CollagenObjectBuilder {
         SimpleImage simple = SimpleImages.createFloatImage(alpha, w, h);
 
         ImageServer<BufferedImage> server = imageData.getServer();
-        RegionRequest request = RegionRequest.createInstance(server.getPath(), 1.0, regionOffsetX, regionOffsetY, w, h);
+        // ContourTracing maps mask pixels to image pixels through this request,
+        // so giving it the read downsample and the FULL-image extent scales the
+        // traced ROIs for free. Hardcoding 1.0 here would pin every collagen
+        // detection to the top-left 1/downsample of the annotation.
+        RegionRequest request = RegionRequest.createInstance(
+                server.getPath(), downsample, regionOffsetX, regionOffsetY, (int) Math.round(w * downsample), (int)
+                        Math.round(h * downsample));
         ROI traced = ContourTracing.createTracedROI(simple, ALPHA_THRESHOLD, Double.POSITIVE_INFINITY, request);
         if (traced == null || traced.isEmpty()) {
             return Collections.emptyList();

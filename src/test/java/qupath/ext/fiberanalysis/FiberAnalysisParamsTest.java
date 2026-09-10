@@ -32,7 +32,7 @@ class FiberAnalysisParamsTest {
     @Test
     void recordHasExpectedComponentCount() {
         RecordComponent[] components = FiberAnalysisParams.class.getRecordComponents();
-        assertThat(components).hasSize(60);
+        assertThat(components).hasSize(61);
     }
 
     @Test
