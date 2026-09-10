@@ -87,34 +87,40 @@ try:
                 continue
 
             scalar = seg.pick_channel(rgb, chan)
-            if rf != "none":
+            response = rf in seg._RIDGE_FILTERS
+            if response:
                 # Match the run-path polarity choice: invert -> black ridges.
                 scalar = seg.apply_ridge_filter(scalar, rf, smin, smax, sstep, black_ridges=invert)
-
-            # Normalise to [0, 1] for a stable 256-bin histogram regardless of
-            # source bit depth (8/16/float). Matches the run-path normalisation
-            # in segment_internal so the calibrated threshold transfers cleanly.
-            mn = float(scalar.min())
-            mx = float(scalar.max())
-            if mx - mn < 1e-12:
-                logger.info("Skipping %s: flat scalar (min==max==%f)", p, mn)
-                continue
-            normed = (scalar - mn) / (mx - mn + 1e-12)
+                # A vesselness response has no image units, so the only stable
+                # 256-bin range is the region's own. Matches segment_internal.
+                mn = float(scalar.min())
+                mx = float(scalar.max())
+                if mx - mn < 1e-12:
+                    logger.info("Skipping %s: flat response (min==max==%f)", p, mn)
+                    continue
+                normed = (scalar - mn) / (mx - mn + 1e-12)
+            else:
+                # pick_channel already put the scalar on an ABSOLUTE [0,1] by bit
+                # depth. Stretching each region here would give every region its
+                # own scale -- the per-region adaptivity this calibration exists
+                # to remove -- and would not transfer to a run path that no
+                # longer stretches.
+                normed = scalar
 
             if invert:
                 normed = 1.0 - normed
 
             if rb_radius > 0:
-                # Rolling-ball background subtraction on the normalised scalar.
-                # skimage's white_tophat is the morphological equivalent and is
-                # faster than the literal rolling-ball implementation.
+                # Rolling-ball background subtraction. skimage's white_tophat is
+                # the morphological equivalent and is faster than the literal
+                # rolling-ball implementation.
                 try:
                     from skimage.morphology import white_tophat, disk
-                    bg_removed = white_tophat(normed, footprint=disk(rb_radius))
-                    # Re-normalise the result so the histogram still spans [0,1].
-                    m = float(bg_removed.max())
-                    if m > 1e-12:
-                        normed = bg_removed / m
+                    normed = white_tophat(normed, footprint=disk(rb_radius))
+                    if response:
+                        m = float(normed.max())
+                        if m > 1e-12:
+                            normed = normed / m
                 except Exception as exc:
                     logger.warning("Rolling-ball failed on %s: %s -- using raw scalar", p, exc)
 

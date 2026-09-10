@@ -263,13 +263,30 @@ disabled mode's controls stay visible but greyed.
 projected onto a scalar **source channel** (Value of HSV by default,
 or Raw intensity / Hue / Saturation / Value / a named channel), then
 thresholded with **Otsu**, **Triangle**, or **Manual** at a chosen
-gray level. Optionally a **ridge filter** (Frangi, Sato, or
+gray level. The manual cutoff is in the source image's **own gray
+levels**, so on a single-channel 16-bit image the spinner runs
+0-65535 and typing 4500 cuts at 4500 -- in every region and every
+image, not rescaled to each region's brightest and darkest pixel.
+Optionally a **ridge filter** (Frangi, Sato, or
 Meijering from scikit-image) runs first across a configurable
 **sigma range** (default 1-4 px, step 1) to enhance line-like
 structures before the threshold. The thresholded mask is then
 cleaned: `binary_closing` to bridge 1-px gaps, then
 `remove_small_objects` at the **Min fiber area** (default 50 px).
 The clean mask is the fiber segmentation.
+
+Two limits worth knowing before choosing Manual:
+
+- A **ridge filter changes what the number means.** A vesselness
+  response carries no image units, so with Frangi / Sato / Meijering
+  selected the manual value is read as that same fraction of full
+  scale (4500 of 65535 = 6.9%) of the response's own range. Otsu and
+  Triangle are unaffected either way.
+- A **multi-channel 16-bit source reaches the segmenter as 8-bit.**
+  Regions are handed to Python as PNG, and PIL has no 16-bit colour
+  mode, so a 16-bit RGB region is truncated on load (raw 4500 arrives
+  as 17). The spinner caps at 255 for those images to match what the
+  segmenter can actually see. Single-channel 16-bit survives intact.
 
 Practical guidance for mode A:
 

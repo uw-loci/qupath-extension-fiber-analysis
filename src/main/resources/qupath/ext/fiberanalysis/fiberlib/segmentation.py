@@ -33,6 +33,10 @@ from skimage.color import rgb2hsv
 
 logger = logging.getLogger("fiber.segmentation")
 
+# Ridge filters whose output is a vesselness RESPONSE rather than image
+# intensity. segment_internal keys its scaling contract off this set.
+_RIDGE_FILTERS = ("frangi", "sato", "meijering")
+
 
 # ---- channel pick -----------------------------------------------------------
 
@@ -94,6 +98,35 @@ def _scale_to_unit(arr):
     return af
 
 
+def full_scale(image):
+    """Return the divisor that puts ``image``'s dtype onto [0, 1].
+
+    Mirrors :func:`_scale_to_unit`, and is what a manual threshold entered in
+    the image's own gray levels must be divided by. Note PIL delivers a 16-bit
+    RGB PNG as uint8, so a colour source is 255 here even when the slide is
+    16-bit; the mask is built from what actually arrived, not from the
+    server's advertised bit depth.
+
+    Args:
+        image: the source array as loaded.
+
+    Returns:
+        255.0 for uint8, 65535.0 for uint16, 1.0 otherwise (those are min-max
+        scaled into [0, 1] by :func:`_scale_to_unit`).
+    """
+    a = np.asarray(image)
+    if a.dtype == np.uint8:
+        return 255.0
+    if a.dtype == np.uint16:
+        return 65535.0
+    logger.info(
+        "Source dtype %s is min-max scaled into [0,1]; manual threshold is a "
+        "fraction of that range, not a gray level",
+        a.dtype,
+    )
+    return 1.0
+
+
 # ---- ridge / vesselness filter ---------------------------------------------
 
 def apply_ridge_filter(image_scalar, name, sigma_min, sigma_max, sigma_step, black_ridges=False):
@@ -111,7 +144,9 @@ def apply_ridge_filter(image_scalar, name, sigma_min, sigma_max, sigma_step, bla
     Pass name='none' to skip; the caller falls through to the bare scalar.
     """
     name = (name or "none").lower()
-    if name == "none":
+    if name not in _RIDGE_FILTERS:
+        if name != "none":
+            logger.warning("Unknown ridge filter %r -- skipping", name)
         return image_scalar
 
     sigmas = []
@@ -128,26 +163,26 @@ def apply_ridge_filter(image_scalar, name, sigma_min, sigma_max, sigma_step, bla
         return skfilters.frangi(image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges))
     if name == "sato":
         return skfilters.sato(image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges))
-    if name == "meijering":
-        return skfilters.meijering(image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges))
-    logger.warning("Unknown ridge filter %r -- skipping", name)
-    return image_scalar
+    return skfilters.meijering(image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges))
 
 
 # ---- thresholding ----------------------------------------------------------
 
-def threshold_scalar(arr, method, manual_threshold, project_threshold_norm=None):
+def threshold_scalar(arr, method, manual_threshold, project_threshold_norm=None, manual_full_scale=255.0):
     """Pick a threshold and return a boolean foreground mask.
 
     Parameters:
-        arr:                 scalar image already normalised into [0, 1].
+        arr:                 scalar image on [0, 1].
         method:              'otsu' (per-region) | 'triangle' | 'manual' |
                              'project_otsu' (use the pre-computed project value).
-        manual_threshold:    0-255 cut-off interpreted on [0,1] (divide by 255).
+        manual_threshold:    cut-off in the source image's own gray levels,
+                             divided by ``manual_full_scale`` to land on [0,1].
         project_threshold_norm:
                              the calibrated [0,1] threshold from a prior
                              project-calibration pass. Required when method ==
                              'project_otsu'; ignored otherwise.
+        manual_full_scale:   divisor for ``manual_threshold``; see
+                             :func:`full_scale`.
     """
     method = (method or "otsu").lower()
     if method == "otsu":
@@ -155,7 +190,7 @@ def threshold_scalar(arr, method, manual_threshold, project_threshold_norm=None)
     elif method == "triangle":
         t = skfilters.threshold_triangle(arr)
     elif method == "manual":
-        t = float(manual_threshold) / 255.0
+        t = float(manual_threshold) / float(manual_full_scale)
     elif method == "project_otsu":
         if project_threshold_norm is None:
             logger.warning(
@@ -167,6 +202,15 @@ def threshold_scalar(arr, method, manual_threshold, project_threshold_norm=None)
     else:
         logger.warning("Unknown threshold method %r -- falling back to Otsu", method)
         t = skfilters.threshold_otsu(arr)
+    # Otsu / triangle / project_otsu resolve at runtime, so this is the only
+    # record of what a given run actually cut at.
+    logger.info(
+        "Threshold %s resolved to %.6f on [0,1] (= %.1f of full scale %.0f)",
+        method,
+        t,
+        t * float(manual_full_scale),
+        float(manual_full_scale),
+    )
     return arr >= t
 
 
@@ -197,6 +241,14 @@ def segment_internal(
 
     ``project_threshold_norm`` is the calibrated [0,1] threshold from a prior
     project-calibration pass; required when threshold_method == 'project_otsu'.
+
+    Scale contract: with no ridge filter the scalar keeps the source image's
+    absolute scale, so ``manual_threshold`` is a gray level in the image's own
+    units and a calibrated threshold is comparable across the project. A ridge
+    filter's response has no image units, so that branch min-max stretches the
+    region and both thresholds become a fraction of the response range. Otsu
+    and triangle are unaffected either way -- a min-max stretch is affine, so
+    it maps their threshold without moving the partition.
     """
     scalar = pick_channel(image, channel)
     # Ridge polarity: when invert_intensity is True we're segmenting a DAB-
@@ -205,8 +257,13 @@ def segment_internal(
     enhanced = apply_ridge_filter(
         scalar, ridge_filter, sigma_min, sigma_max, sigma_step, black_ridges=bool(invert_intensity)
     )
-    # Normalise to [0,1] before thresholding for consistent manual behaviour.
-    if enhanced.max() > enhanced.min():
+    response = str(ridge_filter or "none").lower() in _RIDGE_FILTERS
+    # One arithmetic rule either way: manual_threshold / manual_full_scale is
+    # the cut on [0,1]. Without a ridge filter that is an absolute gray level;
+    # with one it is that same fraction of the response's own range.
+    manual_full_scale = full_scale(image)
+
+    if response and enhanced.max() > enhanced.min():
         normed = (enhanced - enhanced.min()) / (enhanced.max() - enhanced.min() + 1e-12)
     else:
         normed = enhanced
@@ -217,14 +274,19 @@ def segment_internal(
     if rolling_ball_radius and rolling_ball_radius > 0:
         try:
             from skimage.morphology import white_tophat, disk
-            bg_removed = white_tophat(normed, footprint=disk(int(rolling_ball_radius)))
-            m = float(bg_removed.max())
-            if m > 1e-12:
-                normed = bg_removed / m
+            normed = white_tophat(normed, footprint=disk(int(rolling_ball_radius)))
+            # Only a response is safe to rescale -- doing it on the absolute
+            # scalar would put the gray levels back on a per-region scale.
+            if response:
+                m = float(normed.max())
+                if m > 1e-12:
+                    normed = normed / m
         except Exception as exc:
             logger.warning("Rolling-ball failed: %s -- using raw scalar", exc)
 
-    mask = threshold_scalar(normed, threshold_method, manual_threshold, project_threshold_norm)
+    mask = threshold_scalar(
+        normed, threshold_method, manual_threshold, project_threshold_norm, manual_full_scale
+    )
     mask = skmorph.binary_closing(mask, footprint=skmorph.disk(1))
     if min_fiber_area_px > 0:
         mask = skmorph.remove_small_objects(mask, min_size=int(min_fiber_area_px))

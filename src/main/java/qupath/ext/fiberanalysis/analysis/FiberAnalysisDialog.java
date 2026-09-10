@@ -105,6 +105,7 @@ public final class FiberAnalysisDialog {
     private ComboBox<String> internalChannelCombo;
     private ComboBox<String> thresholdMethodCombo;
     private Spinner<Integer> manualThresholdSpinner;
+    private Label manualThreshLabel;
     private ComboBox<String> ridgeFilterCombo;
     private Spinner<Double> sigmaMinSpinner;
     private Spinner<Double> sigmaMaxSpinner;
@@ -374,6 +375,49 @@ public final class FiberAnalysisDialog {
         return box;
     }
 
+    /**
+     * Upper bound for the manual threshold: the largest value the segmenter can
+     * actually see for the current image.
+     *
+     * <p>This is the bit depth that survives the region PNG round-trip, not the
+     * server's advertised depth. PIL has no 16-bit RGB mode, so a multi-channel
+     * 16-bit source reaches the segmenter as 8-bit and its usable range really
+     * is 0-255.
+     *
+     * @return 65535 for single-channel 16-bit sources, else 255
+     */
+    private int sourceFullScale() {
+        try {
+            if (gui == null || gui.getImageData() == null) return 255;
+            var server = gui.getImageData().getServer();
+            if (server == null || server.isRGB()) return 255;
+            if (server.getPixelType() == qupath.lib.images.servers.PixelType.UINT16 && server.nChannels() == 1) {
+                return 65535;
+            }
+        } catch (Exception ex) {
+            logger.debug("Could not read pixel type: {}", ex.getMessage());
+        }
+        return 255;
+    }
+
+    /**
+     * Points the manual-threshold spinner and its label at the current image's
+     * usable range. Called at build time and whenever the selection refreshes,
+     * so switching images does not leave a 16-bit bound on an 8-bit image.
+     */
+    private void refreshManualThresholdRange() {
+        if (manualThresholdSpinner == null) return;
+        int max = sourceFullScale();
+        var factory = (SpinnerValueFactory.IntegerSpinnerValueFactory) manualThresholdSpinner.getValueFactory();
+        factory.setMax(max);
+        if (manualThresholdSpinner.getValue() != null && manualThresholdSpinner.getValue() > max) {
+            factory.setValue(max);
+        }
+        if (manualThreshLabel != null) {
+            manualThreshLabel.setText("Manual threshold (0-" + max + "):");
+        }
+    }
+
     private void refreshSelectionLabel() {
         if (selectionLabel == null) return;
         int selectedCount = selectedAnnotations().size();
@@ -391,7 +435,10 @@ public final class FiberAnalysisDialog {
             PathObjectHierarchy h = gui.getImageData().getHierarchy();
             if (h == null) return;
             // Class field so detach can use the same reference.
-            selectionListener = (primary, previous, allSelected) -> refreshSelectionLabel();
+            selectionListener = (primary, previous, allSelected) -> {
+                refreshSelectionLabel();
+                refreshManualThresholdRange();
+            };
             h.getSelectionModel().addPathObjectSelectionListener(selectionListener);
             listenerHierarchy = h;
         } catch (Exception ex) {
@@ -623,14 +670,22 @@ public final class FiberAnalysisDialog {
         row++;
         populateCalibrationCombo();
 
-        Label manualThreshLabel = new Label("Manual threshold (0-255):");
+        manualThreshLabel = new Label("Manual threshold:");
         manualThreshLabel.setStyle(INDENT_STYLE);
         manualThresholdSpinner = new Spinner<>(new SpinnerValueFactory.IntegerSpinnerValueFactory(
-                0, 255, FiberAnalysisPreferences.manualThresholdProperty().get(), 1));
+                0,
+                sourceFullScale(),
+                FiberAnalysisPreferences.manualThresholdProperty().get(),
+                1));
         manualThresholdSpinner.setEditable(true);
         applyTooltip(
                 manualThresholdSpinner,
-                "Manual cutoff on the 0-255 source channel. Pixels at or above this become fiber.");
+                "Cutoff in the source image's own gray levels -- on a 16-bit image type 4500 to cut at"
+                        + " 4500. Pixels at or above this become fiber. The same value means the same"
+                        + " brightness in every region and every image.\n\nWith a ridge filter selected the"
+                        + " filter response has no image units, so the value is read as that same fraction"
+                        + " of full scale (4500 of 65535 = 6.9%) of the response's own range.");
+        refreshManualThresholdRange();
         BooleanBinding manualDisabled = thresholdMethodCombo.valueProperty().isNotEqualTo("Manual");
         manualThreshLabel.disableProperty().bind(manualDisabled);
         manualThresholdSpinner.disableProperty().bind(manualDisabled);

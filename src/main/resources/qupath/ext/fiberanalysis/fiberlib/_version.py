@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -67,3 +67,24 @@ __version__ = "0.2.5"
 #     uses raw integer n_pixels / n_fibers grids which stay 0 in empty
 #     corners. The same zone gate now applies to the legacy
 #     morphometrics_overlay.png (HDM) too.
+#
+# 0.2.6 (2026-09-10):
+#   - segmentation.py segment_internal: the per-region min-max stretch now runs
+#     ONLY when a ridge filter produced a response. It previously ran always,
+#     including with ridge_filter='none', which undid the absolute bit-depth
+#     scaling pick_channel had just applied. A manual threshold was therefore a
+#     percentile of each region's own dynamic range, not a gray level: the same
+#     setting of 128 cut at raw 32896, 6124 and 6012 in three 16-bit regions
+#     differing only in range. Manual is now an absolute cut in the source
+#     image's own gray levels (4500 cuts at 4500, every region, every image).
+#     Otsu / triangle are unaffected -- a min-max stretch is affine, so it moved
+#     their threshold without moving the partition. threshold_scalar takes the
+#     divisor as manual_full_scale; new full_scale() mirrors _scale_to_unit.
+#     Rolling-ball no longer rescales by its own max on the absolute path.
+#   - scripts/calibrate_threshold.py: same change, and it matters more here --
+#     min-max stretching EACH region before pooling the histogram gave every
+#     region its own scale, which is precisely the per-region adaptivity the
+#     project calibration exists to remove. The pooled histogram is now a real
+#     project-wide absolute one when no ridge filter is in play.
+#   - segmentation.py: resolved threshold logged at INFO for every method, so
+#     an otsu / triangle / project_otsu run records what it actually cut at.

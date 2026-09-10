@@ -31,7 +31,8 @@ Inputs (Appose 0.10+ injected as variables):
   Segmentation
     seg_channel              : str   'Value (HSV)', 'Raw intensity', etc.
     threshold_method         : str   'otsu' | 'triangle' | 'manual' | 'project_otsu'
-    manual_threshold         : int   0-255 (used only when method == 'manual')
+    manual_threshold         : int   cut-off in the source image's own gray
+                                     levels (used only when method == 'manual')
     project_threshold_norm   : float|None   threshold in normalised [0,1] space
                                               for the project_otsu method
     ridge_filter             : str   'none' | 'frangi' | 'sato' | 'meijering'

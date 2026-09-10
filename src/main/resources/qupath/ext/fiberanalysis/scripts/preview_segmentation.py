@@ -9,7 +9,8 @@ Inputs (injected by Appose as Python variables):
                                         the Java side just wrote
     seg_channel           : str        same as the main run
     threshold_method      : str        'otsu' | 'triangle' | 'manual' | 'project_otsu'
-    manual_threshold      : int        0-255 (only used when threshold_method == 'manual')
+    manual_threshold      : int        cut-off in the source image's own gray levels
+                                        (only used when threshold_method == 'manual')
     project_threshold_norm: float|None [0,1] calibrated threshold (only used when
                                         threshold_method == 'project_otsu')
     ridge_filter          : str        'none' | 'frangi' | 'sato' | 'meijering'

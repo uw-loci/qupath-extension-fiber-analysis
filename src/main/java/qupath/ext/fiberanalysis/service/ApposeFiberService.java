@@ -79,7 +79,7 @@ public class ApposeFiberService {
      * to this string on init; mismatch triggers a re-extraction of the bundled
      * package over the on-disk copy.
      */
-    public static final String REQUIRED_FIBERLIB_VERSION = "0.2.5";
+    public static final String REQUIRED_FIBERLIB_VERSION = "0.2.6";
 
     private static ApposeFiberService instance;
 
