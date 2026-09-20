@@ -782,29 +782,87 @@ public class FiberAnalysisWorkflow {
     }
 
     /**
-     * Combines per-tile scalar summaries, weighting each tile by the number of
-     * windows it contributed so a sliver tile does not count as much as a full
-     * one. Per-fibre quantities are approximations here -- see
-     * {@link #runTiled}.
+     * Annotation-level scalars that are ADDITIVE over area, so tiles must be
+     * summed. Averaging these reports roughly 1/N of the truth on an N-tile
+     * run -- a 112-tile slide would return a total skeleton length of about
+     * 1/112 of the real one. Emitters: pipeline.py:491-501 (pixel counts and
+     * areas) and :533-539 (length, branch points, endpoints).
+     */
+    private static final Set<String> ADDITIVE_TILE_SCALARS = Set.of(
+            "fiber_pixels",
+            "zone_pixels",
+            "fiber_in_zone_pixels",
+            "zone_area_um2",
+            "fiber_in_zone_area_um2",
+            "morphometrics.total_length_px",
+            "morphometrics.total_length_um",
+            "morphometrics.branch_points",
+            "morphometrics.endpoints");
+
+    /**
+     * Scalars that cannot be combined across tiles from the tile summaries
+     * alone, and are therefore OMITTED from a tiled run rather than
+     * approximated.
+     *
+     * <p>Angles here are axial (0-180), so an arithmetic mean crosses the wrap:
+     * 179 deg and 1 deg average to 90 deg when the answer is 0 deg. Combining
+     * them needs the per-tile vector sums on 2*theta, which the scalar summary
+     * does not carry. Fractal dimension is not an average either -- D of the
+     * union is not the mean of per-tile D.
+     */
+    private static final Set<String> UNCOMBINABLE_TILE_SCALARS =
+            Set.of("morphometrics.fractal_dimension", "straightness.radon.theta_star_deg");
+
+    /**
+     * Combines per-tile scalar summaries.
+     *
+     * <p>Additive keys are summed; angular and non-linear keys are dropped; the
+     * rest are averaged weighted by the windows each tile contributed, so a
+     * sliver tile does not count as much as a full one.
+     *
+     * <p>Dropping beats approximating here. These numbers end up in papers, and
+     * a silently wrong total is worse than an absent one -- the caller can see
+     * a missing key, but cannot see a total that is 1/N of the truth.
+     *
+     * @param tileScalars per-tile flattened scalar summaries
+     * @param weights     windows contributed by each tile, index-aligned
+     * @return the merged summary; omitted keys are listed at INFO
      */
     private static Map<String, Double> aggregateTileScalars(
             List<Map<String, Double>> tileScalars, List<Integer> weights) {
-        Map<String, Double> weighted = new LinkedHashMap<>();
+        Map<String, Double> sums = new LinkedHashMap<>();
+        Map<String, Double> weightedSums = new LinkedHashMap<>();
         Map<String, Double> totalWeight = new LinkedHashMap<>();
+        Set<String> dropped = new java.util.TreeSet<>();
+
         for (int i = 0; i < tileScalars.size(); i++) {
             double wgt = i < weights.size() ? Math.max(0, weights.get(i)) : 0;
             if (wgt <= 0) continue;
             for (Map.Entry<String, Double> e : tileScalars.get(i).entrySet()) {
+                String key = e.getKey();
                 Double v = e.getValue();
                 if (v == null || v.isNaN() || v.isInfinite()) continue;
-                weighted.merge(e.getKey(), v * wgt, Double::sum);
-                totalWeight.merge(e.getKey(), wgt, Double::sum);
+                if (UNCOMBINABLE_TILE_SCALARS.contains(key) || key.endsWith("_deg")) {
+                    dropped.add(key);
+                } else if (ADDITIVE_TILE_SCALARS.contains(key)) {
+                    sums.merge(key, v, Double::sum);
+                } else {
+                    weightedSums.merge(key, v * wgt, Double::sum);
+                    totalWeight.merge(key, wgt, Double::sum);
+                }
             }
         }
-        Map<String, Double> out = new LinkedHashMap<>();
-        for (Map.Entry<String, Double> e : weighted.entrySet()) {
+
+        Map<String, Double> out = new LinkedHashMap<>(sums);
+        for (Map.Entry<String, Double> e : weightedSums.entrySet()) {
             double tw = totalWeight.getOrDefault(e.getKey(), 0.0);
             if (tw > 0) out.put(e.getKey(), e.getValue() / tw);
+        }
+        if (!dropped.isEmpty()) {
+            logger.info(
+                    "Tiled run: omitted {} scalar(s) that cannot be combined across tiles: {}",
+                    dropped.size(),
+                    String.join(", ", dropped));
         }
         return out;
     }
