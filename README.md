@@ -55,6 +55,9 @@ project metadata, or UI surfaces are being replaced.
 
 ## What the analyses tell you
 
+<details>
+<summary><strong>What each analysis family measures</strong></summary>
+
 The three metric families run over a dilated border zone around the
 annotation. The example below inspects a region about 120 microns wide
 and shows, left to right, the segmented fiber mask, a morphometrics
@@ -93,7 +96,12 @@ set (Aerts et al. 2014, *Nat Commun* 5:4006). True-3D / volumetric
 texture is out of scope -- our data are 2-D; only the feature math
 transfers.
 
+</details>
+
 ## Parameters
+
+<details>
+<summary><strong>The parameter table</strong></summary>
 
 Every dialog control is listed below in dialog order. The user guide
 ([`documentation/fiber-analysis.md`](documentation/fiber-analysis.md))
@@ -159,7 +167,12 @@ at-a-glance reference.
 | Write results.json sidecar | 7. Output | checked | -- | Write the full per-annotation result dictionary as results.json. |
 | Add per-window detection objects to hierarchy | 7. Output | mirrors Section 3 | -- | Read-only mirror of the Section 3 toggle so the output side effect is visible. |
 
+</details>
+
 ## Outputs
+
+<details>
+<summary><strong>Files written by a run</strong></summary>
 
 Each analysed annotation gets its own subfolder under the output
 directory. Filenames are ASCII; conventions parallel PPM's
@@ -202,7 +215,12 @@ Optional **per-window PathObjects** are added only when "Create
 per-window detection objects" is on in Section 3. A 50 x 50 grid =
 2500 objects; the toggle is off by default.
 
+</details>
+
 ## Reproducing a run from disk
+
+<details>
+<summary><strong>Re-running from params.json</strong></summary>
 
 Every file-producing analysis drops three companion artifacts next to its
 outputs:
@@ -236,7 +254,12 @@ write time. If you move the project to a different machine or path, open
 the `.groovy` file and adjust the `projectPath` (and `imageName(s)`) at the
 top of the file.
 
+</details>
+
 ## Project density map (WSI scale)
+
+<details>
+<summary><strong>The whole-slide density-map workflow</strong></summary>
 
 A separate workflow for **whole-slide density-map output**: tile-streams
 each selected image, runs the same per-window analysis the regular
@@ -343,7 +366,12 @@ yourself.
 - **Channel set is fixed** (the 7 above). Per-channel toggles in
   the dialog are a follow-up; for now every run writes all 7.
 
+</details>
+
 ## Troubleshooting
+
+<details>
+<summary><strong>Common problems and what to do about them</strong></summary>
 
 ### "Show fiber mask" -- what the magenta overlay should look like
 
@@ -469,6 +497,8 @@ Three checks:
 3. Did the object's bbox overlap any non-no-data sidecar pixels?
    Empty regions of the slide are all-zero in the sidecar; sampling
    over a region with no fiber returns NaN for every channel.
+
+</details>
 
 ## Caveats
 
