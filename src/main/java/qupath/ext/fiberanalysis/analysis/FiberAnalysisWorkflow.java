@@ -1699,7 +1699,7 @@ public class FiberAnalysisWorkflow {
             etaLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
 
             this.stage = new Stage();
-            stage.setTitle("Fiber Analysis");
+            stage.setTitle("Fiber Analysis - Progress");
             stage.initModality(Modality.NONE);
             if (owner != null) {
                 stage.initOwner(owner);

@@ -862,7 +862,7 @@ public final class FiberDensityMapWorkflow {
             this.subBar = new ProgressBar();
 
             this.stage = new Stage();
-            stage.setTitle("Fiber density map");
+            stage.setTitle("Fiber density map - Progress");
             stage.initModality(Modality.NONE);
             if (owner != null) stage.initOwner(owner);
             stage.setResizable(false);
