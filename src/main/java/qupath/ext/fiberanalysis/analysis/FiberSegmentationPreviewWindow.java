@@ -159,10 +159,9 @@ final class FiberSegmentationPreviewWindow {
                         "Re-run the preview whenever a Section 2 setting or Region size changes. Panning or zooming does not trigger it; click Refresh after moving."));
 
         Button refreshBtn = new Button("Refresh");
-        refreshBtn.setTooltip(new Tooltip("Re-read the current region from the viewer and re-run segmentation\n"
-                + "with the current dialog settings. Use this after panning /\n"
-                + "zooming the QuPath viewer (those don't auto-refresh) or when\n"
-                + "Auto-refresh is OFF."));
+        refreshBtn.setTooltip(
+                new Tooltip(
+                        "Re-read the region from the viewer and segment it again. Needed after panning or zooming, which do not refresh on their own."));
         refreshBtn.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         autoCheck.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
 

@@ -562,9 +562,7 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.searchAreaProperty().get()));
         applyTooltip(
                 searchAreaCombo,
-                "Which annotations to analyse. 'Selected annotations' uses your current viewer selection;"
-                        + " 'All annotations in image' includes every annotation on the current image;"
-                        + " 'Annotations of class...' filters by the class names you enter below.");
+                "Which annotations to analyze. 'Annotations of class...' uses the classes checked below.");
         grid.add(searchAreaLabel, 0, row);
         grid.add(searchAreaCombo, 1, row);
         row++;
@@ -764,9 +762,7 @@ public final class FiberAnalysisDialog {
         calibrationCombo.setMaxWidth(Double.MAX_VALUE);
         applyTooltip(
                 calibrationCombo,
-                "Which named calibration to use for 'Project Otsu (calibrated)'. Calibrations are"
-                        + " saved under <project>/fiber-analysis/calibration_<name>.json by the"
-                        + " 'Calibrate threshold...' button in the batch dialog.");
+                "Which saved calibration to apply. Create one with Calibrate threshold... in Run on project images...");
         Button calRefreshBtn = new Button("Refresh");
         calRefreshBtn.setOnAction(e -> populateCalibrationCombo());
         BooleanBinding calDisabled = thresholdMethodCombo.valueProperty().isNotEqualTo("Project Otsu (calibrated)");
@@ -899,9 +895,9 @@ public final class FiberAnalysisDialog {
         // per-annotation analysis run.
         Button previewBtn = new Button("Preview segmentation...");
         previewBtn.setTooltip(
-                installDelay(new Tooltip("Open a live preview window. Reads a small region around the viewer center"
-                        + " (or selected annotation) and shows the magenta fiber-mask overlay using"
-                        + " the current Section 2 settings. Updates as you change spinners.")));
+                installDelay(
+                        new Tooltip(
+                                "Segment a small region around the viewer center with the current Section 2 settings and show the mask in magenta.")));
         previewBtn.setOnAction(e -> FiberSegmentationPreviewWindow.show(
                 gui,
                 internalChannelCombo,
@@ -1070,11 +1066,7 @@ public final class FiberAnalysisDialog {
         collagenObjectsCheck.setSelected(
                 FiberAnalysisPreferences.collagenObjectsProperty().get());
         applyTooltip(
-                collagenObjectsCheck,
-                "After segmentation, trace the fiber mask into one detection object per connected blob,"
-                        + " parented under the source annotation, classified as CollagenAnalysis."
-                        + " On by default. The same parameters that drive analysis drive these objects --"
-                        + " filtering / classifying them downstream is the easy way to act on the segmented fibers.");
+                collagenObjectsCheck, "One detection per connected fiber blob, parented under the source annotation.");
         content.getChildren().add(collagenObjectsCheck);
 
         return SectionBuilder.createSection("2. Fiber segmentation", true, content);
@@ -1146,9 +1138,7 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.windowObjectsProperty().get());
         applyTooltip(
                 windowObjectsCheck,
-                "Add one rectangular detection object per non-empty window carrying its per-window metrics."
-                        + " Off by default -- 15 um windows can produce thousands of objects per annotation,"
-                        + " but those objects are exactly what you need to build a Density Map across a project.");
+                "One rectangular detection per window above the coverage gate, with that window's metrics. Thousands per annotation at 15 um; they also feed the Density Map.");
         grid.add(windowObjectsCheck, 0, row, 2, 1);
         row++;
 

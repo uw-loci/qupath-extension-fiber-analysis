@@ -315,10 +315,8 @@ public final class FiberDensityMapDialog {
         pixelModeRadio.setToggleGroup(densityModeGroup);
         windowModeRadio.setSelected(true);
         windowModeRadio.setTooltip(
-                new Tooltip("Per-window: aggregate every metric across the window grid. Cheap and scales\n"
-                        + "to any slide size. The map looks tiled at the window granularity (e.g. 15 um\n"
-                        + "windows show 15 um cells); use the 'Smooth' option below to interpolate\n"
-                        + "between window centers."));
+                new Tooltip(
+                        "One value per window of the grid, so the map is tiled at that granularity: 15 um windows show 15 um cells. Scales to any slide size."));
         pixelModeRadio.setTooltip(
                 new Tooltip(
                         "Density at every source pixel. Needs about 700 MB for 5000x5000 with 7 channels; refused above half QuPath's max heap. ridge_count is NaN here."));

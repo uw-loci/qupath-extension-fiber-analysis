@@ -202,9 +202,9 @@ public final class FiberCalibrationDialog {
         invertCheck = new CheckBox("Invert intensity (DAB / dark-fiber-on-bright)");
         invertCheck.setSelected(
                 FiberAnalysisPreferences.invertIntensityProperty().get());
-        invertCheck.setTooltip(new Tooltip("ENABLE for DAB, trichrome blue, or any image where fibers are darker than"
-                + " background. The same toggle is on Section 2 of the main dialog and must"
-                + " be set the same way there for the calibration to apply correctly."));
+        invertCheck.setTooltip(
+                new Tooltip(
+                        "Tick for DAB, trichrome blue, or any stain where fibers are darker than background. Set it the same way in Section 2 of the Run dialog."));
 
         rollingBallSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
                 0.0,
