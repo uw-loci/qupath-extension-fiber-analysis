@@ -80,6 +80,18 @@ tasks.shadowJar {
 // fiberlib/, so they get unpacked into the user's Appose env as well.
 tasks.processResources {
     exclude("**/__pycache__/**")
+
+    // The user guide ships inside the jar (FiberAnalysisExtension.DOC_RESOURCE
+    // extracts it and openHelp() opens that copy), but it is AUTHORED at
+    // documentation/fiber-analysis.md. It used to be a second hand-maintained
+    // copy under src/main/resources, and the two drifted 64 lines apart: the
+    // shipped one sat unchanged from 2026-06-08 while the authored one was
+    // corrected, so users kept reading "Value of HSV by default" and the old
+    // pixel-domain parameter units long after both were fixed. Copying at
+    // build time makes divergence impossible rather than merely discouraged.
+    from(layout.projectDirectory.file("documentation/fiber-analysis.md")) {
+        into("qupath/ext/fiberanalysis/documentation")
+    }
 }
 
 tasks.withType<JavaCompile> {
