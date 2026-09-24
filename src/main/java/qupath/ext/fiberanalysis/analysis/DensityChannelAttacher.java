@@ -118,7 +118,7 @@ public final class DensityChannelAttacher {
             boolean ok = Dialogs.showConfirmDialog(
                     "Fiber density attach",
                     "This image is 8-bit RGB. Attaching density as channels will change how the image\n"
-                            + "renders: R/G/B become separate display channels until you reconfigure colours.\n\n"
+                            + "renders: R/G/B become separate display channels until you reconfigure colors.\n\n"
                             + "Continue? (Use the Sidecar + sampling workflow if you prefer to keep the\n"
                             + "native RGB display.)");
             if (!ok) return false;

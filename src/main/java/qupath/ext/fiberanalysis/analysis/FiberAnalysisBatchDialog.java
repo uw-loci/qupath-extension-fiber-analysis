@@ -103,7 +103,7 @@ public final class FiberAnalysisBatchDialog {
 
         Label header = new Label("Apply a saved params.json across multiple project images. The Search area\n"
                 + "and class filter saved in params.json (or overridden below) drive which\n"
-                + "annotations are analysed per image.");
+                + "annotations are analyzed per image.");
         header.setWrapText(true);
         header.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         root.getChildren().add(header);

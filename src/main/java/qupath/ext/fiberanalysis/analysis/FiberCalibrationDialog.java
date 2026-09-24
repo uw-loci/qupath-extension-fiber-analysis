@@ -326,7 +326,7 @@ public final class FiberCalibrationDialog {
                         Platform.runLater(() -> {
                             progressBar.setProgress(1.0);
                             statusLabel.setText(String.format(
-                                    "Done. threshold=%.4f (normalised), regions=%d, pixels=%d. Saved to %s",
+                                    "Done. threshold=%.4f (normalized), regions=%d, pixels=%d. Saved to %s",
                                     result.thresholdNormalised,
                                     result.regionsUsed,
                                     result.pixelsUsed,

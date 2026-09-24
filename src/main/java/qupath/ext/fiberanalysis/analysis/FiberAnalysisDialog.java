@@ -579,7 +579,7 @@ public final class FiberAnalysisDialog {
         applyTooltip(
                 classFilterCombo,
                 "Pick one or more QuPath classes. Only annotations whose class matches a checked entry"
-                        + " are analysed. 'Unclassified' matches annotations with no class assigned.");
+                        + "are analyzed. 'Unclassified' matches annotations with no class assigned.");
         Button classRefreshBtn = new Button("Refresh");
         classRefreshBtn.setTooltip(installDelay(
                 new Tooltip("Re-scan the current image (and project as fallback) for class names. Use after"
@@ -603,7 +603,7 @@ public final class FiberAnalysisDialog {
         borderZoneSpinner.setEditable(true);
         applyTooltip(
                 borderZoneSpinner,
-                "Distance from the annotation boundary within which fibers are analysed (1-500 um)."
+                "Distance from the annotation boundary within which fibers are analyzed (1-500 um)."
                         + " Default 50 um mirrors the PPM workflow.");
         grid.add(borderZoneLabel, 0, row);
         grid.add(borderZoneSpinner, 1, row);
@@ -677,12 +677,7 @@ public final class FiberAnalysisDialog {
         analysisDownsampleSpinner.setEditable(true);
         applyTooltip(
                 analysisDownsampleSpinner,
-                "Read the region at 1/N resolution. 1 = full resolution. Raising it is the lever for"
-                        + " very large annotations: the pixels read drop by N squared, so 4 turns a"
-                        + " 16-fold-too-big region into one that fits and runs 16x faster. All micron"
-                        + " measurements stay correct -- the effective pixel size is scaled with it --"
-                        + " but fibres thinner than the downsampled pixel are lost, so raise it only"
-                        + " until the preview stops resolving your fibres.");
+                "Read the region at 1/N resolution; 1 is full resolution. Pixels read fall by N squared, and fibers thinner than the downsampled pixel are lost.");
         analysisDownsampleSpinner.valueProperty().addListener((o, a, b) -> refreshRegionEstimate());
         grid.add(downsampleLabel, 0, row);
         grid.add(analysisDownsampleSpinner, 1, row);
@@ -737,11 +732,7 @@ public final class FiberAnalysisDialog {
         internalChannelCombo.setMaxWidth(Double.MAX_VALUE);
         applyTooltip(
                 internalChannelCombo,
-                "Scalar channel the internal segmenter operates on. For brightfield/Picrosirius,"
-                        + " 'Value' is a sensible default; switch to 'Raw intensity' for single-channel"
-                        + " fluorescence. On a multi-channel image, naming one of its channels sends that"
-                        + " single band -- which is the only way a 16-bit source keeps its full precision,"
-                        + " because a multi-band PNG is loaded as 8-bit.");
+                "Scalar channel the segmenter thresholds. Value suits brightfield and Picrosirius; Raw intensity suits single-channel fluorescence.");
         Button channelRefreshBtn = new Button("Refresh");
         channelRefreshBtn.setTooltip(installDelay(new Tooltip("Re-read the current image's channel list.")));
         channelRefreshBtn.setOnAction(e -> populateChannelCombo());
@@ -762,11 +753,7 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.thresholdMethodProperty().get());
         applyTooltip(
                 thresholdMethodCombo,
-                "Threshold algorithm applied to the source channel. Otsu adapts to image content"
-                        + " (per-annotation); Triangle suits skewed histograms; Manual lets you set the"
-                        + " cutoff. 'Project Otsu (calibrated)' uses a single threshold derived once across"
-                        + " a subsample of project regions -- use this for cross-image comparisons. Run"
-                        + " 'Calibrate threshold...' from the batch dialog first.");
+                "Otsu adapts per annotation; Triangle suits skewed histograms; Manual uses the cutoff below. Project Otsu applies one threshold project-wide, so images compare.");
         internalGrid.add(new Label("Threshold method:"), 0, row);
         internalGrid.add(thresholdMethodCombo, 1, row);
         row++;
@@ -804,11 +791,7 @@ public final class FiberAnalysisDialog {
         manualThresholdSpinner.setEditable(true);
         applyTooltip(
                 manualThresholdSpinner,
-                "Cutoff in the source image's own gray levels -- on a 16-bit image type 4500 to cut at"
-                        + " 4500. Pixels at or above this become fiber. The same value means the same"
-                        + " brightness in every region and every image.\n\nWith a ridge filter selected the"
-                        + " filter response has no image units, so the value is read as that same fraction"
-                        + " of full scale (4500 of 65535 = 6.9%) of the response's own range.");
+                "Pixels at or above this gray level become fiber, in the source image's own units. With a ridge filter on, it is read as that fraction of full scale instead.");
         refreshManualThresholdRange();
         BooleanBinding manualDisabled = thresholdMethodCombo.valueProperty().isNotEqualTo("Manual");
         manualThreshLabel.disableProperty().bind(manualDisabled);
@@ -1030,7 +1013,7 @@ public final class FiberAnalysisDialog {
         maskFileField.setPrefColumnCount(28);
         applyTooltip(
                 maskFileField,
-                "Path to a .tif or .npy file containing a binary fiber mask matching the analysed image dimensions.");
+                "Path to a .tif or .npy file containing a binary fiber mask matching the analyzed image dimensions.");
         Button browseMaskBtn = new Button("Browse...");
         browseMaskBtn.setAccessibleText("Browse for fiber mask file");
         browseMaskBtn.setOnAction(e -> {
@@ -1110,7 +1093,7 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.windowEnabledProperty().get());
         applyTooltip(
                 windowEnabledCheck,
-                "Divide the analysed zone into a grid of windows and report per-window straightness,"
+                "Divide the analyzed zone into a grid of windows and report per-window straightness,"
                         + " morphometric, and texture metrics. Disable to get one set of metrics per"
                         + " annotation only.");
         grid.add(windowEnabledCheck, 0, row, 2, 1);

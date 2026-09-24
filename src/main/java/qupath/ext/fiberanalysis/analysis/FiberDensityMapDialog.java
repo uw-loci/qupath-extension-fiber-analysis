@@ -287,11 +287,8 @@ public final class FiberDensityMapDialog {
         // --- Cross-session opt-in (only meaningful in Channels mode) ---
         autoReattachCheck = new CheckBox("Auto-reattach channels on image open");
         autoReattachCheck.setTooltip(
-                new Tooltip("When checked, a small marker file is written beside the sidecar. The\n"
-                        + "extension's image-open listener reads it on every future open of this\n"
-                        + "image (in this project) and re-attaches the density channels without\n"
-                        + "asking. To stop, run \"Stop auto-reattaching density channels\" or\n"
-                        + "delete the .attach marker file beside the sidecar."));
+                new Tooltip(
+                        "Re-attach these channels every time this image is opened in this project. To stop: Extensions > Fiber Analysis > Stop auto-reattaching density channels."));
         autoReattachCheck.disableProperty().bind(modeSidecarRadio.selectedProperty());
         Label autoReattachHelp = new Label("Marker file: <sidecar>.attach (a few hundred bytes). Sidecar mode ignores\n"
                 + "this checkbox -- the sampling command does not need an attach.");
@@ -321,14 +318,10 @@ public final class FiberDensityMapDialog {
                 new Tooltip("Per-window: aggregate every metric across the window grid. Cheap and scales\n"
                         + "to any slide size. The map looks tiled at the window granularity (e.g. 15 um\n"
                         + "windows show 15 um cells); use the 'Smooth' option below to interpolate\n"
-                        + "between window centres."));
-        pixelModeRadio.setTooltip(new Tooltip("Per-pixel: compute local-neighborhood density at every source pixel\n"
-                + "(uniform_filter, stride 1). Smooth, physically meaningful density.\n"
-                + "Allocates a slide-wide float[] per channel -- ~700 MB for a 5000x5000\n"
-                + "image with 7 channels; refuses to run if it would exceed half of\n"
-                + "QuPath's max heap. Use window mode for very large slides.\n"
-                + "Note: ridge_count is NaN in this mode (skeleton length carries the\n"
-                + "same fiber-density information per pixel)."));
+                        + "between window centers."));
+        pixelModeRadio.setTooltip(
+                new Tooltip(
+                        "Density at every source pixel. Needs about 700 MB for 5000x5000 with 7 channels; refused above half QuPath's max heap. ridge_count is NaN here."));
         Label densityModeHelp = new Label("Per-pixel is what you usually want for visualization.\n"
                 + "Per-window is faster and is required for whole-slide runs that would\n"
                 + "exceed available memory in per-pixel mode.");
@@ -338,19 +331,15 @@ public final class FiberDensityMapDialog {
         // --- Render style ---
         Label renderLabel = new Label("Render style");
         renderLabel.setStyle("-fx-font-weight: bold;");
-        smoothCheck = new CheckBox("Smooth (bilinear interpolation between window centres)");
+        smoothCheck = new CheckBox("Smooth (bilinear interpolation between window centers)");
         smoothCheck.setSelected(false);
         // Bilinear smoothing is a window-mode concept; in pixel mode the data
         // is already at source resolution and bilinear-between-centres is
         // identity. Disable the toggle when pixel mode is active.
         smoothCheck.disableProperty().bind(pixelModeRadio.selectedProperty());
-        smoothCheck.setTooltip(new Tooltip("OFF: each window's value is replicated across its source-pixel\n"
-                + "footprint -- visible tile boundaries between windows.\n"
-                + "ON: values are bilinearly interpolated between adjacent window\n"
-                + "centres -- smooth heatmap. The underlying per-window data is\n"
-                + "identical; only the display interpolation changes. Both modes\n"
-                + "preserve the ring shape: corners outside the analysis zone stay\n"
-                + "transparent rather than bleeding toward zero."));
+        smoothCheck.setTooltip(
+                new Tooltip(
+                        "Off: each window's value fills its footprint, so boundaries show. On: values are interpolated between window centers. The stored data is identical."));
         Label renderHelp = new Label("Adds no compute cost; smoothing is done at the bytes-to-disk step.\n"
                 + "Increase window overlap (above) to get more sample points per area\n"
                 + "if the smoothed map looks too coarse.");
@@ -375,11 +364,8 @@ public final class FiberDensityMapDialog {
         objectDensityCheck = new CheckBox("Also include object-density channels");
         objectDensityCheck.setSelected(false);
         objectDensityCheck.setTooltip(
-                new Tooltip("For each selected class below, add one density channel to the sidecar.\n"
-                        + "Per pixel: fraction of the local window covered by ANY object of that class\n"
-                        + "(annotation or detection; union of their footprints). Same window-size knob\n"
-                        + "as the fiber channels above, so densities are directly comparable.\n"
-                        + "Uses an integral-image box filter -- fast regardless of window size."));
+                new Tooltip(
+                        "Add one channel per class selected below: the fraction of the local window covered by any annotation or detection of that class."));
         objectDensityClassesList = new javafx.scene.control.ListView<>();
         objectDensityClassesList.getSelectionModel().setSelectionMode(javafx.scene.control.SelectionMode.MULTIPLE);
         objectDensityClassesList.setPrefHeight(100);

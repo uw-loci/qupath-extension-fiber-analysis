@@ -154,15 +154,9 @@ final class FiberSegmentationPreviewWindow {
 
         CheckBox autoCheck = new CheckBox("Auto-refresh");
         autoCheck.setSelected(true);
-        autoCheck.setTooltip(new Tooltip("When ON, the preview re-runs (after a short debounce) every time\n"
-                + "you change a segmentation knob in the main dialog -- threshold,\n"
-                + "ridge filter, sigma range, invert, rolling-ball, calibration,\n"
-                + "channel, border-zone -- or the Region size above.\n\n"
-                + "Pan / zoom in the QuPath viewer does NOT auto-trigger; click\n"
-                + "Refresh after moving to a new location.\n\n"
-                + "When OFF, every preview update is on-demand via the Refresh\n"
-                + "button. Useful while tweaking spinners quickly without paying\n"
-                + "the Python round-trip on every keystroke."));
+        autoCheck.setTooltip(
+                new Tooltip(
+                        "Re-run the preview whenever a Section 2 setting or Region size changes. Panning or zooming does not trigger it; click Refresh after moving."));
 
         Button refreshBtn = new Button("Refresh");
         refreshBtn.setTooltip(new Tooltip("Re-read the current region from the viewer and re-run segmentation\n"
