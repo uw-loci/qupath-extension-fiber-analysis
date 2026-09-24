@@ -260,7 +260,7 @@ top-of-section radio button. The choice is binary at runtime; the
 disabled mode's controls stay visible but greyed.
 
 **Mode A: Segment within extension (Internal).** The image is
-projected onto a scalar **source channel** -- Value of HSV by default,
+projected onto a scalar **source channel** -- Raw intensity by default,
 or Raw intensity / Hue / Saturation / Value derived from RGB, or any
 of the image's own channels listed by name -- then
 thresholded with **Otsu**, **Triangle**, or **Manual** at a chosen
@@ -270,10 +270,10 @@ levels**, so on a single-channel 16-bit image the spinner runs
 image, not rescaled to each region's brightest and darkest pixel.
 Optionally a **ridge filter** (Frangi, Sato, or
 Meijering from scikit-image) runs first across a configurable
-**sigma range** (default 1-4 px, step 1) to enhance line-like
+**sigma range** (default 1-4 um, step 1 um) to enhance line-like
 structures before the threshold. The thresholded mask is then
 cleaned: `binary_closing` to bridge 1-px gaps, then
-`remove_small_objects` at the **Min fiber area** (default 50 px).
+`remove_small_objects` at the **Min fiber area** (default 1.0 um2).
 The clean mask is the fiber segmentation.
 
 ### Large annotations are tiled automatically
@@ -485,7 +485,7 @@ straightness pipeline already computes.
   count `N(b)` boxes intersecting the skeleton; fit
   `log N(b) = -D_fractal * log b + c`. Expect parameter sensitivity
   (see Caveats in the README); the default box sizes
-  `2,4,8,16,32,64,128` give a stable D for collagen networks but are
+  `0.25,0.5,1,2,4,8,16` um give a stable D for collagen networks but are
   worth varying if you suspect dimension drift.
 - **Lacunarity** (gliding-box): mean / variance of box mass `M(r)`
   over positions; `L(r) = var(M) / mean(M)^2 + 1`. Reported per `r`,
@@ -547,7 +547,7 @@ heatmap property** dropdown in the output section.
 **Choosing parameters.** Quantisation `L = 16` is appropriate for
 small windows (15-30 um); `L = 32` is appropriate for larger windows
 (50+ um) where each window has enough samples to populate the
-larger GLCM stably. The distance set `1, 2, 3` captures texture at
+larger GLCM stably. The default distance set `0.1, 0.2, 0.3` um captures texture at
 multiple scales without exceeding the recommended `d <= window_side
 / 8` rule of thumb. The six properties are independent calculations
 -- turn off ones you do not need to reduce `windows.json` size; the

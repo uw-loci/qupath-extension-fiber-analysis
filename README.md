@@ -48,8 +48,12 @@ project metadata, or UI surfaces are being replaced.
    thresholded objects, or an annotation class); pick which families
    to run (straightness, morphometrics, texture); click OK.
 6. The Python module runs via Appose and writes per-annotation
-   overlays + a `windows.json` sidecar; the panel attaches the
-   measurements to the annotation.
+   overlays + a `windows.json` sidecar. Results appear in the **Fiber
+   Analysis** panel, and one `CollagenAnalysis` detection per fiber
+   blob is added under your annotation. The annotation itself gets no
+   measurements -- tick **Create per-window detection objects**
+   (Section 3) if you want per-window metrics in the measurement
+   table.
 
 ![Run dialog showing the Search area, Fiber segmentation, and Window analysis sections, with the Straightness, Morphometrics, Texture, and Output sections collapsed below.](documentation/images/run-dialog.png)
 
@@ -103,7 +107,7 @@ transfers.
 <details>
 <summary><strong>The parameter table</strong></summary>
 
-Every dialog control is listed below in dialog order. The user guide
+The main dialog's controls, in dialog order. The user guide
 ([`documentation/fiber-analysis.md`](documentation/fiber-analysis.md))
 carries the full tooltip and rationale per control; this table is the
 at-a-glance reference.
@@ -118,14 +122,14 @@ at-a-glance reference.
 | Override pixel size | 1. Search area | 0.5 | um/px | Forced pixel size when the image has no calibration (enabled only when "Use image pixel size" is off). |
 | Analysis downsample | 1. Search area | 1.0 | -- | Read the region at 1/N resolution. Pixels read fall by N squared, which is what makes an annotation larger than Java's raster cap analysable. Micron measurements stay correct (the effective pixel size is scaled with it); fibres thinner than the downsampled pixel are lost. |
 | Source (segmentation) | 2. Fiber segmentation | Segment within extension | -- | Internal segmenter vs. consume an existing fiber mask. |
-| Source channel | 2. Fiber segmentation | Value (HSV) | -- | Scalar channel the internal segmenter operates on: Raw intensity / Hue / Saturation / Value derived from RGB, or one of the image's own channels by name. Naming a channel sends that single band, which is what lets a 16-bit source keep its full precision. |
-| Threshold method | 2. Fiber segmentation | Otsu | -- | Threshold algorithm applied to the source channel (Otsu / Triangle / Manual). |
+| Source channel | 2. Fiber segmentation | Raw intensity | -- | Scalar channel the internal segmenter operates on: Raw intensity / Hue / Saturation / Value derived from RGB, or one of the image's own channels by name. Naming a channel sends that single band, which is what lets a 16-bit source keep its full precision. |
+| Threshold method | 2. Fiber segmentation | Otsu | -- | Threshold algorithm applied to the source channel (Otsu / Triangle / Manual / Project Otsu (calibrated)). |
 | Manual threshold | 2. Fiber segmentation | 128 | gray level | Cutoff in the source image's own gray levels -- on a single-channel 16-bit image the spinner runs 0-65535, so 4500 cuts at 4500. Enabled only when threshold method is Manual; with a ridge filter selected it is read as that fraction of full scale of the response range instead. |
 | Ridge filter | 2. Fiber segmentation | None | -- | Optional vesselness filter to enhance line-like structures (None / Frangi / Sato / Meijering). |
-| Sigma min | 2. Fiber segmentation | 1.0 | pixels | Smallest fiber width the ridge filter looks for. |
-| Sigma max | 2. Fiber segmentation | 4.0 | pixels | Largest fiber width the ridge filter looks for. |
-| Sigma step | 2. Fiber segmentation | 1.0 | pixels | Step size for the sigma sweep (smaller = more sensitive, slower). |
-| Min fiber area | 2. Fiber segmentation | 50 | pixels | Connected components smaller than this are removed. |
+| Sigma min | 2. Fiber segmentation | 1.0 | um | Smallest fiber half-width the ridge filter looks for. |
+| Sigma max | 2. Fiber segmentation | 4.0 | um | Largest fiber half-width the ridge filter looks for. |
+| Sigma step | 2. Fiber segmentation | 1.0 | um | Step size for the sigma sweep (smaller = more sensitive, slower). |
+| Min fiber area | 2. Fiber segmentation | 1.0 | um2 | Connected components smaller than this are removed. |
 | Mask source | 2. Fiber segmentation | Pixel classifier | -- | Where to read the existing fiber mask from (classifier / object class / file). |
 | Classifier name | 2. Fiber segmentation | first available | -- | Pixel classifier whose fiber channel will be used. |
 | Object class | 2. Fiber segmentation | first available | -- | PathClass whose objects will be rasterised to a binary mask. |
@@ -147,18 +151,18 @@ at-a-glance reference.
 | Lacunarity | 5. Morphometrics | checked | -- | Gappiness across multiple box sizes. |
 | Fractal dimension | 5. Morphometrics | checked | -- | Box-counting fractal dimension; collagen networks typically 1.4-1.8. |
 | Gap analysis | 5. Morphometrics | checked | -- | Distribution of inscribed-circle diameters in fiber-free regions. |
-| Lacunarity box sizes | 5. Morphometrics | 4,8,16,32,64 | pixels | Box sizes for the gliding-box lacunarity computation. |
-| Fractal box sizes | 5. Morphometrics | 2,4,8,16,32,64,128 | pixels | Box sizes for box-counting fractal dimension. |
+| Lacunarity box sizes | 5. Morphometrics | 0.5,1,2,4,8 | um | Box sizes for the gliding-box lacunarity computation. |
+| Fractal box sizes | 5. Morphometrics | 0.25,0.5,1,2,4,8,16 | um | Box sizes for box-counting fractal dimension. |
 | Enable GLCM texture | 6. Texture | checked | -- | Master toggle for per-window GLCM / Haralick features. |
 | Quantization levels | 6. Texture | 16 | gray levels | Number of gray levels the source channel is quantised to before GLCM. |
-| GLCM distance(s) | 6. Texture | 1,2,3 | pixels | Pixel offsets at which co-occurrence is computed. |
+| GLCM distance(s) | 6. Texture | 0.1,0.2,0.3 | um | Offsets at which co-occurrence is computed. Converted to whole pixels per image. |
 | Contrast | 6. Texture | checked | -- | GLCM contrast (variance of intensity differences). |
 | Correlation | 6. Texture | checked | -- | GLCM correlation (linear dependence of neighbouring intensities). |
 | Energy | 6. Texture | checked | -- | GLCM energy / angular second moment (uniformity). |
 | Homogeneity | 6. Texture | checked | -- | GLCM homogeneity / inverse difference moment (closeness to diagonal). |
 | Entropy | 6. Texture | checked | -- | GLCM entropy (randomness of intensity distribution). |
 | Dissimilarity | 6. Texture | checked | -- | GLCM dissimilarity (linear contrast variant). |
-| Output directory | 7. Output | project entry's `data/<name>/fiber/` or `~/QuPath/fiber-out/` | -- | Folder where overlay PNGs, results.json, and per-window data are written. |
+| Output directory | 7. Output | `<project>/fiber-analysis/` or `~/QuPath/fiber-out/` | -- | Folder where overlay PNGs, results.json, and per-window data are written. |
 | Write fiber-mask overlay PNG | 7. Output | checked | -- | Save the segmented fiber mask as a PNG re-displayable from the results panel. |
 | Write straightness heatmap PNG | 7. Output | checked | -- | Save a viridis heatmap of per-window tortuosity / Radon scalar values. |
 | Write GLCM heatmap PNG | 7. Output | checked | -- | Save a per-window heatmap PNG of the selected GLCM property. |
