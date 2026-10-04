@@ -105,8 +105,7 @@ class TileScalarAggregationTest {
         // by the owned fraction makes the parts sum to the region.
         Map<String, Double> tile = Map.of("fiber_pixels", 1000.0);
         double[] owned = {0.8, 0.8, 1.0}; // two interior tiles, one edge tile
-        Map<String, Double> out = aggregate(
-                List.of(tile, tile, tile), List.of(10, 10, 10), List.of(0, 1, 2), owned);
+        Map<String, Double> out = aggregate(List.of(tile, tile, tile), List.of(10, 10, 10), List.of(0, 1, 2), owned);
 
         assertThat(out.get("fiber_pixels")).isCloseTo(2600.0, within(1e-9)); // not 3000
     }
@@ -117,8 +116,7 @@ class TileScalarAggregationTest {
         // the scale array by survivor order would apply 0.5 to grid tile 2.
         Map<String, Double> tile = Map.of("fiber_pixels", 100.0);
         double[] owned = {1.0, 0.5, 0.25};
-        Map<String, Double> out =
-                aggregate(List.of(tile, tile), List.of(10, 10), List.of(0, 2), owned);
+        Map<String, Double> out = aggregate(List.of(tile, tile), List.of(10, 10), List.of(0, 2), owned);
 
         assertThat(out.get("fiber_pixels")).isCloseTo(125.0, within(1e-9)); // 100*1.0 + 100*0.25
     }

@@ -856,7 +856,9 @@ public class FiberAnalysisWorkflow {
      * @return the merged summary; omitted keys are listed at INFO
      */
     private static Map<String, Double> aggregateTileScalars(
-            List<Map<String, Double>> tileScalars, List<Integer> weights, List<Integer> tileIndices,
+            List<Map<String, Double>> tileScalars,
+            List<Integer> weights,
+            List<Integer> tileIndices,
             double[] areaScale) {
         Map<String, Double> sums = new LinkedHashMap<>();
         Map<String, Double> weightedSums = new LinkedHashMap<>();
@@ -869,9 +871,8 @@ public class FiberAnalysisWorkflow {
             // tileScalars holds successful tiles only, so its index is NOT the
             // grid index once a tile has failed; areaScale is indexed by grid.
             int gridIndex = i < tileIndices.size() ? tileIndices.get(i) : -1;
-            double scale = (areaScale != null && gridIndex >= 0 && gridIndex < areaScale.length)
-                    ? areaScale[gridIndex]
-                    : 1.0;
+            double scale =
+                    (areaScale != null && gridIndex >= 0 && gridIndex < areaScale.length) ? areaScale[gridIndex] : 1.0;
             for (Map.Entry<String, Double> e : tileScalars.get(i).entrySet()) {
                 String key = e.getKey();
                 Double v = e.getValue();

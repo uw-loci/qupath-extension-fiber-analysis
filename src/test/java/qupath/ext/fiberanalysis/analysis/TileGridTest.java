@@ -136,7 +136,9 @@ class TileGridTest {
         // The property the additive fix rests on: scaling each tile by its
         // owned fraction and summing must reconstruct the region area, not the
         // larger summed-tile area. Checked across shapes that tile unevenly.
-        int[][] cases = {{20000, 15000, 100, 50}, {89492, 72171, 577, 288}, {155648, 65536, 399, 199}, {9000, 300, 64, 32}};
+        int[][] cases = {
+            {20000, 15000, 100, 50}, {89492, 72171, 577, 288}, {155648, 65536, 399, 199}, {9000, 300, 64, 32}
+        };
         for (int[] c : cases) {
             TileGrid grid = TileGrid.create(c[0], c[1], c[2], c[3], 4_000_000);
             double[] w = grid.additiveWeights();

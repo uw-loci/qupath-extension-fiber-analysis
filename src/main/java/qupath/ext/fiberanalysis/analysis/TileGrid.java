@@ -55,8 +55,7 @@ record TileGrid(List<Box> tiles, int stride, int windowPx, int step) {
             throw new IllegalArgumentException("windowPx and stride must be positive, got " + windowPx + "/" + stride);
         }
         if ((long) regionW * regionH <= maxSamples) {
-            return new TileGrid(
-                    List.of(new Box(0, 0, regionW, regionH)), stride, windowPx, Math.max(regionW, regionH));
+            return new TileGrid(List.of(new Box(0, 0, regionW, regionH)), stride, windowPx, Math.max(regionW, regionH));
         }
 
         // Square tiles under the budget, snapped UP to a whole number of strides
@@ -129,12 +128,8 @@ record TileGrid(List<Box> tiles, int stride, int windowPx, int step) {
     /** Origin -> owned extent along one axis, the origins partitioning [0, total). */
     private static Map<Integer, Integer> ownedExtents(
             List<Box> boxes, java.util.function.ToIntFunction<Box> axis, int total) {
-        List<Integer> origins = boxes.stream()
-                .mapToInt(axis)
-                .distinct()
-                .sorted()
-                .boxed()
-                .toList();
+        List<Integer> origins =
+                boxes.stream().mapToInt(axis).distinct().sorted().boxed().toList();
         Map<Integer, Integer> out = new LinkedHashMap<>();
         for (int i = 0; i < origins.size(); i++) {
             int start = origins.get(i);
