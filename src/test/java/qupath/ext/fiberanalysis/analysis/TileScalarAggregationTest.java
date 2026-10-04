@@ -24,12 +24,24 @@ import org.junit.jupiter.api.Test;
  */
 class TileScalarAggregationTest {
 
-    @SuppressWarnings("unchecked")
+    /** Aggregate with no area scaling: every tile owns all of itself. */
     private static Map<String, Double> aggregate(List<Map<String, Double>> tiles, List<Integer> weights)
             throws Exception {
-        Method m = FiberAnalysisWorkflow.class.getDeclaredMethod("aggregateTileScalars", List.class, List.class);
+        double[] unitScale = new double[tiles.size()];
+        java.util.Arrays.fill(unitScale, 1.0);
+        List<Integer> identity =
+                java.util.stream.IntStream.range(0, tiles.size()).boxed().toList();
+        return aggregate(tiles, weights, identity, unitScale);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Double> aggregate(
+            List<Map<String, Double>> tiles, List<Integer> weights, List<Integer> tileIndices, double[] areaScale)
+            throws Exception {
+        Method m = FiberAnalysisWorkflow.class.getDeclaredMethod(
+                "aggregateTileScalars", List.class, List.class, List.class, double[].class);
         m.setAccessible(true);
-        return (Map<String, Double>) m.invoke(null, tiles, weights);
+        return (Map<String, Double>) m.invoke(null, tiles, weights, tileIndices, areaScale);
     }
 
     @Test
@@ -84,5 +96,43 @@ class TileScalarAggregationTest {
         Map<String, Double> out =
                 aggregate(List.of(Map.of("fiber_pixels", 100.0), Map.of("fiber_pixels", 999.0)), List.of(5, 0));
         assertThat(out.get("fiber_pixels")).isEqualTo(100.0);
+    }
+
+    @Test
+    void additiveScalarsAreScaledOntoTheAreaEachTileOwns() throws Exception {
+        // Tiles overlap by one window, so each reports a total covering area it
+        // shares with its neighbour. Summing raw counts the seam twice; scaling
+        // by the owned fraction makes the parts sum to the region.
+        Map<String, Double> tile = Map.of("fiber_pixels", 1000.0);
+        double[] owned = {0.8, 0.8, 1.0}; // two interior tiles, one edge tile
+        Map<String, Double> out = aggregate(
+                List.of(tile, tile, tile), List.of(10, 10, 10), List.of(0, 1, 2), owned);
+
+        assertThat(out.get("fiber_pixels")).isCloseTo(2600.0, within(1e-9)); // not 3000
+    }
+
+    @Test
+    void areaScaleIsIndexedByGridPositionNotBySurvivorOrder() throws Exception {
+        // Tile 1 failed, so the two survivors are grid tiles 0 and 2. Indexing
+        // the scale array by survivor order would apply 0.5 to grid tile 2.
+        Map<String, Double> tile = Map.of("fiber_pixels", 100.0);
+        double[] owned = {1.0, 0.5, 0.25};
+        Map<String, Double> out =
+                aggregate(List.of(tile, tile), List.of(10, 10), List.of(0, 2), owned);
+
+        assertThat(out.get("fiber_pixels")).isCloseTo(125.0, within(1e-9)); // 100*1.0 + 100*0.25
+    }
+
+    @Test
+    void averagedScalarsAreNotTouchedByAreaScaling() throws Exception {
+        // A ratio is already normalised; scaling it by owned area would be wrong.
+        double[] owned = {0.5, 0.5};
+        Map<String, Double> out = aggregate(
+                List.of(Map.of("texture.contrast", 10.0), Map.of("texture.contrast", 20.0)),
+                List.of(10, 10),
+                List.of(0, 1),
+                owned);
+
+        assertThat(out.get("texture.contrast")).isCloseTo(15.0, within(1e-9));
     }
 }

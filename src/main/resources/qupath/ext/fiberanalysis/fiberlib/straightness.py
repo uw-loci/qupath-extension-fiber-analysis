@@ -185,7 +185,9 @@ def compute_radon_scalar(image_scalar, fiber_mask, theta_step=1.0):
         pmr            : peak-to-mean ratio at the dominant angle.
         ai             : alignment index = sum(top 10% angles) / sum(all).
         fwhm_theta_deg : full-width-at-half-max of the angular profile (deg).
-        fwhm_rho_um    : FWHM along rho (pixels here; caller scales if needed).
+        fwhm_rho_um    : FWHM along rho, in PIXELS. The caller must multiply by
+                         the pixel size to honour the key's name; pipeline.py
+                         does this at the call site.
         entropy        : Shannon entropy of the normalised angular profile.
         theta_star_deg : dominant angle in degrees.
 

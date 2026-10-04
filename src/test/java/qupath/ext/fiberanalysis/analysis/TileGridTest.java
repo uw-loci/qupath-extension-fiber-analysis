@@ -10,6 +10,7 @@
 package qupath.ext.fiberanalysis.analysis;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -128,5 +129,41 @@ class TileGridTest {
     void rejectsNonsenseWindowGeometry() {
         org.junit.jupiter.api.Assertions.assertThrows(
                 IllegalArgumentException.class, () -> TileGrid.create(100, 100, 0, 50, 1000));
+    }
+
+    @Test
+    void ownedAreasPartitionTheRegionExactly() {
+        // The property the additive fix rests on: scaling each tile by its
+        // owned fraction and summing must reconstruct the region area, not the
+        // larger summed-tile area. Checked across shapes that tile unevenly.
+        int[][] cases = {{20000, 15000, 100, 50}, {89492, 72171, 577, 288}, {155648, 65536, 399, 199}, {9000, 300, 64, 32}};
+        for (int[] c : cases) {
+            TileGrid grid = TileGrid.create(c[0], c[1], c[2], c[3], 4_000_000);
+            double[] w = grid.additiveWeights();
+            assertThat(w).hasSize(grid.count());
+
+            double scaledArea = 0;
+            double rawArea = 0;
+            for (int i = 0; i < grid.count(); i++) {
+                TileGrid.Box b = grid.tiles().get(i);
+                double tileArea = (double) b.w() * b.h();
+                scaledArea += tileArea * w[i];
+                rawArea += tileArea;
+            }
+            double regionArea = (double) c[0] * c[1];
+            assertThat(scaledArea)
+                    .as("owned areas must sum to the region for %dx%d", c[0], c[1])
+                    .isCloseTo(regionArea, within(regionArea * 1e-9));
+            assertThat(rawArea)
+                    .as("raw tile areas should exceed the region, or there is no overlap to correct")
+                    .isGreaterThanOrEqualTo(regionArea);
+        }
+    }
+
+    @Test
+    void untiledGridOwnsItselfEntirely() {
+        TileGrid grid = TileGrid.create(1000, 1000, 100, 50, 10_000_000);
+        assertThat(grid.count()).isEqualTo(1);
+        assertThat(grid.additiveWeights()).containsExactly(1.0);
     }
 }

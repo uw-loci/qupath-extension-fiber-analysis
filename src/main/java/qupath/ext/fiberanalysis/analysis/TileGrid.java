@@ -10,7 +10,9 @@
 package qupath.ext.fiberanalysis.analysis;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Splits a region into overlapping tiles that keep the window lattice intact.
@@ -25,8 +27,9 @@ import java.util.List;
  * @param tiles     tile boxes in region-local read pixels
  * @param stride    window stride the origins are aligned to
  * @param windowPx  window size the overlap is sized from
+ * @param step      distance between consecutive tile origins
  */
-record TileGrid(List<Box> tiles, int stride, int windowPx) {
+record TileGrid(List<Box> tiles, int stride, int windowPx, int step) {
 
     /**
      * One tile in region-local read-scale pixels.
@@ -52,7 +55,8 @@ record TileGrid(List<Box> tiles, int stride, int windowPx) {
             throw new IllegalArgumentException("windowPx and stride must be positive, got " + windowPx + "/" + stride);
         }
         if ((long) regionW * regionH <= maxSamples) {
-            return new TileGrid(List.of(new Box(0, 0, regionW, regionH)), stride, windowPx);
+            return new TileGrid(
+                    List.of(new Box(0, 0, regionW, regionH)), stride, windowPx, Math.max(regionW, regionH));
         }
 
         // Square tiles under the budget, snapped UP to a whole number of strides
@@ -78,11 +82,66 @@ record TileGrid(List<Box> tiles, int stride, int windowPx) {
         if (boxes.isEmpty()) {
             boxes.add(new Box(0, 0, regionW, regionH));
         }
-        return new TileGrid(boxes, stride, windowPx);
+        return new TileGrid(boxes, stride, windowPx, step);
     }
 
     int count() {
         return tiles.size();
+    }
+
+    /**
+     * Fraction of each tile that this tile alone is responsible for.
+     *
+     * <p>Tiles overlap by one window so the window lattice survives, which
+     * means a scalar summed over whole tiles counts every seam strip twice.
+     * Each tile is therefore given a disjoint OWNED rectangle: from its origin
+     * to the next origin along each axis, and to the region edge for the last
+     * tile in a row or column. Those rectangles partition the region exactly,
+     * so the returned fractions scale an additive per-tile total onto the area
+     * the tile is solely answerable for and the scaled totals sum to the whole
+     * region.
+     *
+     * <p>This is exact when the measured quantity is uniform across the tile
+     * and unbiased otherwise; the residual error is the density difference
+     * between a tile's core and its overlap margin.
+     *
+     * <p>The region extent is taken from the tiles themselves, so this cannot
+     * drift from the geometry {@link #create} produced.
+     *
+     * @return one scale factor per tile, index-aligned with {@link #tiles()}
+     */
+    double[] additiveWeights() {
+        int regionW = tiles.stream().mapToInt(b -> b.x() + b.w()).max().orElse(0);
+        int regionH = tiles.stream().mapToInt(b -> b.y() + b.h()).max().orElse(0);
+        Map<Integer, Integer> ownW = ownedExtents(tiles, Box::x, regionW);
+        Map<Integer, Integer> ownH = ownedExtents(tiles, Box::y, regionH);
+        double[] out = new double[tiles.size()];
+        for (int i = 0; i < tiles.size(); i++) {
+            Box b = tiles.get(i);
+            double tileArea = (double) b.w() * b.h();
+            if (tileArea <= 0) continue;
+            double owned = (double) ownW.getOrDefault(b.x(), b.w()) * ownH.getOrDefault(b.y(), b.h());
+            out[i] = Math.min(1.0, owned / tileArea);
+        }
+        return out;
+    }
+
+    /** Origin -> owned extent along one axis, the origins partitioning [0, total). */
+    private static Map<Integer, Integer> ownedExtents(
+            List<Box> boxes, java.util.function.ToIntFunction<Box> axis, int total) {
+        List<Integer> origins = boxes.stream()
+                .mapToInt(axis)
+                .distinct()
+                .sorted()
+                .boxed()
+                .toList();
+        Map<Integer, Integer> out = new LinkedHashMap<>();
+        for (int i = 0; i < origins.size(); i++) {
+            int start = origins.get(i);
+            int end = i + 1 < origins.size() ? origins.get(i + 1) : total;
+            out.put(start, Math.max(0, end - start));
+        }
+        return out;
     }
 
     /**

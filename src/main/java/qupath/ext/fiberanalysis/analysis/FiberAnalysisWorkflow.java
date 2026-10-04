@@ -617,6 +617,9 @@ public class FiberAnalysisWorkflow {
         Set<Long> seenWindows = new HashSet<>();
         List<Map<String, Double>> tileScalars = new ArrayList<>();
         List<Integer> tileWindowCounts = new ArrayList<>();
+        // Grid index each successful tile came from: a failed tile adds nothing
+        // to the three lists, so their index stops matching the grid's.
+        List<Integer> tileIndices = new ArrayList<>();
 
         ProgressEstimator est = new ProgressEstimator(grid.count());
         String runId = "";
@@ -684,6 +687,7 @@ public class FiberAnalysisWorkflow {
                 int kept = mergeTileWindows(tileDir.resolve("windows.json"), box, mergedWindows, seenWindows);
                 tileWindowCounts.add(kept);
                 tileScalars.add(flattenScalars(result));
+                tileIndices.add(t);
             } catch (Exception ex) {
                 failed++;
                 logger.warn("Annotation {} tile {} of {} failed: {}", index, t + 1, grid.count(), ex.getMessage());
@@ -708,7 +712,18 @@ public class FiberAnalysisWorkflow {
                 grid.count() - failed,
                 mergedJson.getFileName());
 
-        Map<String, Double> summary = aggregateTileScalars(tileScalars, tileWindowCounts);
+        Map<String, Double> summary =
+                aggregateTileScalars(tileScalars, tileWindowCounts, tileIndices, grid.additiveWeights());
+
+        // Python writes results.json into the directory it is handed, which on
+        // this path is the per-tile directory -- so without this the annotation
+        // level has no scalar file at all and the merged numbers live only in
+        // the results panel. Write the aggregate the panel shows, plus enough
+        // provenance to tell a tiled aggregate from a single-shot result.
+        if (params.jsonSidecar()) {
+            writeTiledSummaryJson(
+                    annDir.resolve("results.json"), summary, tileScalars, grid, failed, mergedWindows.size(), runId);
+        }
         // No annotation-level overlays for a tiled run: at this size a single
         // full-resolution PNG cannot be allocated either. Per-tile overlays are
         // left in place under tiles/.
@@ -816,20 +831,33 @@ public class FiberAnalysisWorkflow {
     /**
      * Combines per-tile scalar summaries.
      *
-     * <p>Additive keys are summed; angular and non-linear keys are dropped; the
-     * rest are averaged weighted by the windows each tile contributed, so a
-     * sliver tile does not count as much as a full one.
+     * <p>Additive keys are summed after scaling each tile onto the area it
+     * alone owns; angular and non-linear keys are dropped; the rest are
+     * averaged weighted by the windows each tile contributed, so a sliver tile
+     * does not count as much as a full one.
+     *
+     * <p>The area scaling is not cosmetic. Tiles overlap by one window so the
+     * window lattice survives, and a plain sum therefore counts every seam
+     * strip twice -- measured at 10-16% too high on a whole-slide annotation,
+     * rising with window size. {@link TileGrid#additiveWeights} hands back the
+     * disjoint owned-area fraction per tile; scaling by it makes the parts sum
+     * to the region.
      *
      * <p>Dropping beats approximating here. These numbers end up in papers, and
      * a silently wrong total is worse than an absent one -- the caller can see
      * a missing key, but cannot see a total that is 1/N of the truth.
      *
-     * @param tileScalars per-tile flattened scalar summaries
-     * @param weights     windows contributed by each tile, index-aligned
+     * @param tileScalars   per-tile flattened scalar summaries, successful tiles only
+     * @param weights       windows contributed by each tile, index-aligned with
+     *                      {@code tileScalars}
+     * @param tileIndices   grid index each entry came from, index-aligned with
+     *                      {@code tileScalars}; failed tiles leave gaps
+     * @param areaScale     owned-area fraction per GRID tile, indexed by grid position
      * @return the merged summary; omitted keys are listed at INFO
      */
     private static Map<String, Double> aggregateTileScalars(
-            List<Map<String, Double>> tileScalars, List<Integer> weights) {
+            List<Map<String, Double>> tileScalars, List<Integer> weights, List<Integer> tileIndices,
+            double[] areaScale) {
         Map<String, Double> sums = new LinkedHashMap<>();
         Map<String, Double> weightedSums = new LinkedHashMap<>();
         Map<String, Double> totalWeight = new LinkedHashMap<>();
@@ -838,6 +866,12 @@ public class FiberAnalysisWorkflow {
         for (int i = 0; i < tileScalars.size(); i++) {
             double wgt = i < weights.size() ? Math.max(0, weights.get(i)) : 0;
             if (wgt <= 0) continue;
+            // tileScalars holds successful tiles only, so its index is NOT the
+            // grid index once a tile has failed; areaScale is indexed by grid.
+            int gridIndex = i < tileIndices.size() ? tileIndices.get(i) : -1;
+            double scale = (areaScale != null && gridIndex >= 0 && gridIndex < areaScale.length)
+                    ? areaScale[gridIndex]
+                    : 1.0;
             for (Map.Entry<String, Double> e : tileScalars.get(i).entrySet()) {
                 String key = e.getKey();
                 Double v = e.getValue();
@@ -845,7 +879,7 @@ public class FiberAnalysisWorkflow {
                 if (UNCOMBINABLE_TILE_SCALARS.contains(key) || key.endsWith("_deg")) {
                     dropped.add(key);
                 } else if (ADDITIVE_TILE_SCALARS.contains(key)) {
-                    sums.merge(key, v, Double::sum);
+                    sums.merge(key, v * scale, Double::sum);
                 } else {
                     weightedSums.merge(key, v * wgt, Double::sum);
                     totalWeight.merge(key, wgt, Double::sum);
@@ -865,6 +899,91 @@ public class FiberAnalysisWorkflow {
                     String.join(", ", dropped));
         }
         return out;
+    }
+
+    /**
+     * Keys a tiled run cannot combine, as they appear across the given tiles.
+     *
+     * <p>Mirrors the drop rule in {@link #aggregateTileScalars} so the sidecar
+     * can name what is missing instead of leaving the reader to notice an
+     * absent line.
+     *
+     * @param tileScalars per-tile flattened scalar summaries
+     * @return the dropped keys, sorted
+     */
+    static Set<String> droppedTileScalarKeys(List<Map<String, Double>> tileScalars) {
+        Set<String> dropped = new java.util.TreeSet<>();
+        for (Map<String, Double> tile : tileScalars) {
+            for (Map.Entry<String, Double> e : tile.entrySet()) {
+                Double v = e.getValue();
+                if (v == null || v.isNaN() || v.isInfinite()) continue;
+                if (UNCOMBINABLE_TILE_SCALARS.contains(e.getKey()) || e.getKey().endsWith("_deg")) {
+                    dropped.add(e.getKey());
+                }
+            }
+        }
+        return dropped;
+    }
+
+    /**
+     * Writes the annotation-level {@code results.json} for a tiled run.
+     *
+     * <p>Shaped so a reader can tell at a glance that this is an aggregate and
+     * not a single-shot result: the scalars sit under {@code summary}, and
+     * {@code tiling} records how they were produced and what could not be
+     * combined. Per-tile {@code results.json} files remain under {@code tiles/}
+     * with their own tile-local values.
+     *
+     * @param path         destination file
+     * @param summary      merged scalar summary
+     * @param tileScalars  the per-tile summaries it was merged from; the dropped
+     *                     keys can only be named from these, as {@code summary}
+     *                     has already had them removed
+     * @param grid         the tile geometry used
+     * @param tilesFailed  tiles that threw
+     * @param windowCount  windows in the merged lattice
+     * @param runId        Python run id of the first tile, or empty
+     * @throws IOException if the file cannot be written
+     */
+    private static void writeTiledSummaryJson(
+            Path path,
+            Map<String, Double> summary,
+            List<Map<String, Double>> tileScalars,
+            TileGrid grid,
+            int tilesFailed,
+            int windowCount,
+            String runId)
+            throws IOException {
+        JsonObject root = new JsonObject();
+        root.addProperty("result_kind", "tiled_aggregate");
+        if (!runId.isEmpty()) root.addProperty("run_id", runId);
+
+        JsonObject tiling = new JsonObject();
+        tiling.addProperty("tiles_total", grid.count());
+        tiling.addProperty("tiles_succeeded", tileScalars.size());
+        tiling.addProperty("tiles_failed", tilesFailed);
+        tiling.addProperty("window_px", grid.windowPx());
+        tiling.addProperty("stride_px", grid.stride());
+        tiling.addProperty("tile_step_px", grid.step());
+        tiling.addProperty("merged_windows", windowCount);
+        tiling.addProperty(
+                "additive_scalars",
+                "summed after scaling each tile onto the area it alone owns, so the"
+                        + " one-window tile overlap is not counted twice");
+        tiling.addProperty("averaged_scalars", "weighted by the windows each tile contributed");
+        JsonArray droppedArr = new JsonArray();
+        for (String k : droppedTileScalarKeys(tileScalars)) droppedArr.add(k);
+        tiling.add("omitted_scalars", droppedArr);
+        root.add("tiling", tiling);
+
+        JsonObject summaryObj = new JsonObject();
+        for (Map.Entry<String, Double> e : summary.entrySet()) {
+            summaryObj.addProperty(e.getKey(), e.getValue());
+        }
+        root.add("summary", summaryObj);
+
+        Files.writeString(path, new Gson().toJson(root));
+        logger.info("Annotation-level tiled summary written to {}", path.getFileName());
     }
 
     /**
@@ -970,13 +1089,13 @@ public class FiberAnalysisWorkflow {
         // Box-size lists are in microns; convert each element to integer px,
         // floor at 1 to keep the histograms / box-count meaningful at small
         // pixel-size images, and drop duplicates that collide after rounding.
-        in.put("lac_box_sizes_px", umListToPxCsv(p.lacBoxSizesUm(), pixelSizeUm));
-        in.put("fractal_box_sizes_px", umListToPxCsv(p.fractalBoxSizesUm(), pixelSizeUm));
+        in.put("lac_box_sizes_px", umListToPxCsv(p.lacBoxSizesUm(), pixelSizeUm, "Lacunarity box sizes"));
+        in.put("fractal_box_sizes_px", umListToPxCsv(p.fractalBoxSizesUm(), pixelSizeUm, "Fractal box sizes"));
 
         // Texture
         in.put("texture_enabled", p.textureEnabled());
         in.put("quant_levels", p.quantLevels());
-        in.put("glcm_distances_px", umListToPxCsv(p.glcmDistancesUm(), pixelSizeUm));
+        in.put("glcm_distances_px", umListToPxCsv(p.glcmDistancesUm(), pixelSizeUm, "GLCM distances"));
         in.put("texture_contrast", p.contrast());
         in.put("texture_correlation", p.correlation());
         in.put("texture_energy", p.energy());
@@ -1072,19 +1191,51 @@ public class FiberAnalysisWorkflow {
      * are de-duped while preserving order.
      */
     static String umListToPxCsv(String umList, double pixelSizeUm) {
+        return umListToPxCsv(umList, pixelSizeUm, null);
+    }
+
+    /**
+     * As {@link #umListToPxCsv(String, double)}, naming the setting so a
+     * collapse can be reported usefully.
+     *
+     * <p>Rounding microns to whole pixels can map several requested scales onto
+     * one offset -- the default GLCM distances {@code 0.1,0.2,0.3} um all land
+     * on 1 px at 0.25 um/px, so a user asking for three scales silently gets
+     * one. That is worth a WARN: the setting looks honoured in the dialog and
+     * in the params record either way.
+     *
+     * @param umList      comma-separated microns
+     * @param pixelSizeUm effective pixel size
+     * @param settingName label for the log line, or null to stay quiet
+     * @return comma-separated distinct pixel values
+     */
+    static String umListToPxCsv(String umList, double pixelSizeUm, String settingName) {
         if (umList == null || umList.isBlank() || pixelSizeUm <= 0) return "";
         java.util.LinkedHashSet<Integer> seen = new java.util.LinkedHashSet<>();
+        int requested = 0;
         for (String tok : umList.split(",")) {
             String t = tok.trim();
             if (t.isEmpty()) continue;
             try {
                 double v = Double.parseDouble(t);
                 if (v <= 0) continue;
+                requested++;
                 int px = (int) Math.max(1, Math.round(v / pixelSizeUm));
                 seen.add(px);
             } catch (NumberFormatException ignored) {
                 // skip malformed tokens; validation in the dialog already gated this
             }
+        }
+        if (settingName != null && requested > seen.size()) {
+            logger.warn(
+                    "{}: {} requested scale(s) [{}] um collapse to {} distinct pixel offset(s) [{}]"
+                            + " at {} um/px -- the finer scales cannot be resolved at this resolution",
+                    settingName,
+                    requested,
+                    umList.replace(" ", ""),
+                    seen.size(),
+                    seen.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")),
+                    String.format(Locale.ROOT, "%.4f", pixelSizeUm));
         }
         return seen.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
     }

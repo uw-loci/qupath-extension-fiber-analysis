@@ -520,6 +520,10 @@ def analyze(
         if rad_on:
             scalar = rgb_to_value(image_rgb)
             radon_out = straight.compute_radon_scalar(scalar, analysis_mask)
+            # compute_radon_scalar measures the rho FWHM in pixels and leaves
+            # the conversion to its caller, which is here. Without this the
+            # key ships a pixel count under a _um name.
+            radon_out["fwhm_rho_um"] = float(radon_out["fwhm_rho_um"]) * px_um
             s_block["radon"] = {k: float(v) for k, v in radon_out.items()}
         result["straightness"] = s_block
 
