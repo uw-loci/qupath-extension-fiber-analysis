@@ -109,17 +109,33 @@ final class SourceChannel {
     }
 
     /**
+     * Size of a written region, in read-scale pixels.
+     *
+     * @param width  pixels actually written
+     * @param height pixels actually written
+     */
+    record WrittenSize(int width, int height) {}
+
+    /**
      * Reads a region and writes it where the Python segmenter expects it.
+     *
+     * <p>Returns the size actually written rather than leaving the caller to
+     * recompute it. Servers do not agree on how a downsampled read rounds --
+     * {@code AbstractTileableImageServer} uses {@code Math.round} while
+     * {@code AffineTransformImageServer} truncates -- so any second derivation
+     * can disagree with the file by a pixel, and the boundary mask then fails
+     * to line up with the region.
      *
      * @param server  image to read from
      * @param request region to read at downsample 1
      * @param choice  the selected source channel; a named channel is extracted
      *                as a single band at the source bit depth
      * @param outPng  file to write
+     * @return the written width and height
      * @throws IOException if the region cannot be read or no PNG writer accepts it
      */
-    static void writeRegionPng(ImageServer<BufferedImage> server, RegionRequest request, String choice, Path outPng)
-            throws IOException {
+    static WrittenSize writeRegionPng(
+            ImageServer<BufferedImage> server, RegionRequest request, String choice, Path outPng) throws IOException {
         BufferedImage region = server.readRegion(request);
         if (region == null) {
             throw new IOException("server.readRegion returned null for " + request + " (image dimensions "
@@ -170,6 +186,7 @@ final class SourceChannel {
         if (!Files.exists(outPng) || Files.size(outPng) == 0) {
             throw new IOException("Region PNG missing or empty after write at " + outPng);
         }
+        return new WrittenSize(toWrite.getWidth(), toWrite.getHeight());
     }
 
     /**

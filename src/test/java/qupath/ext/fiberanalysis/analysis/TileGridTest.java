@@ -10,9 +10,9 @@
 package qupath.ext.fiberanalysis.analysis;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.within;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -132,33 +132,70 @@ class TileGridTest {
     }
 
     @Test
-    void ownedAreasPartitionTheRegionExactly() {
-        // The property the additive fix rests on: scaling each tile by its
-        // owned fraction and summing must reconstruct the region area, not the
-        // larger summed-tile area. Checked across shapes that tile unevenly.
+    void ownedBoxesPartitionTheRegionExactly() {
+        // The property every additive scalar rests on. Each tile counts only
+        // its owned rectangle, so those rectangles must cover the region once
+        // and once only -- no seam counted twice, no strip missed.
         int[][] cases = {
-            {20000, 15000, 100, 50}, {89492, 72171, 577, 288}, {155648, 65536, 399, 199}, {9000, 300, 64, 32}
+            {20000, 15000, 100, 50},
+            {89492, 72171, 577, 288},
+            {155648, 65536, 399, 199},
+            {22017, 21114, 72, 36},
+            {9000, 300, 64, 32}
         };
         for (int[] c : cases) {
             TileGrid grid = TileGrid.create(c[0], c[1], c[2], c[3], 4_000_000);
-            double[] w = grid.additiveWeights();
-            assertThat(w).hasSize(grid.count());
+            List<TileGrid.Box> owned = grid.ownedBoxes();
+            assertThat(owned).hasSize(grid.count());
 
-            double scaledArea = 0;
-            double rawArea = 0;
+            long ownedArea = 0;
+            long rawArea = 0;
             for (int i = 0; i < grid.count(); i++) {
-                TileGrid.Box b = grid.tiles().get(i);
-                double tileArea = (double) b.w() * b.h();
-                scaledArea += tileArea * w[i];
-                rawArea += tileArea;
+                TileGrid.Box tile = grid.tiles().get(i);
+                TileGrid.Box own = owned.get(i);
+                // An owned box is tile-local and never escapes its tile.
+                assertThat(own.w()).isLessThanOrEqualTo(tile.w());
+                assertThat(own.h()).isLessThanOrEqualTo(tile.h());
+                ownedArea += (long) own.w() * own.h();
+                rawArea += (long) tile.w() * tile.h();
             }
-            double regionArea = (double) c[0] * c[1];
-            assertThat(scaledArea)
-                    .as("owned areas must sum to the region for %dx%d", c[0], c[1])
-                    .isCloseTo(regionArea, within(regionArea * 1e-9));
-            assertThat(rawArea)
-                    .as("raw tile areas should exceed the region, or there is no overlap to correct")
-                    .isGreaterThanOrEqualTo(regionArea);
+            long regionArea = (long) c[0] * c[1];
+            assertThat(ownedArea)
+                    .as("owned boxes must tile the region exactly for %dx%d", c[0], c[1])
+                    .isEqualTo(regionArea);
+            if (grid.count() > 1) {
+                assertThat(rawArea)
+                        .as("overlapping tiles must cover more than the region, or there is nothing to correct")
+                        .isGreaterThan(regionArea);
+            } else {
+                assertThat(rawArea).isEqualTo(regionArea);
+            }
+        }
+    }
+
+    @Test
+    void ownedBoxesDoNotOverlapInGlobalCoordinates() {
+        // Tile-local boxes are only disjoint if placed back at their origins.
+        TileGrid grid = TileGrid.create(20000, 15000, 100, 50, 4_000_000);
+        List<TileGrid.Box> owned = grid.ownedBoxes();
+        Set<Long> claimed = new HashSet<>();
+        for (int i = 0; i < grid.count(); i++) {
+            TileGrid.Box tile = grid.tiles().get(i);
+            TileGrid.Box own = owned.get(i);
+            // Sample the corners and centre rather than every pixel.
+            int[][] probes = {
+                {0, 0},
+                {own.w() - 1, 0},
+                {0, own.h() - 1},
+                {own.w() - 1, own.h() - 1},
+                {own.w() / 2, own.h() / 2}
+            };
+            for (int[] pr : probes) {
+                long key = ((long) (tile.x() + pr[0]) << 32) | (tile.y() + pr[1]);
+                assertThat(claimed.add(key))
+                        .as("point (%d,%d) is owned by more than one tile", tile.x() + pr[0], tile.y() + pr[1])
+                        .isTrue();
+            }
         }
     }
 
@@ -166,6 +203,6 @@ class TileGridTest {
     void untiledGridOwnsItselfEntirely() {
         TileGrid grid = TileGrid.create(1000, 1000, 100, 50, 10_000_000);
         assertThat(grid.count()).isEqualTo(1);
-        assertThat(grid.additiveWeights()).containsExactly(1.0);
+        assertThat(grid.ownedBoxes()).containsExactly(new TileGrid.Box(0, 0, 1000, 1000));
     }
 }

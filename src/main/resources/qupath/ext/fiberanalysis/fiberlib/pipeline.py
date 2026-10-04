@@ -154,6 +154,10 @@ def analyze(
     emit_morph_summary=False,
     emit_json_sidecar=False,
     emit_npz=False,
+    core_x=None,
+    core_y=None,
+    core_w=None,
+    core_h=None,
 ):
     """Run the fiber-analysis pipeline on one region.
 
@@ -200,6 +204,39 @@ def analyze(
     bh = int(bbox_h) if bbox_h is not None else rh
 
     px_um = float(pixel_size_um)
+
+    def _core_slice(shape):
+        """Rectangle this call is solely answerable for, as a boolean mask.
+
+        A tiled run overlaps its tiles by one window so the window lattice
+        survives the split. Every tile therefore SEES part of its neighbour,
+        and a scalar summed over whole tiles counts each seam twice. The caller
+        hands each tile the disjoint rectangle it owns; the additive scalars
+        below are restricted to it, so the per-tile parts sum to the region
+        exactly rather than approximately.
+
+        Scaling the whole-tile total by an area fraction instead is only valid
+        when the measured quantity is spread evenly over the tile rectangle,
+        which a polygon annotation emphatically is not.
+
+        Defaults to the whole image, which is what an untiled run wants.
+        """
+        h, w = shape[:2]
+        if core_w is None or core_h is None:
+            return None
+        x0 = max(0, int(core_x or 0))
+        y0 = max(0, int(core_y or 0))
+        x1 = min(w, x0 + int(core_w))
+        y1 = min(h, y0 + int(core_h))
+        if x1 <= x0 or y1 <= y0:
+            logger.warning(
+                "core rect (%s,%s,%s,%s) does not intersect the %dx%d region -- ignoring it",
+                core_x, core_y, core_w, core_h, w, h,
+            )
+            return None
+        m = np.zeros((h, w), dtype=bool)
+        m[y0:y1, x0:x1] = True
+        return m
     border_um = float(border_zone_width_um)
     zone = str(zone_mode)
 
@@ -484,10 +521,14 @@ def analyze(
     result["pixel_size_um"] = px_um
     result["border_zone_width_um"] = border_um
     result["zone_mode"] = zone
-    fiber_px_v = int(fiber_mask.sum())
-    zone_px_v = int(zone_mask.sum())
-    fiber_in_zone_v = int(analysis_mask.sum())
-    region_px_v = int(rh * rw)
+    # Additive scalars count only the owned core; ratios below stay whole-tile,
+    # because a ratio is already normalised and does not double-count.
+    core = _core_slice(fiber_mask.shape)
+    _c = (lambda m: m & core) if core is not None else (lambda m: m)
+    fiber_px_v = int(_c(fiber_mask).sum())
+    zone_px_v = int(_c(zone_mask).sum())
+    fiber_in_zone_v = int(_c(analysis_mask).sum())
+    region_px_v = int(core.sum()) if core is not None else int(rh * rw)
     result["fiber_pixels"] = fiber_px_v
     result["zone_pixels"] = zone_px_v
     result["fiber_in_zone_pixels"] = fiber_in_zone_v
@@ -533,7 +574,7 @@ def analyze(
         if morph_flags["hdm"]:
             m_block["hdm_coverage"] = float(morph.hdm(analysis_mask, zone_mask))
         if morph_flags["length"]:
-            m_block["total_length_px"] = int(morph.total_length_px(skeleton))
+            m_block["total_length_px"] = int(morph.total_length_px(_c(skeleton)))
             m_block["total_length_um"] = float(m_block["total_length_px"] * px_um)
         if morph_flags["branch"] or morph_flags["endpoints"]:
             bp, ep = morph.branch_endpoint_counts(skeleton)

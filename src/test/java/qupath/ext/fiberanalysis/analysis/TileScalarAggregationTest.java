@@ -24,39 +24,23 @@ import org.junit.jupiter.api.Test;
  */
 class TileScalarAggregationTest {
 
-    /** Aggregate with no area scaling: every tile owns all of itself. */
+    @SuppressWarnings("unchecked")
     private static Map<String, Double> aggregate(List<Map<String, Double>> tiles, List<Integer> weights)
             throws Exception {
-        double[] unitScale = new double[tiles.size()];
-        java.util.Arrays.fill(unitScale, 1.0);
-        List<Integer> identity =
-                java.util.stream.IntStream.range(0, tiles.size()).boxed().toList();
-        return aggregate(tiles, weights, identity, unitScale);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Map<String, Double> aggregate(
-            List<Map<String, Double>> tiles, List<Integer> weights, List<Integer> tileIndices, double[] areaScale)
-            throws Exception {
-        Method m = FiberAnalysisWorkflow.class.getDeclaredMethod(
-                "aggregateTileScalars", List.class, List.class, List.class, double[].class);
+        Method m = FiberAnalysisWorkflow.class.getDeclaredMethod("aggregateTileScalars", List.class, List.class);
         m.setAccessible(true);
-        return (Map<String, Double>) m.invoke(null, tiles, weights, tileIndices, areaScale);
+        return (Map<String, Double>) m.invoke(null, tiles, weights);
     }
 
     @Test
     void additiveScalarsAreSummedNotAveraged() throws Exception {
         Map<String, Double> tile = Map.of(
                 "morphometrics.total_length_um", 1000.0,
-                "morphometrics.branch_points", 50.0,
-                "morphometrics.endpoints", 20.0,
                 "fiber_pixels", 400.0,
                 "zone_area_um2", 250.0);
         Map<String, Double> out = aggregate(List.of(tile, tile, tile, tile), List.of(10, 10, 10, 10));
 
         assertThat(out.get("morphometrics.total_length_um")).isEqualTo(4000.0);
-        assertThat(out.get("morphometrics.branch_points")).isEqualTo(200.0);
-        assertThat(out.get("morphometrics.endpoints")).isEqualTo(80.0);
         assertThat(out.get("fiber_pixels")).isEqualTo(1600.0);
         assertThat(out.get("zone_area_um2")).isEqualTo(1000.0);
     }
@@ -99,38 +83,14 @@ class TileScalarAggregationTest {
     }
 
     @Test
-    void additiveScalarsAreScaledOntoTheAreaEachTileOwns() throws Exception {
-        // Tiles overlap by one window, so each reports a total covering area it
-        // shares with its neighbour. Summing raw counts the seam twice; scaling
-        // by the owned fraction makes the parts sum to the region.
-        Map<String, Double> tile = Map.of("fiber_pixels", 1000.0);
-        double[] owned = {0.8, 0.8, 1.0}; // two interior tiles, one edge tile
-        Map<String, Double> out = aggregate(List.of(tile, tile, tile), List.of(10, 10, 10), List.of(0, 1, 2), owned);
+    void skeletonTopologyCountsAreOmittedNotSummed() throws Exception {
+        // Cutting a fiber at a tile seam invents an endpoint on each side and
+        // can destroy a branch point, so these do not add up across tiles.
+        // Measured on a real 9-tile run: endpoints +70%, branch points -100%.
+        Map<String, Double> tile = Map.of("morphometrics.branch_points", 50.0, "morphometrics.endpoints", 20.0);
+        Map<String, Double> out = aggregate(List.of(tile, tile, tile), List.of(10, 10, 10));
 
-        assertThat(out.get("fiber_pixels")).isCloseTo(2600.0, within(1e-9)); // not 3000
-    }
-
-    @Test
-    void areaScaleIsIndexedByGridPositionNotBySurvivorOrder() throws Exception {
-        // Tile 1 failed, so the two survivors are grid tiles 0 and 2. Indexing
-        // the scale array by survivor order would apply 0.5 to grid tile 2.
-        Map<String, Double> tile = Map.of("fiber_pixels", 100.0);
-        double[] owned = {1.0, 0.5, 0.25};
-        Map<String, Double> out = aggregate(List.of(tile, tile), List.of(10, 10), List.of(0, 2), owned);
-
-        assertThat(out.get("fiber_pixels")).isCloseTo(125.0, within(1e-9)); // 100*1.0 + 100*0.25
-    }
-
-    @Test
-    void averagedScalarsAreNotTouchedByAreaScaling() throws Exception {
-        // A ratio is already normalised; scaling it by owned area would be wrong.
-        double[] owned = {0.5, 0.5};
-        Map<String, Double> out = aggregate(
-                List.of(Map.of("texture.contrast", 10.0), Map.of("texture.contrast", 20.0)),
-                List.of(10, 10),
-                List.of(0, 1),
-                owned);
-
-        assertThat(out.get("texture.contrast")).isCloseTo(15.0, within(1e-9));
+        assertThat(out).doesNotContainKey("morphometrics.branch_points");
+        assertThat(out).doesNotContainKey("morphometrics.endpoints");
     }
 }

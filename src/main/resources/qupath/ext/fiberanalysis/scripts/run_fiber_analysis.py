@@ -90,6 +90,10 @@ _FORWARD = [
     "emit_morph_summary",
     "emit_json_sidecar",
     "emit_npz",
+    "core_x",
+    "core_y",
+    "core_w",
+    "core_h",
 ]
 
 

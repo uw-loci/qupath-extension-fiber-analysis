@@ -89,38 +89,38 @@ record TileGrid(List<Box> tiles, int stride, int windowPx, int step) {
     }
 
     /**
-     * Fraction of each tile that this tile alone is responsible for.
+     * The rectangle each tile alone is responsible for, in TILE-LOCAL pixels.
      *
-     * <p>Tiles overlap by one window so the window lattice survives, which
-     * means a scalar summed over whole tiles counts every seam strip twice.
-     * Each tile is therefore given a disjoint OWNED rectangle: from its origin
-     * to the next origin along each axis, and to the region edge for the last
-     * tile in a row or column. Those rectangles partition the region exactly,
-     * so the returned fractions scale an additive per-tile total onto the area
-     * the tile is solely answerable for and the scaled totals sum to the whole
-     * region.
+     * <p>Tiles overlap by one window so the window lattice survives a split,
+     * which means a scalar summed over whole tiles counts every seam strip
+     * twice. Each tile is given a disjoint OWNED rectangle: from its origin to
+     * the next origin along each axis, and to the region edge for the last tile
+     * in a row or column. Those rectangles partition the region exactly, so
+     * additive scalars restricted to them sum to the whole with no overlap and
+     * no gap.
      *
-     * <p>This is exact when the measured quantity is uniform across the tile
-     * and unbiased otherwise; the residual error is the density difference
-     * between a tile's core and its overlap margin.
+     * <p>Returned tile-local because that is the frame the segmenter works in.
+     * The region extent is taken from the tiles themselves, so it cannot drift
+     * from the geometry {@link #create} produced.
      *
-     * <p>The region extent is taken from the tiles themselves, so this cannot
-     * drift from the geometry {@link #create} produced.
+     * <p>Scaling a whole-tile total by an owned-area FRACTION instead is only
+     * valid when the measured quantity is spread evenly over the tile
+     * rectangle. A polygon annotation breaks that badly -- measured at 32% low
+     * on real tissue -- which is why this hands back a rectangle to measure
+     * inside rather than a number to multiply by.
      *
-     * @return one scale factor per tile, index-aligned with {@link #tiles()}
+     * @return one owned box per tile, index-aligned with {@link #tiles()}
      */
-    double[] additiveWeights() {
+    List<Box> ownedBoxes() {
         int regionW = tiles.stream().mapToInt(b -> b.x() + b.w()).max().orElse(0);
         int regionH = tiles.stream().mapToInt(b -> b.y() + b.h()).max().orElse(0);
         Map<Integer, Integer> ownW = ownedExtents(tiles, Box::x, regionW);
         Map<Integer, Integer> ownH = ownedExtents(tiles, Box::y, regionH);
-        double[] out = new double[tiles.size()];
-        for (int i = 0; i < tiles.size(); i++) {
-            Box b = tiles.get(i);
-            double tileArea = (double) b.w() * b.h();
-            if (tileArea <= 0) continue;
-            double owned = (double) ownW.getOrDefault(b.x(), b.w()) * ownH.getOrDefault(b.y(), b.h());
-            out[i] = Math.min(1.0, owned / tileArea);
+        List<Box> out = new ArrayList<>(tiles.size());
+        for (Box b : tiles) {
+            int w = Math.min(b.w(), ownW.getOrDefault(b.x(), b.w()));
+            int h = Math.min(b.h(), ownH.getOrDefault(b.y(), b.h()));
+            out.add(new Box(0, 0, Math.max(0, w), Math.max(0, h)));
         }
         return out;
     }

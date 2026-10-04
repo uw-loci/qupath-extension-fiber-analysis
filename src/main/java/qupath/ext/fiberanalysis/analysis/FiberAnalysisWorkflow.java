@@ -93,7 +93,37 @@ public class FiberAnalysisWorkflow {
      * roughly 89 MP. Anything larger is tiled, so tissue size stops being a
      * failure mode.
      */
-    private static final long TILE_BUDGET_PX = 64_000_000L;
+    private static final long TILE_BUDGET_PX = resolveTileBudget();
+
+    /**
+     * Tile budget, overridable with {@code -Dfiber.tileBudgetPx=<n>}.
+     *
+     * <p>The override exists so a harness can run the SAME annotation at the
+     * SAME downsample both tiled and untiled and compare the two. Without it,
+     * forcing a region across the threshold means changing the downsample,
+     * which changes the numbers for legitimate reasons and so cannot show
+     * whether the tiled path agrees with the untiled one. Out of range values
+     * fall back to the default rather than producing a grid nothing can read.
+     *
+     * @return the budget in read-scale pixels
+     */
+    private static long resolveTileBudget() {
+        long dflt = 64_000_000L;
+        String raw = System.getProperty("fiber.tileBudgetPx");
+        if (raw == null || raw.isBlank()) return dflt;
+        try {
+            long v = Long.parseLong(raw.trim());
+            if (v < 1_000_000L || v > 2_000_000_000L) {
+                logger.warn("fiber.tileBudgetPx={} is outside [1e6, 2e9] -- using the default {}", v, dflt);
+                return dflt;
+            }
+            logger.warn("fiber.tileBudgetPx override in effect: {} (default {})", v, dflt);
+            return v;
+        } catch (NumberFormatException ex) {
+            logger.warn("fiber.tileBudgetPx={} is not a number -- using the default {}", raw, dflt);
+            return dflt;
+        }
+    }
 
     /** Windows reserved device names (case-insensitive) for the filename sanitiser. */
     private static final Set<String> WINDOWS_RESERVED = Set.of(
@@ -465,7 +495,23 @@ public class FiberAnalysisWorkflow {
         RegionRequest request = RegionRequest.createInstance(server.getPath(), ds, rx, ry, rw, rh);
 
         Path regionPng = annDir.resolve("region.png");
-        SourceChannel.writeRegionPng(server, request, params.internalChannel(), regionPng);
+        // Size the rest of this run from what the server actually returned.
+        // readW/readH above are a ceil, QuPath's tileable servers round, and a
+        // transformed server truncates -- so at any downsample that does not
+        // divide evenly the two disagree by a pixel and Python rejects the
+        // boundary mask as the wrong shape for the region.
+        SourceChannel.WrittenSize written =
+                SourceChannel.writeRegionPng(server, request, params.internalChannel(), regionPng);
+        int regionW = written.width();
+        int regionH = written.height();
+        if (regionW != (int) readW || regionH != (int) readH) {
+            logger.debug(
+                    "Region read back as {}x{} where the estimate was {}x{}; using the actual size",
+                    regionW,
+                    regionH,
+                    readW,
+                    readH);
+        }
 
         // Polygon boundary mask: rasterise the annotation's actual shape into a
         // binary PNG sized to the dilated region. v1 sent only the axis-aligned
@@ -473,7 +519,7 @@ public class FiberAnalysisWorkflow {
         // concave / curved annotations and matches PPM's rasterize_geojson_to_mask
         // semantics without dragging in a separate Python rasteriser.
         Path boundaryPng = annDir.resolve("boundary_mask.png");
-        rasterisePolygonMask(roi, rx, ry, (int) readW, (int) readH, ds, boundaryPng);
+        rasterisePolygonMask(roi, rx, ry, regionW, regionH, ds, boundaryPng);
 
         // Python works entirely in READ-scale pixels, so every geometry handed
         // over is divided by the downsample and the pixel size multiplied by it.
@@ -487,8 +533,8 @@ public class FiberAnalysisWorkflow {
                 annDir,
                 rx,
                 ry,
-                (int) readW,
-                (int) readH,
+                regionW,
+                regionH,
                 (int) Math.round((x - rx) / ds),
                 (int) Math.round((y - ry) / ds),
                 (int) Math.round(w / ds),
@@ -620,6 +666,9 @@ public class FiberAnalysisWorkflow {
         // Grid index each successful tile came from: a failed tile adds nothing
         // to the three lists, so their index stops matching the grid's.
         List<Integer> tileIndices = new ArrayList<>();
+        // Disjoint rectangle each tile alone counts, so the additive scalars
+        // from overlapping tiles sum to the region instead of overshooting it.
+        List<TileGrid.Box> ownedBoxes = grid.ownedBoxes();
 
         ProgressEstimator est = new ProgressEstimator(grid.count());
         String runId = "";
@@ -648,10 +697,13 @@ public class FiberAnalysisWorkflow {
                 Path tilePng = tileDir.resolve("region.png");
                 RegionRequest req =
                         RegionRequest.createInstance(server.getPath(), ds, tileFullX, tileFullY, tileFullW, tileFullH);
-                SourceChannel.writeRegionPng(server, req, params.internalChannel(), tilePng);
+                // Same rounding trap as the untiled path: take the tile's size
+                // from the file the server produced, not from box.w()/h().
+                SourceChannel.WrittenSize tileSize =
+                        SourceChannel.writeRegionPng(server, req, params.internalChannel(), tilePng);
 
                 Path tileMask = tileDir.resolve("boundary_mask.png");
-                rasterisePolygonMask(roi, tileFullX, tileFullY, box.w(), box.h(), ds, tileMask);
+                rasterisePolygonMask(roi, tileFullX, tileFullY, tileSize.width(), tileSize.height(), ds, tileMask);
 
                 Map<String, Object> in = buildScriptInputs(
                         params,
@@ -661,12 +713,13 @@ public class FiberAnalysisWorkflow {
                         tileDir,
                         tileFullX,
                         tileFullY,
-                        box.w(),
-                        box.h(),
+                        tileSize.width(),
+                        tileSize.height(),
                         (int) Math.round((annX - tileFullX) / ds),
                         (int) Math.round((annY - tileFullY) / ds),
                         (int) Math.round(annW / ds),
-                        (int) Math.round(annH / ds));
+                        (int) Math.round(annH / ds),
+                        ownedBoxes.get(t));
 
                 Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", in);
                 Object json = task.outputs.get("result_json");
@@ -712,8 +765,7 @@ public class FiberAnalysisWorkflow {
                 grid.count() - failed,
                 mergedJson.getFileName());
 
-        Map<String, Double> summary =
-                aggregateTileScalars(tileScalars, tileWindowCounts, tileIndices, grid.additiveWeights());
+        Map<String, Double> summary = aggregateTileScalars(tileScalars, tileWindowCounts);
 
         // Python writes results.json into the directory it is handed, which on
         // this path is the per-tile directory -- so without this the annotation
@@ -810,9 +862,7 @@ public class FiberAnalysisWorkflow {
             "zone_area_um2",
             "fiber_in_zone_area_um2",
             "morphometrics.total_length_px",
-            "morphometrics.total_length_um",
-            "morphometrics.branch_points",
-            "morphometrics.endpoints");
+            "morphometrics.total_length_um");
 
     /**
      * Scalars that cannot be combined across tiles from the tile summaries
@@ -825,41 +875,41 @@ public class FiberAnalysisWorkflow {
      * does not carry. Fractal dimension is not an average either -- D of the
      * union is not the mean of per-tile D.
      */
-    private static final Set<String> UNCOMBINABLE_TILE_SCALARS =
-            Set.of("morphometrics.fractal_dimension", "straightness.radon.theta_star_deg");
+    private static final Set<String> UNCOMBINABLE_TILE_SCALARS = Set.of(
+            "morphometrics.fractal_dimension",
+            "straightness.radon.theta_star_deg",
+            // Skeleton topology is not additive across a seam. Cutting a fiber
+            // at a tile edge creates an endpoint on each side that the whole
+            // annotation does not have, and can destroy a branch point. Summing
+            // them inflates endpoints and deflates branches by an amount that
+            // grows with the tile count -- measured at +70% and -100% on a
+            // 9-tile run. A per-window count is still reported and is unaffected.
+            "morphometrics.branch_points",
+            "morphometrics.endpoints");
 
     /**
      * Combines per-tile scalar summaries.
      *
-     * <p>Additive keys are summed after scaling each tile onto the area it
-     * alone owns; angular and non-linear keys are dropped; the rest are
-     * averaged weighted by the windows each tile contributed, so a sliver tile
-     * does not count as much as a full one.
+     * <p>Additive keys are summed; angular, non-linear and seam-sensitive keys
+     * are dropped; the rest are averaged weighted by the windows each tile
+     * contributed, so a sliver tile does not count as much as a full one.
      *
-     * <p>The area scaling is not cosmetic. Tiles overlap by one window so the
-     * window lattice survives, and a plain sum therefore counts every seam
-     * strip twice -- measured at 10-16% too high on a whole-slide annotation,
-     * rising with window size. {@link TileGrid#additiveWeights} hands back the
-     * disjoint owned-area fraction per tile; scaling by it makes the parts sum
-     * to the region.
+     * <p>A plain sum is correct here ONLY because each tile was told to count
+     * just the rectangle it owns ({@link TileGrid#ownedBoxes}, forwarded to the
+     * segmenter as {@code core_x/y/w/h}). Tiles overlap by one window so the
+     * window lattice survives a split; without that restriction every seam
+     * strip lands in the total twice.
      *
      * <p>Dropping beats approximating here. These numbers end up in papers, and
      * a silently wrong total is worse than an absent one -- the caller can see
      * a missing key, but cannot see a total that is 1/N of the truth.
      *
-     * @param tileScalars   per-tile flattened scalar summaries, successful tiles only
-     * @param weights       windows contributed by each tile, index-aligned with
-     *                      {@code tileScalars}
-     * @param tileIndices   grid index each entry came from, index-aligned with
-     *                      {@code tileScalars}; failed tiles leave gaps
-     * @param areaScale     owned-area fraction per GRID tile, indexed by grid position
+     * @param tileScalars per-tile flattened scalar summaries, successful tiles only
+     * @param weights     windows contributed by each tile, index-aligned
      * @return the merged summary; omitted keys are listed at INFO
      */
     private static Map<String, Double> aggregateTileScalars(
-            List<Map<String, Double>> tileScalars,
-            List<Integer> weights,
-            List<Integer> tileIndices,
-            double[] areaScale) {
+            List<Map<String, Double>> tileScalars, List<Integer> weights) {
         Map<String, Double> sums = new LinkedHashMap<>();
         Map<String, Double> weightedSums = new LinkedHashMap<>();
         Map<String, Double> totalWeight = new LinkedHashMap<>();
@@ -868,11 +918,6 @@ public class FiberAnalysisWorkflow {
         for (int i = 0; i < tileScalars.size(); i++) {
             double wgt = i < weights.size() ? Math.max(0, weights.get(i)) : 0;
             if (wgt <= 0) continue;
-            // tileScalars holds successful tiles only, so its index is NOT the
-            // grid index once a tile has failed; areaScale is indexed by grid.
-            int gridIndex = i < tileIndices.size() ? tileIndices.get(i) : -1;
-            double scale =
-                    (areaScale != null && gridIndex >= 0 && gridIndex < areaScale.length) ? areaScale[gridIndex] : 1.0;
             for (Map.Entry<String, Double> e : tileScalars.get(i).entrySet()) {
                 String key = e.getKey();
                 Double v = e.getValue();
@@ -880,7 +925,7 @@ public class FiberAnalysisWorkflow {
                 if (UNCOMBINABLE_TILE_SCALARS.contains(key) || key.endsWith("_deg")) {
                     dropped.add(key);
                 } else if (ADDITIVE_TILE_SCALARS.contains(key)) {
-                    sums.merge(key, v * scale, Double::sum);
+                    sums.merge(key, v, Double::sum);
                 } else {
                     weightedSums.merge(key, v * wgt, Double::sum);
                     totalWeight.merge(key, wgt, Double::sum);
@@ -1005,6 +1050,45 @@ public class FiberAnalysisWorkflow {
             int bboxYInRegion,
             int bboxW,
             int bboxH) {
+        return buildScriptInputs(
+                p,
+                pixelSizeUm,
+                regionPng,
+                boundaryMaskPng,
+                outputDir,
+                regionX,
+                regionY,
+                regionW,
+                regionH,
+                bboxXInRegion,
+                bboxYInRegion,
+                bboxW,
+                bboxH,
+                null);
+    }
+
+    /**
+     * As above, restricting the additive scalars to {@code coreBox}.
+     *
+     * @param coreBox tile-local rectangle this call alone owns, or null for
+     *                the whole region
+     * @return the Appose input map
+     */
+    private Map<String, Object> buildScriptInputs(
+            FiberAnalysisParams p,
+            double pixelSizeUm,
+            Path regionPng,
+            Path boundaryMaskPng,
+            Path outputDir,
+            int regionX,
+            int regionY,
+            int regionW,
+            int regionH,
+            int bboxXInRegion,
+            int bboxYInRegion,
+            int bboxW,
+            int bboxH,
+            TileGrid.Box coreBox) {
         Map<String, Object> in = new HashMap<>();
 
         // Region image (read by Python via PIL)
@@ -1062,6 +1146,16 @@ public class FiberAnalysisWorkflow {
             // Also normalise the threshold_method string into the snake_case
             // value the Python segmentation module recognises.
             in.put("threshold_method", "project_otsu");
+        }
+
+        // Owned core: when a tiled run sets this, the segmenter counts additive
+        // scalars only inside it, so overlapping tiles do not double-count the
+        // seam. Absent on an untiled run, where the whole region is owned.
+        if (coreBox != null) {
+            in.put("core_x", coreBox.x());
+            in.put("core_y", coreBox.y());
+            in.put("core_w", coreBox.w());
+            in.put("core_h", coreBox.h());
         }
 
         // Window analysis
