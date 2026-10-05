@@ -71,6 +71,7 @@ import qupath.lib.regions.ImagePlane;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.ROIs;
 import qupath.lib.roi.interfaces.ROI;
+import qupath.lib.scripting.QP;
 
 /**
  * Orchestrates one Fiber Analysis run: for each selected annotation, read the
@@ -83,6 +84,17 @@ import qupath.lib.roi.interfaces.ROI;
  * optional per-window PathObject path.
  */
 public class FiberAnalysisWorkflow {
+
+    /**
+     * Project directory captured when the run was launched.
+     *
+     * <p>Must be resolved on the CALLING thread. {@code QP.setBatchProject} is
+     * thread-local and the analysis runs on its own worker thread, so a
+     * project set by a script is invisible from inside the run -- which is how
+     * a calibrated run silently fell back to per-region Otsu for a whole
+     * project.
+     */
+    private volatile Path projectDirAtLaunch;
 
     private static final Logger logger = LoggerFactory.getLogger(FiberAnalysisWorkflow.class);
 
@@ -173,6 +185,14 @@ public class FiberAnalysisWorkflow {
             if (HeadlessFx.isReady()) Dialogs.showErrorMessage("Fiber Analysis", "No image data available.");
             else logger.error("Fiber Analysis: no image data available (headless).");
             return null;
+        }
+
+        // Resolve the project HERE, on the calling thread. QP.setBatchProject
+        // is thread-local, so anything the worker thread asks for later comes
+        // back empty.
+        projectDirAtLaunch = resolveProjectDir();
+        if (projectDirAtLaunch != null) {
+            logger.info("Project directory for this run: {}", projectDirAtLaunch);
         }
 
         Window owner = qupath != null ? qupath.getStage() : null;
@@ -1049,7 +1069,8 @@ public class FiberAnalysisWorkflow {
             int bboxXInRegion,
             int bboxYInRegion,
             int bboxW,
-            int bboxH) {
+            int bboxH)
+            throws IOException {
         return buildScriptInputs(
                 p,
                 pixelSizeUm,
@@ -1088,7 +1109,8 @@ public class FiberAnalysisWorkflow {
             int bboxYInRegion,
             int bboxW,
             int bboxH,
-            TileGrid.Box coreBox) {
+            TileGrid.Box coreBox)
+            throws IOException {
         Map<String, Object> in = new HashMap<>();
 
         // Region image (read by Python via PIL)
@@ -1139,10 +1161,27 @@ public class FiberAnalysisWorkflow {
         if ("Project Otsu (calibrated)".equals(p.thresholdMethod())
                 && p.projectCalibrationName() != null
                 && !p.projectCalibrationName().isBlank()) {
-            Double thr = loadCalibratedThreshold(p.projectCalibrationName());
-            if (thr != null) {
-                in.put("project_threshold_norm", thr);
+            Path calProjDir = projectDirAtLaunch != null ? projectDirAtLaunch : resolveProjectDir();
+            Double thr = loadCalibratedThreshold(p.projectCalibrationName(), calProjDir);
+            if (thr == null) {
+                // Refuse rather than let Python fall back to per-region Otsu.
+                // The fallback is silent in everything a user looks at: the run
+                // succeeds, every file is written, and only a line buried in
+                // the log says the threshold was not the calibrated one. A
+                // whole 26-image project was analysed that way, each region
+                // cutting at its own threshold, which is precisely what
+                // choosing a project calibration asks the tool not to do.
+                Path projDir = calProjDir;
+                throw new IOException("Project Otsu (calibrated) is selected with calibration '"
+                        + p.projectCalibrationName() + "', but its threshold could not be loaded"
+                        + (projDir == null
+                                ? ". No project could be resolved -- a calibrated run needs an open project."
+                                : " from " + projDir.resolve("fiber-analysis")
+                                        + ". Run the project calibration first, or pick another threshold method.")
+                        + " Refusing to fall back to per-region Otsu, which would make the images"
+                        + " incomparable without saying so.");
             }
+            in.put("project_threshold_norm", thr);
             // Also normalise the threshold_method string into the snake_case
             // value the Python segmentation module recognises.
             in.put("threshold_method", "project_otsu");
@@ -1341,14 +1380,51 @@ public class FiberAnalysisWorkflow {
      * {@code null} if the file is missing or malformed -- the Python side
      * then falls back to per-region Otsu and logs a warning.
      */
-    static Double loadCalibratedThreshold(String calibrationName) {
-        if (calibrationName == null || calibrationName.isBlank()) return null;
+    /**
+     * Directory holding the open project, or null when there is none.
+     *
+     * <p>Checks the GUI singleton first, then {@code QP.getProject()}. The
+     * second matters because the GUI singleton is null in every non-GUI
+     * context -- a Groovy script under {@code QuPath script}, a batch run, a
+     * harness scenario -- and without it the calibrated threshold silently
+     * could not be found, so a project_otsu run quietly degraded to
+     * per-region Otsu. That is the exact behaviour calibration exists to
+     * prevent, and it looked like a successful run.
+     *
+     * @return the project directory, or null
+     */
+    static Path resolveProjectDir() {
         try {
             QuPathGUI gui = QuPathGUI.getInstance();
-            if (gui == null || gui.getProject() == null || gui.getProject().getPath() == null) {
-                return null;
+            if (gui != null && gui.getProject() != null && gui.getProject().getPath() != null) {
+                return gui.getProject().getPath().getParent();
             }
-            Path projDir = gui.getProject().getPath().getParent();
+        } catch (Exception ex) {
+            logger.debug("No GUI project: {}", ex.getMessage());
+        }
+        try {
+            Project<BufferedImage> proj = QP.getProject();
+            if (proj != null && proj.getPath() != null) {
+                return proj.getPath().getParent();
+            }
+        } catch (Exception ex) {
+            logger.debug("No scripting project: {}", ex.getMessage());
+        }
+        return null;
+    }
+
+    static Double loadCalibratedThreshold(String calibrationName) {
+        return loadCalibratedThreshold(calibrationName, resolveProjectDir());
+    }
+
+    /**
+     * @param calibrationName calibration to load
+     * @param projDir         project directory, or null to give up
+     * @return the calibrated threshold on [0,1], or null
+     */
+    static Double loadCalibratedThreshold(String calibrationName, Path projDir) {
+        if (calibrationName == null || calibrationName.isBlank()) return null;
+        try {
             if (projDir == null) return null;
             Path calFile = projDir.resolve("fiber-analysis").resolve("calibration_" + calibrationName + ".json");
             if (!Files.isRegularFile(calFile)) return null;
@@ -1377,21 +1453,10 @@ public class FiberAnalysisWorkflow {
         if (configured != null && !configured.isBlank()) {
             return Paths.get(configured);
         }
-        // Try the open project (via the QuPath GUI singleton) before the home fallback.
-        try {
-            QuPathGUI gui = QuPathGUI.getInstance();
-            if (gui != null && gui.getProject() != null) {
-                Project<?> project = gui.getProject();
-                Path projFile = project.getPath();
-                if (projFile != null) {
-                    Path projDir = projFile.getParent();
-                    if (projDir != null) {
-                        return projDir.resolve("fiber-analysis");
-                    }
-                }
-            }
-        } catch (Exception ex) {
-            logger.debug("Could not resolve project dir for default output: {}", ex.getMessage());
+        // Try the open project before the home fallback, GUI or not.
+        Path projDir = resolveProjectDir();
+        if (projDir != null) {
+            return projDir.resolve("fiber-analysis");
         }
         return Paths.get(System.getProperty("user.home"), "QuPath", "fiber-out");
     }

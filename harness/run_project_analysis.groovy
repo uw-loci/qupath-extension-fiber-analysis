@@ -76,6 +76,13 @@ if (!svc.isAvailable()) {
 }
 println "APPOSE|available=${svc.isAvailable()} fiberlib=${svc.getInstalledFiberlibVersion()}"
 
+// loadCalibratedThreshold resolves the project through the GUI singleton and
+// then QP.getProject(). Headless there is no GUI, so without this the
+// calibrated threshold is not found and the run silently falls back to
+// per-region Otsu -- which is what it did for a whole 26-image project.
+import qupath.lib.scripting.QP
+QP.setBatchProjectAndImage(project, null)
+
 def params = FiberAnalysisParams.fromPreferences()
 println "CONFIG|calibration=${calName}|downsample=${ds}|windowUm=${winUm}"
 
@@ -95,10 +102,27 @@ for (entry in project.getImageList()) {
 
     long t0 = System.currentTimeMillis()
     try {
+        def before = outDir.listFiles({ f -> f.isDirectory() } as java.io.FileFilter)?.length ?: 0
         def thread = new FiberAnalysisWorkflow(null).runForAnnotations(params, anns, imageData, null)
         if (thread != null) thread.join()
-        println "OK|${name}|${anns.size()}|${String.format('%.1f', (System.currentTimeMillis()-t0)/1000.0)}s"
-        done++
+
+        // The workflow catches per-annotation failures on its own worker
+        // thread, so join() returning says nothing about success -- a run that
+        // refused every annotation still reported OK here. Check the artifact.
+        def runDirs = outDir.listFiles({ f -> f.isDirectory() } as java.io.FileFilter)
+                            ?.sort { -it.lastModified() }
+        def newest = runDirs ? runDirs[0] : null
+        int produced = 0
+        if (newest != null) {
+            newest.eachDir { ad -> if (new File(ad, "results.json").exists()) produced++ }
+        }
+        if (produced < anns.size()) {
+            println "FAIL|${name}|${produced}/${anns.size()} annotations produced results.json -- see the log"
+            failed++
+        } else {
+            println "OK|${name}|${anns.size()}|${String.format('%.1f', (System.currentTimeMillis()-t0)/1000.0)}s"
+            done++
+        }
     } catch (Exception e) {
         println "FAIL|${name}|${e.getClass().getSimpleName()}: ${e.getMessage()}"
         failed++
@@ -106,3 +130,4 @@ for (entry in project.getImageList()) {
 }
 println "SUMMARY|done=${done}|failed=${failed}|skipped=${skipped}|totalMin=${String.format('%.1f', (System.currentTimeMillis()-tAll)/60000.0)}"
 println "DONE"
+QP.resetBatchProjectAndImage()
