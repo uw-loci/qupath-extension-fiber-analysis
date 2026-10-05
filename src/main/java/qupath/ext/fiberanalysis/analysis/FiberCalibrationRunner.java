@@ -190,6 +190,7 @@ public final class FiberCalibrationRunner {
 
             // Phase 3: extract one region per annotation into the temp dir.
             List<String> regionPngs = new ArrayList<>();
+            List<String> maskPngs = new ArrayList<>();
             for (int i = 0; i < total; i++) {
                 if (progress != null && progress.isCancelled()) {
                     throw new IOException("Calibration cancelled");
@@ -201,6 +202,9 @@ public final class FiberCalibrationRunner {
                 Path png = extractRegion(ea, cfg.borderZoneUm, cfg.segChannel, tempDir, i, cfg.readDownsample);
                 if (png != null) {
                     regionPngs.add(png.toAbsolutePath().toString());
+                    Path mask = tempDir.resolve(String.format("mask_%05d.png", i));
+                    maskPngs.add(
+                            Files.isRegularFile(mask) ? mask.toAbsolutePath().toString() : "");
                 }
             }
             if (regionPngs.isEmpty()) {
@@ -220,6 +224,11 @@ public final class FiberCalibrationRunner {
             if (medianPxUm <= 0) medianPxUm = 0.5; // last-ditch fallback
             Map<String, Object> in = new LinkedHashMap<>();
             in.put("region_paths", regionPngs);
+            // Index-aligned with region_paths; Python histograms only the
+            // pixels a mask marks as inside the annotation. A missing mask
+            // file means "use the whole region", which keeps older callers
+            // working.
+            in.put("mask_paths", maskPngs);
             in.put("seg_channel", cfg.segChannel);
             in.put("ridge_filter", cfg.ridgeFilter.toLowerCase());
             in.put("sigma_min", cfg.sigmaMinUm / medianPxUm);
@@ -399,7 +408,18 @@ public final class FiberCalibrationRunner {
             double rds = readDownsample > 0 ? readDownsample : 1.0;
             RegionRequest req = RegionRequest.createInstance(server.getPath(), rds, rx, ry, rw, rh);
             Path out = tempDir.resolve(String.format("region_%05d.png", index));
-            SourceChannel.writeRegionPng(server, req, segChannel, out);
+            SourceChannel.WrittenSize size = SourceChannel.writeRegionPng(server, req, segChannel, out);
+
+            // Mask the region to the annotation before it reaches the
+            // histogram. The region is the annotation's BOUNDING BOX plus a
+            // pad, so on anything that is not a filled rectangle it carries
+            // pixels the user never selected. On acquired-area annotations
+            // that is unacquired black: it made up 55.8% of the pooled
+            // histogram and Otsu split background-from-tissue instead of
+            // collagen-from-tissue, putting the threshold below 99.4% of the
+            // real pixels.
+            Path maskOut = tempDir.resolve(String.format("mask_%05d.png", index));
+            FiberAnalysisWorkflow.rasterisePolygonMask(roi, rx, ry, size.width(), size.height(), rds, maskOut);
             return out;
         } catch (Exception ex) {
             logger.warn("Region extraction failed for annotation {}: {}", index, ex.getMessage());

@@ -15,6 +15,13 @@ as a whole.
 Inputs (injected by Appose as Python variables)
 -----------------------------------------------
   region_paths        : list[str]  -- absolute paths to region PNGs to sample
+  mask_paths          : list[str]  -- optional, index-aligned with region_paths.
+                                      Each is a binary PNG marking the pixels
+                                      INSIDE the annotation. A region is a
+                                      bounding box, so without this the
+                                      histogram includes whatever surrounds the
+                                      annotation. An empty string or a missing
+                                      file means "use the whole region".
   seg_channel         : str        -- 'Raw intensity' | 'Value (HSV)' | ...
   ridge_filter        : str        -- 'none' | 'frangi' | 'sato' | 'meijering'
   sigma_min, sigma_max, sigma_step : float (used when ridge_filter != 'none')
@@ -55,6 +62,7 @@ try:
     from fiberlib import segmentation as seg
 
     paths = list(region_paths)
+    masks = list(_opt("mask_paths", []) or [])
     chan = str(seg_channel)
     rf = str(ridge_filter).lower()
     smin = float(_opt("sigma_min", 1.0))
@@ -69,7 +77,7 @@ try:
     n_pix_total = 0
     n_used = 0
 
-    for p in paths:
+    for idx, p in enumerate(paths):
         if not os.path.exists(p):
             logger.warning("Region PNG missing: %s", p)
             continue
@@ -127,9 +135,37 @@ try:
             # Histogram the normalised scalar into 256 bins matching the
             # [0, 1] range. uint64 increments keep us safe for very large
             # accumulations.
-            counts, _edges = np.histogram(normed, bins=256, range=(0.0, 1.0))
+            # Restrict to the annotation. The region handed over is its
+            # BOUNDING BOX plus a pad, so for any shape that is not a filled
+            # rectangle the surplus is not tissue the user selected. On
+            # acquired-area annotations that surplus is unacquired black and
+            # it dominated the pool: 55.8% of pixels in bin 0, which pushed
+            # Otsu to split background-from-tissue rather than
+            # collagen-from-tissue.
+            sel = normed
+            mpath = masks[idx] if idx < len(masks) else ""
+            if mpath and os.path.exists(mpath):
+                try:
+                    marr = np.asarray(Image.open(mpath))
+                    if marr.ndim == 3:
+                        marr = marr[..., 0]
+                    if marr.shape == normed.shape:
+                        inside = marr > 127
+                        if inside.any():
+                            sel = normed[inside]
+                        else:
+                            logger.warning("Mask %s selects no pixels -- using the whole region", mpath)
+                    else:
+                        logger.warning(
+                            "Mask %s shape %s != region %s -- using the whole region",
+                            mpath, marr.shape, normed.shape,
+                        )
+                except Exception as exc:
+                    logger.warning("Could not read mask %s: %s -- using the whole region", mpath, exc)
+
+            counts, _edges = np.histogram(sel, bins=256, range=(0.0, 1.0))
             hist += counts.astype(np.uint64)
-            n_pix_total += int(scalar.size)
+            n_pix_total += int(sel.size)
             n_used += 1
         except Exception as inner_exc:
             logger.warning("Region %s skipped: %s", p, inner_exc)
