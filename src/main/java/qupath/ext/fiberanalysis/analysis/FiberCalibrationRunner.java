@@ -88,6 +88,16 @@ public final class FiberCalibrationRunner {
         public boolean invertIntensity = false;
         public double rollingBallRadiusUm = 0.0;
         public double borderZoneUm = 50.0;
+        /**
+         * Downsample for the pixels the histogram is built from.
+         *
+         * <p>A threshold is a property of the gray-level DISTRIBUTION, not of
+         * resolution, so reading every pixel of a gigapixel annotation to build
+         * a 256-bin histogram is wasted I/O. On a 26-annotation 20x project the
+         * full-resolution read wrote 100-300 MB per region and did not finish
+         * in 50 minutes. 1.0 keeps the original behaviour.
+         */
+        public double readDownsample = 1.0;
     }
 
     /** Lightweight progress callback so the dialog can stream "(i/N) ..." updates. */
@@ -188,7 +198,7 @@ public final class FiberCalibrationRunner {
                 if (progress != null) {
                     progress.update("Extracting region " + (i + 1) + " of " + total, i, total);
                 }
-                Path png = extractRegion(ea, cfg.borderZoneUm, cfg.segChannel, tempDir, i);
+                Path png = extractRegion(ea, cfg.borderZoneUm, cfg.segChannel, tempDir, i, cfg.readDownsample);
                 if (png != null) {
                     regionPngs.add(png.toAbsolutePath().toString());
                 }
@@ -356,8 +366,13 @@ public final class FiberCalibrationRunner {
     /**
      * Extracts one annotation's dilated region as a PNG. Returns null on
      * failure so the calibration can continue across the rest of the pool.
+     *
+     * <p>{@code readDownsample} subsamples the pixels fed to the histogram.
+     * The threshold it yields is in the image's own gray levels either way --
+     * downsampling changes which pixels are counted, not what a count means.
      */
-    private static Path extractRegion(EntryAnn ea, double borderZoneUm, String segChannel, Path tempDir, int index) {
+    private static Path extractRegion(
+            EntryAnn ea, double borderZoneUm, String segChannel, Path tempDir, int index, double readDownsample) {
         try {
             ImageServer<BufferedImage> server = ea.data.getServer();
             ROI roi = ea.ann.getROI();
@@ -381,7 +396,8 @@ public final class FiberCalibrationRunner {
             int rw = Math.min(server.getWidth() - rx, w + 2 * pad);
             int rh = Math.min(server.getHeight() - ry, h + 2 * pad);
             if (rw <= 0 || rh <= 0) return null;
-            RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, rx, ry, rw, rh);
+            double rds = readDownsample > 0 ? readDownsample : 1.0;
+            RegionRequest req = RegionRequest.createInstance(server.getPath(), rds, rx, ry, rw, rh);
             Path out = tempDir.resolve(String.format("region_%05d.png", index));
             SourceChannel.writeRegionPng(server, req, segChannel, out);
             return out;

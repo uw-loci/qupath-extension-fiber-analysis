@@ -28,7 +28,7 @@ public record FiberAnalysisParams(
         String searchArea,
         String classFilter,
         double borderZoneUm,
-        String zoneMode, // "inside" | "outside" | "both"
+        String zoneMode, // "whole" | "inside" | "outside" | "both"
         boolean useImagePixelSize,
         double pixelSizeOverrideUm,
         // Region read downsample. 1.0 reads full resolution; higher values read

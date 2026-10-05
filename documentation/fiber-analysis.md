@@ -226,12 +226,25 @@ the dialog):
   contour, in image units. Default 50 um; the same default as PPM's
   perpendicularity workflow, so the two extensions can be compared
   apples-to-apples.
-- **Zone mode** -- which side of the boundary to keep:
-  - `outside` -- stromal side only (most common when the annotation
-    encloses a tumour).
-  - `inside` -- inside the annotation polygon only (rare; used when
-    the annotation encloses the stromal region of interest).
+- **Zone mode** -- what to measure. `whole annotation` uses the entire
+  interior; the other three are a band of the border-zone width taken at
+  the boundary.
+  - `whole annotation` -- everything inside the annotation. Border zone
+    width is ignored. Use this when the annotation already marks the
+    tissue you want measured, which is the case for a pathologist-marked
+    region or an acquired-area mask.
+  - `outside` -- the band on the stromal side only. The right choice when
+    the annotation encloses a tumour and the question is about the
+    peritumoural stroma.
+  - `inside` -- the band just inside the annotation boundary.
   - `both` -- a symmetric band straddling the boundary.
+
+  Picking a band mode when you meant the whole annotation is quiet rather
+  than loud: the run completes and the coverage numbers are simply measured
+  somewhere else. On annotations that marked an acquired area, `outside`
+  reported 0.56% fiber coverage for a region that was 43.3% fiber, because
+  the band fell outside the acquired data. If a coverage figure looks
+  impossibly low, check this control first.
 - **Fill holes** is performed automatically before computing the
   distance transform, mirroring the PPM convention. Small interior
   holes in the annotation would otherwise create stray inner

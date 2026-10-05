@@ -117,7 +117,7 @@ at-a-glance reference.
 | Search area | 1. Search area | Selected annotations | -- | Which annotations to analyse: the viewer selection, every annotation on the image, or the classes checked below. |
 | Annotation class(es) | 1. Search area | (none checked) | -- | Classes to analyse when Search area is "Annotations of class...". Lists the full class name including derived-class colons ("Tumor: Stroma"); "Unclassified" matches annotations with no class assigned. |
 | Border zone width | 1. Search area | 50.0 | um | Distance from the annotation boundary that bounds the analysed zone. |
-| Zone mode | 1. Search area | outside | -- | Which side of the boundary to analyse (inside / outside / both). |
+| Zone mode | 1. Search area | outside | -- | What to measure: `whole annotation` (the entire interior, ignoring the border width) or a band at the boundary (`inside` / `outside` / `both`). |
 | Use image pixel size | 1. Search area | checked | -- | Read pixel size from the QuPath image; uncheck to override. |
 | Override pixel size | 1. Search area | 0.5 | um/px | Forced pixel size when the image has no calibration (enabled only when "Use image pixel size" is off). |
 | Analysis downsample | 1. Search area | 1.0 | -- | Read the region at 1/N resolution. Pixels read fall by N squared, which is what makes an annotation larger than Java's raster cap analyzable. Micron measurements stay correct (the effective pixel size is scaled with it); fibers thinner than the downsampled pixel are lost. |

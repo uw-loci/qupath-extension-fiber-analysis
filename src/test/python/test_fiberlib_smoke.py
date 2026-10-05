@@ -233,3 +233,49 @@ def test_glcm_quantise_trusts_its_unit_contract():
     """quantise re-scaling by 255 is what forced the compensating bug upstream."""
     assert texture.quantise(np.full((4, 4), 0.25, np.float32), 16)[0, 0] == 4
     assert texture.quantise(np.full((4, 4), 1.0, np.float32), 16)[0, 0] == 15
+
+
+def test_whole_zone_is_the_entire_annotation_interior():
+    """'whole' must cover the annotation, not a band at its edge.
+
+    The band modes all measure from the boundary. When the annotation IS the
+    tissue rather than an outline with stroma around it, 'outside' lands in
+    background: on real acquired-area annotations it reported 0.56% fiber
+    coverage where the region itself was 43.3% fiber.
+    """
+    import numpy as np
+    from fiberlib import dilation as dil
+
+    mask = np.zeros((100, 100), dtype=bool)
+    mask[20:80, 20:80] = True  # 60x60 annotation = 3600 px
+
+    whole = dil.compute_border_zone_mask(mask, dilation_px=5, mode="whole")["zone_mask"]
+    assert whole.sum() == 3600
+    assert np.array_equal(whole, mask)
+
+    # A band mode covers far less, and 'outside' covers none of the annotation.
+    inside = dil.compute_border_zone_mask(mask, dilation_px=5, mode="inside")["zone_mask"]
+    outside = dil.compute_border_zone_mask(mask, dilation_px=5, mode="outside")["zone_mask"]
+    assert inside.sum() < whole.sum()
+    assert (outside & mask).sum() == 0
+
+
+def test_whole_zone_ignores_the_border_width():
+    """dilation_px is meaningless for 'whole'; the result must not move."""
+    import numpy as np
+    from fiberlib import dilation as dil
+
+    mask = np.zeros((60, 60), dtype=bool)
+    mask[10:50, 10:50] = True
+    a = dil.compute_border_zone_mask(mask, dilation_px=1, mode="whole")["zone_mask"]
+    b = dil.compute_border_zone_mask(mask, dilation_px=999, mode="whole")["zone_mask"]
+    assert np.array_equal(a, b)
+
+
+def test_unknown_zone_mode_still_raises():
+    import numpy as np
+    import pytest
+    from fiberlib import dilation as dil
+
+    with pytest.raises(ValueError, match="whole"):
+        dil.compute_border_zone_mask(np.ones((10, 10), dtype=bool), 3, mode="sideways")

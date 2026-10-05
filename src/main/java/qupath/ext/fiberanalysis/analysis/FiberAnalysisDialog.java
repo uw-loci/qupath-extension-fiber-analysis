@@ -95,6 +95,7 @@ public final class FiberAnalysisDialog {
     private RadioButton zoneInside;
     private RadioButton zoneOutside;
     private RadioButton zoneBoth;
+    private RadioButton zoneWhole;
     private CheckBox useImagePixelSizeCheck;
     private Spinner<Double> pixelSizeOverrideSpinner;
     private Spinner<Double> analysisDownsampleSpinner;
@@ -620,13 +621,20 @@ public final class FiberAnalysisDialog {
         zoneBoth = new RadioButton("both");
         zoneBoth.setToggleGroup(zoneModeGroup);
         zoneBoth.setAccessibleText("Zone mode: both sides of the annotation boundary");
-        String zoneTip = "Which side of the boundary to analyse. 'outside' = stromal side (most common),"
-                + " 'inside' = inside the annotation, 'both' = a symmetric band.";
+        zoneWhole = new RadioButton("whole annotation");
+        zoneWhole.setToggleGroup(zoneModeGroup);
+        zoneWhole.setAccessibleText("Zone mode: the entire annotation interior, ignoring the border width");
+        String zoneTip = "Where to measure. 'whole annotation' uses the entire interior and ignores the border"
+                + " width; the other three are a band of that width at the boundary.";
         applyTooltip(zoneInside, zoneTip);
         applyTooltip(zoneOutside, zoneTip);
         applyTooltip(zoneBoth, zoneTip);
+        applyTooltip(zoneWhole, zoneTip);
         String defaultZone = FiberAnalysisPreferences.zoneModeProperty().get();
         switch (defaultZone == null ? "outside" : defaultZone) {
+            case "whole":
+                zoneWhole.setSelected(true);
+                break;
             case "inside":
                 zoneInside.setSelected(true);
                 break;
@@ -637,7 +645,10 @@ public final class FiberAnalysisDialog {
                 zoneOutside.setSelected(true);
                 break;
         }
-        HBox zoneBox = new HBox(15, zoneInside, zoneOutside, zoneBoth);
+        // The border width means nothing to 'whole', so stop offering it.
+        borderZoneSpinner.disableProperty().bind(zoneWhole.selectedProperty());
+        borderZoneLabel.disableProperty().bind(zoneWhole.selectedProperty());
+        HBox zoneBox = new HBox(15, zoneWhole, zoneInside, zoneOutside, zoneBoth);
         grid.add(zoneModeLabel, 0, row);
         grid.add(zoneBox, 1, row);
         row++;
@@ -1655,7 +1666,9 @@ public final class FiberAnalysisDialog {
             return null;
         }
 
-        String zoneMode = zoneInside.isSelected() ? "inside" : zoneBoth.isSelected() ? "both" : "outside";
+        String zoneMode = zoneWhole.isSelected()
+                ? "whole"
+                : zoneInside.isSelected() ? "inside" : zoneBoth.isSelected() ? "both" : "outside";
         String segSource = segInternalRadio.isSelected() ? "internal" : "existing";
         double pixelOverride = useImagePixelSizeCheck.isSelected()
                 ? FiberAnalysisPreferences.pixelSizeOverrideUmProperty().get()
@@ -1750,7 +1763,10 @@ public final class FiberAnalysisDialog {
         FiberAnalysisPreferences.classFilterProperty().set(classFilterCheckedAsCsv());
         FiberAnalysisPreferences.borderZoneUmProperty().set(borderZoneSpinner.getValue());
         FiberAnalysisPreferences.zoneModeProperty()
-                .set(zoneInside.isSelected() ? "inside" : zoneBoth.isSelected() ? "both" : "outside");
+                .set(
+                        zoneWhole.isSelected()
+                                ? "whole"
+                                : zoneInside.isSelected() ? "inside" : zoneBoth.isSelected() ? "both" : "outside");
         FiberAnalysisPreferences.useImagePixelSizeProperty().set(useImagePixelSizeCheck.isSelected());
         FiberAnalysisPreferences.pixelSizeOverrideUmProperty().set(pixelSizeOverrideSpinner.getValue());
         FiberAnalysisPreferences.analysisDownsampleProperty().set(analysisDownsampleSpinner.getValue());

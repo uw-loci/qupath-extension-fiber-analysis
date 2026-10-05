@@ -20,7 +20,10 @@ def compute_border_zone_mask(boundary_mask, dilation_px, mode="outside", fill_ho
     Args:
         boundary_mask: (H, W) bool, True inside the annotation.
         dilation_px:   dilation distance in pixels (rounded to int).
-        mode:          'outside' (default), 'inside', or 'both'.
+        mode:          'whole', 'outside' (default), 'inside', or 'both'.
+                       'whole' is the entire annotation interior and ignores
+                       dilation_px; the other three are a BAND of width
+                       dilation_px measured from the boundary.
         fill_holes:    fill holes in boundary mask before computing zone.
 
     Returns:
@@ -41,7 +44,15 @@ def compute_border_zone_mask(boundary_mask, dilation_px, mode="outside", fill_ho
 
     signed_distance = dist_outside - dist_inside
 
-    if mode == "outside":
+    if mode in ("whole", "annotation"):
+        # The whole annotation interior, not a band. The band modes all
+        # measure from the boundary, so when the annotation IS the tissue
+        # (rather than a tumour outline with stroma around it) every one of
+        # them misses the thing the user meant to measure -- 'outside' on an
+        # acquired-area annotation lands in unacquired background and reported
+        # 0.56% coverage where the region itself was 43.3% fiber.
+        zone = mask.copy()
+    elif mode == "outside":
         zone = (dist_outside > 0) & (dist_outside <= dilation_px)
     elif mode == "inside":
         zone = (dist_inside > 0) & (dist_inside <= dilation_px)
@@ -50,7 +61,9 @@ def compute_border_zone_mask(boundary_mask, dilation_px, mode="outside", fill_ho
             (dist_inside > 0) & (dist_inside <= dilation_px)
         )
     else:
-        raise ValueError(f"Invalid mode: {mode}. Use 'outside', 'inside', or 'both'.")
+        raise ValueError(
+            f"Invalid mode: {mode}. Use 'whole', 'outside', 'inside', or 'both'."
+        )
 
     return {
         "zone_mask": zone,
