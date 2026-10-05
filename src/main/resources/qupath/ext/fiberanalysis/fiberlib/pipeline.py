@@ -550,9 +550,20 @@ def analyze(
                 window_grid=window_grid,
                 min_branch_px=max(1, int(round(min_branch_um_v / px_um))),
             )
-            s_block["mean_tortuosity"] = float(
-                tort.get("mean_tortuosity", float("nan"))
-            )
+            # chord/arc summary statistics over fibers traced through
+            # crossings. See straightness.compute_skeleton_tortuosity for
+            # what each one is and why the length-weighted mean and the
+            # 10th percentile respond more strongly than the plain mean.
+            for _k in (
+                "mean_tortuosity",
+                "mean_straightness_len",
+                "straightness_p10",
+                "straightness_median",
+                "straightness_sd",
+                "wavy_fraction",
+                "median_fiber_len_px",
+            ):
+                s_block[_k] = float(tort.get(_k, float("nan")))
             s_block["n_segments"] = int(tort.get("n_segments", 0))
             if window_grid is not None and "per_window_tortuosity" in tort:
                 window_grid["tortuosity"] = tort["per_window_tortuosity"]

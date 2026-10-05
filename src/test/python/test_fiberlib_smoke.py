@@ -381,3 +381,101 @@ def test_radon_alignment_separates_aligned_from_isotropic():
     assert a["pmr"] > i["pmr"]
     # The isotropic case must sit near, not at, the analytic floor of 0.1.
     assert i["ai"] < 0.3
+
+
+# ---- Skeleton topology regressions -----------------------------------------
+
+
+def test_staircase_corner_is_not_a_branch_point():
+    # A rasterised diagonal runs as a staircase, and a staircase corner has
+    # THREE neighbours while being topologically ordinary. Counting
+    # neighbours called every corner a branch: 65% to 97% of the branch
+    # points on the waviness phantoms were corners, and wav-00 -- straight
+    # horizontal fibers with 69 real junctions -- reported 2,245.
+    t = np.zeros((5, 6), dtype=bool)
+    t[1, 1] = t[1, 2] = t[2, 2] = t[2, 3] = True
+    assert straightness.neighbour_counts(t)[1, 2] == 3
+    assert straightness.crossing_numbers(t)[1, 2] == 2
+    assert not straightness.junction_mask(t)[1, 2]
+    branches, _ = morphometrics.branch_endpoint_counts(t)
+    assert branches == 0
+
+
+def test_true_junction_is_still_found():
+    t = np.zeros((7, 7), dtype=bool)
+    t[3, 1:6] = True
+    t[4:7, 3] = True
+    assert straightness.crossing_numbers(t)[3, 3] == 3
+    assert straightness.junction_mask(t)[3, 3]
+    branches, endpoints = morphometrics.branch_endpoint_counts(t)
+    assert branches == 1
+    assert endpoints == 3
+
+
+def test_tracer_links_a_fiber_through_a_crossing():
+    # Two fibers crossing at right angles. Cutting at the junction gives four
+    # short arms; following direction through it gives back two fibers.
+    n = 81
+    m = np.zeros((n, n), dtype=bool)
+    m[40, 5:76] = True   # horizontal
+    m[5:76, 40] = True   # vertical
+    fibers = straightness.trace_fibers(m)
+    long_ones = [f for f in fibers if len(f) >= 50]
+    assert len(long_ones) == 2, f"expected 2 linked fibers, got {[len(f) for f in fibers]}"
+    for f in long_ones:
+        assert straightness.segment_tortuosity(f) > 0.95
+
+
+def test_tracer_refuses_a_sharp_join():
+    # An L: the two arms meet at 90 deg, which is past max_turn_deg, so they
+    # must NOT be welded into one fiber.
+    n = 61
+    m = np.zeros((n, n), dtype=bool)
+    m[30, 10:51] = True
+    m[30:51, 30] = True
+    fibers = straightness.trace_fibers(m, max_turn_deg=45.0)
+    assert all(len(f) < 60 for f in fibers), "a 90 deg corner was linked as one fiber"
+
+
+def test_tracer_covers_the_skeleton_without_duplicating_it():
+    rng = np.random.default_rng(3)
+    n = 160
+    m = np.zeros((n, n), dtype=bool)
+    for _ in range(12):
+        y = int(rng.integers(10, n - 10))
+        x0 = int(rng.integers(0, 40))
+        m[y, x0:x0 + 100] = True
+    for _ in range(12):
+        x = int(rng.integers(10, n - 10))
+        y0 = int(rng.integers(0, 40))
+        m[y0:y0 + 100, x] = True
+    sk = straightness.skeletonize_and_tangents(m)[0]
+    fibers = straightness.trace_fibers(sk)
+    covered = set()
+    for f in fibers:
+        covered.update(f)
+    # Junction pixels are shared by the links that meet there, so coverage is
+    # near-total rather than exact; nothing should be missed wholesale.
+    assert len(covered) >= 0.95 * int(sk.sum())
+
+
+def test_straightness_summary_reports_the_fiber_length_it_measured():
+    # median_fiber_len_px is the number that says whether the other
+    # statistics describe fibers or fragments, so it must be present.
+    mask = _bars(0.0, n=192, pitch=16, width=3)
+    out = straightness.compute_skeleton_tortuosity(mask, min_branch_px=20)
+    for key in (
+        "mean_tortuosity",
+        "mean_straightness_len",
+        "straightness_p10",
+        "straightness_median",
+        "straightness_sd",
+        "wavy_fraction",
+        "median_fiber_len_px",
+        "n_segments",
+    ):
+        assert key in out, f"missing {key}"
+    # Straight bars: chord/arc near 1, nothing wavy, fibers span the image.
+    assert out["mean_tortuosity"] > 0.97
+    assert out["wavy_fraction"] == 0.0
+    assert out["median_fiber_len_px"] > 100

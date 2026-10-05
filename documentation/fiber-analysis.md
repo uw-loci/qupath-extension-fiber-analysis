@@ -438,6 +438,41 @@ N-fibers for weighting. Apply `binary_closing` and a minimum-branch-
 length prune (`min_branch_um`, default 5 um) to suppress noise spurs
 that depress the ratio.
 
+**Note the direction, and the name.** This ratio is chord/arc: 1.0 for
+a straight fiber, falling as it waves. That is what CT-FIRE calls
+*straightness*; tortuosity is its reciprocal. The output key
+`mean_tortuosity` therefore carries a straightness value. It keeps the
+name because it is already in shipped `results.json` files and QuPath
+measurement tables.
+
+**Fibers are traced through crossings.** A skeleton of overlapping
+collagen is a network. On the waviness phantoms, 540 drawn fibers
+produce around 22 real junctions each, so cutting the skeleton at every
+junction measures the pieces between crossings rather than fibers: the
+median piece at the waviest setting was 28 px against a drawn length of
+160. `trace_fibers` instead follows the continuation whose direction
+best matches the one arriving, refusing joins sharper than 70 deg. That
+roughly doubles the median traced length and widens the response to
+waviness by a third. `median_fiber_len_px` is reported alongside the
+straightness statistics precisely so you can see which of the two you
+are looking at.
+
+Junctions are found with the Rutovitz crossing number, not a neighbour
+count. A rasterised diagonal runs as a staircase, and a staircase corner
+has three neighbours while being topologically ordinary -- 65% to 97% of
+the "branch points" a neighbour count reports on these phantoms are
+corners. `morphometrics.branch_points` was inflated by 2x to 30x before
+this was fixed. Endpoints keep the neighbour-count test, which is right
+for them and which the crossing number is not.
+
+Summary statistics beside the mean: `mean_straightness_len`
+(length-weighted, so a 3-px stub does not count as much as a 300-px
+fiber), `straightness_p10` (the waviest decile -- the most responsive of
+the set), `straightness_median`, `straightness_sd`, and `wavy_fraction`
+(below 0.85; easy to read but it saturates). Measured against the
+phantoms, all of these rank both the waviness and the jaggedness series
+at Spearman |rho| = 1.000.
+
 **Math note -- per-ROI Radon.** scikit-image
 `radon(biref_intensity * fiber_mask, theta=arange(0, 180), circle=True)`
 over the largest disk inscribed in the region. Chord-normalise (divide
@@ -622,7 +657,7 @@ per-annotation outputs.
   "n_fiber_px": int,            # fiber-pixel count inside the window
   "mean_angle_deg": float,      # axial mean fiber orientation, 0-180 (0 = horizontal)
   "order_parameter": float,     # axial OS in [0, 1]; 1 = perfectly aligned
-  "tortuosity_median": float,   # per-window median chord/arc (when enabled)
+  "tortuosity_median": float,   # per-window median chord/arc (1.0 = straight)
   "n_fibers": int,              # path count contributing to tortuosity
   "glcm_<prop>": float,         # one field per enabled GLCM property
   "hdm": float,                 # local HDM (when enabled)

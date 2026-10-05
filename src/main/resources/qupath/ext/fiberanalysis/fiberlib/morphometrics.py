@@ -42,20 +42,30 @@ def total_length_px(skeleton):
 
 
 def branch_endpoint_counts(skeleton):
-    """Return (branch_count, endpoint_count) from 8-connected neighbour counts.
+    """Return (branch_count, endpoint_count) for an 8-connected skeleton.
 
-    A skeleton pixel is an endpoint iff it has exactly 1 neighbour,
-    a branch point iff it has >= 3 neighbours.
+    An endpoint is a pixel with exactly 1 neighbour. A branch point is one
+    whose Rutovitz crossing number is >= 3 -- NOT one with >= 3 neighbours.
+    A rasterised diagonal runs as a staircase, and a staircase corner has
+    three neighbours while being topologically ordinary, because two of them
+    are adjacent to each other. Counting neighbours therefore reports a
+    branch at every corner: measured on the waviness phantoms, 65% to 97% of
+    the branch points found that way are staircase corners, and wav-00 --
+    straight horizontal fibers with 69 real junctions -- reported 2,245.
+
+    The two tests are deliberately different. A staircase corner has crossing
+    number 1, so the crossing number is wrong for endpoints in the same way a
+    neighbour count is wrong for branches.
     """
     sk = skeleton.astype(bool)
     if not sk.any():
         return 0, 0
-    # neighbour count = convolution with 3x3 ones minus self
-    kernel = np.ones((3, 3), dtype=np.int32)
-    nb = ndimage.convolve(sk.astype(np.int32), kernel, mode="constant", cval=0)
-    nb_only = nb - sk.astype(np.int32)  # exclude self
-    endpoints = int(((nb_only == 1) & sk).sum())
-    branches = int(((nb_only >= 3) & sk).sum())
+    # Lazy import to avoid a circular import at module load.
+    from . import straightness as _straight  # noqa: WPS433 -- intentional
+
+    nb = _straight.neighbour_counts(sk)
+    endpoints = int(((nb == 1) & sk).sum())
+    branches = int(_straight.junction_mask(sk).sum())
     return branches, endpoints
 
 
@@ -91,7 +101,7 @@ def mean_curvature(skeleton, segment_len_px=4):
     seg_len = max(2, int(segment_len_px))
 
     rotations_per_unit = []
-    for path in _straight.walk_segments(sk):
+    for path in _straight.trace_fibers(sk):
         n = len(path)
         if n < 2:
             continue

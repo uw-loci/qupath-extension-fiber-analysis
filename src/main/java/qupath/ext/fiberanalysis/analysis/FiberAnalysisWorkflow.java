@@ -905,7 +905,15 @@ public class FiberAnalysisWorkflow {
             // grows with the tile count -- measured at +70% and -100% on a
             // 9-tile run. A per-window count is still reported and is unaffected.
             "morphometrics.branch_points",
-            "morphometrics.endpoints");
+            "morphometrics.endpoints",
+            // Order statistics do not combine: the mean of per-tile medians
+            // is not the median of the whole annotation, and neither is the
+            // mean of per-tile 10th percentiles the 10th percentile. The
+            // per-window arrays carry the distribution if it is wanted.
+            "straightness.straightness_p10",
+            "straightness.straightness_median",
+            "straightness.straightness_sd",
+            "straightness.median_fiber_len_px");
 
     /**
      * Combines per-tile scalar summaries.

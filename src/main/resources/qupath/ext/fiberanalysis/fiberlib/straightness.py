@@ -20,6 +20,7 @@ This module deliberately re-implements the skeleton walk with a small DFS
 to avoid taking a dependency on ``skan``.
 """
 import logging
+import math
 
 import numpy as np
 from scipy import ndimage
@@ -101,6 +102,54 @@ def skeletonize_and_tangents(fiber_mask, grad_sigma=1.0, tensor_sigma=4.0):
 # therefore depressed the chord/arc tortuosity systematically).
 _OFFS = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
 
+# The 8 neighbours in ring order (clockwise from North), for the Rutovitz
+# crossing number. Order matters: the crossing number counts 0->1 transitions
+# as you walk the ring, so a shuffled list gives a different -- wrong -- answer.
+_RING = [(-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]
+
+
+def _ring_stack(skel):
+    """(8, H, W) uint8 stack of the ring neighbours of every pixel."""
+    sk = np.asarray(skel, dtype=bool)
+    h, w = sk.shape
+    padded = np.pad(sk.astype(np.uint8), 1)
+    return np.stack([padded[1 + dy:1 + dy + h, 1 + dx:1 + dx + w] for dy, dx in _RING], axis=0)
+
+
+def neighbour_counts(skel):
+    """(H, W) int, number of set 8-neighbours of each pixel."""
+    return _ring_stack(skel).sum(axis=0).astype(np.int32)
+
+
+def crossing_numbers(skel):
+    """(H, W) int, the Rutovitz crossing number of each pixel.
+
+    The number of 0->1 transitions around the 8-neighbour ring: 1 at an
+    ordinary pixel whose two neighbours are themselves adjacent, 2 along a
+    chain, and >= 3 only at a true junction.
+
+    This is the correct junction test on an 8-connected skeleton; a raw
+    neighbour count is not. A rasterised diagonal runs as a staircase, and a
+    staircase corner has THREE neighbours while being topologically ordinary
+    -- two of them are adjacent to each other, so the ring makes only two
+    transitions. Counting neighbours instead calls every such corner a branch:
+    measured on the waviness phantoms, 65% to 97% of the "branch points" found
+    that way are staircase corners. On wav-00, straight horizontal fibers with
+    69 real junctions, a neighbour count reports 2,245.
+
+    Endpoints are the other way round -- use a neighbour count of 1 for those,
+    because a staircase corner has crossing number 1 as well.
+    """
+    ring = _ring_stack(skel)
+    nxt = np.roll(ring, -1, axis=0)
+    return ((nxt == 1) & (ring == 0)).sum(axis=0).astype(np.int32)
+
+
+def junction_mask(skel):
+    """(H, W) bool, pixels that are true skeleton junctions."""
+    sk = np.asarray(skel, dtype=bool)
+    return sk & (crossing_numbers(sk) >= 3)
+
 
 def neighbor_count(skel, y, x):
     h, w = skel.shape
@@ -113,42 +162,233 @@ def neighbor_count(skel, y, x):
 
 
 def walk_segments(skel):
-    """Yield each maximal segment of the skeleton as a list of (y, x)."""
-    visited = np.zeros_like(skel, dtype=bool)
-    h, w = skel.shape
-    # endpoints first, then any unvisited pixel.
-    coords = list(zip(*np.where(skel)))
+    """Yield each maximal segment of the skeleton as a list of (y, x).
+
+    A segment ends at a true junction, found with the Rutovitz crossing
+    number rather than a neighbour count -- see :func:`crossing_numbers`. The
+    difference is not cosmetic: breaking at every pixel with three neighbours
+    cut each fiber at every staircase corner of its own rasterisation, so
+    wav-00 (straight horizontal fibers, 540 of them, 69 real junctions) came
+    apart into 1,969 pieces with a median length of 2 pixels.
+    """
+    sk = np.asarray(skel, dtype=bool)
+    visited = np.zeros_like(sk, dtype=bool)
+    h, w = sk.shape
+    coords = list(zip(*np.where(sk)))
     if not coords:
         return
-    deg = {p: neighbor_count(skel, *p) for p in coords}
-    starts = [p for p, d in deg.items() if d <= 1] + [p for p, d in deg.items() if d != 1]
+    nb = neighbour_counts(sk)
+    is_junction = junction_mask(sk)
+    # Endpoints first so a fiber is walked end to end, then everything else.
+    starts = [p for p in coords if nb[p] <= 1] + [p for p in coords if nb[p] != 1]
     for start in starts:
         if visited[start]:
             continue
-        if deg.get(start, 0) == 0:
+        if nb[start] == 0:
             visited[start] = True
             yield [start]
             continue
         path = [start]
         visited[start] = True
         cur = start
-        prev = None
         while True:
             nxt = None
+            # _OFFS lists the orthogonal neighbours first, so a staircase
+            # corner steps onto its near neighbour and consumes the whole
+            # run instead of jumping the corner and stranding a pixel.
             for dy, dx in _OFFS:
                 yy, xx = cur[0] + dy, cur[1] + dx
-                if 0 <= yy < h and 0 <= xx < w and skel[yy, xx] and not visited[(yy, xx)]:
+                if 0 <= yy < h and 0 <= xx < w and sk[yy, xx] and not visited[yy, xx]:
                     nxt = (yy, xx)
                     break
             if nxt is None:
                 break
             visited[nxt] = True
             path.append(nxt)
-            prev, cur = cur, nxt
-            if deg.get(cur, 0) >= 3:
+            cur = nxt
+            if is_junction[cur]:
                 break
         if len(path) >= 2:
             yield path
+
+
+# ---- linking segments through junctions ------------------------------------
+
+#: Largest change of direction, in degrees, that still counts as the same
+#: fiber continuing through a junction. 70 deg is permissive enough for a
+#: crimped fiber and tight enough that two fibers crossing near a right angle
+#: are not welded into one.
+MAX_LINK_TURN_DEG = 70.0
+
+#: How many pixels from a junction are used to estimate a link's direction.
+#: Short enough to be local, long enough to survive one staircase corner.
+LINK_DIR_WINDOW_PX = 8
+
+
+def _neighbours(skel, y, x):
+    h, w = skel.shape
+    out = []
+    for dy, dx in _OFFS:
+        yy, xx = y + dy, x + dx
+        if 0 <= yy < h and 0 <= xx < w and skel[yy, xx]:
+            out.append((yy, xx))
+    return out
+
+
+def _end_direction(path, window):
+    """Unit vector along the first `window` pixels, pointing away from path[0]."""
+    n = min(int(window), len(path))
+    if n < 2:
+        return (0.0, 0.0)
+    dy = float(path[n - 1][0] - path[0][0])
+    dx = float(path[n - 1][1] - path[0][1])
+    mag = math.hypot(dy, dx)
+    return (0.0, 0.0) if mag == 0.0 else (dy / mag, dx / mag)
+
+
+def _trace_links(skel, node):
+    """Chains of pixels running between two nodes. Returns (a, b, path) tuples."""
+    links = []
+    traced = set()
+    for y, x in zip(*np.where(node)):
+        start = (int(y), int(x))
+        for first in _neighbours(skel, *start):
+            if (start, first) in traced:
+                continue
+            path = [start, first]
+            seen = {start, first}
+            prev, cur = start, first
+            while not node[cur]:
+                cands = [q for q in _neighbours(skel, *cur) if q != prev and q not in seen]
+                if not cands:
+                    break
+                if len(cands) == 1:
+                    nxt = cands[0]
+                else:
+                    # Ambiguous only at a staircase corner, where one candidate
+                    # continues the run and the other doubles back.
+                    dy, dx = cur[0] - prev[0], cur[1] - prev[1]
+                    nxt = max(cands, key=lambda q: (q[0] - cur[0]) * dy + (q[1] - cur[1]) * dx)
+                path.append(nxt)
+                seen.add(nxt)
+                prev, cur = cur, nxt
+            traced.add((start, first))
+            traced.add((cur, path[-2]))
+            links.append((start, cur, path))
+    return links
+
+
+def _pair_links_at_junctions(links, node_is_junction, max_turn_deg, dir_window):
+    """Match up link ends at each junction by straightest continuation."""
+    incident = {}
+    for idx, (a, b, _path) in enumerate(links):
+        incident.setdefault(a, []).append((idx, 0))
+        incident.setdefault(b, []).append((idx, 1))
+
+    partner = {}
+    # Two links continue each other when their outward directions are opposed,
+    # so the straightest join is the most negative dot product.
+    cos_limit = math.cos(math.radians(180.0 - max_turn_deg))
+    for nodept, ends in incident.items():
+        if not node_is_junction.get(nodept, False) or len(ends) < 2:
+            continue
+        dirs = {}
+        for idx, end in ends:
+            path = links[idx][2]
+            dirs[(idx, end)] = _end_direction(path if end == 0 else path[::-1], dir_window)
+        cands = []
+        for i in range(len(ends)):
+            for j in range(i + 1, len(ends)):
+                a, b = ends[i], ends[j]
+                if a[0] == b[0]:
+                    continue
+                ua, ub = dirs[a], dirs[b]
+                cands.append((ua[0] * ub[0] + ua[1] * ub[1], a, b))
+        cands.sort(key=lambda t: t[0])
+        taken = set()
+        for dot, a, b in cands:
+            if dot > cos_limit:
+                break
+            if a in taken or b in taken:
+                continue
+            partner[a] = b
+            partner[b] = a
+            taken.add(a)
+            taken.add(b)
+    return partner
+
+
+def trace_fibers(skel, max_turn_deg=MAX_LINK_TURN_DEG, dir_window_px=LINK_DIR_WINDOW_PX):
+    """Yield whole fibers as pixel paths, linked through crossings.
+
+    A skeleton of overlapping collagen is a dense network, not a set of
+    separate fibers: on the waviness phantoms, 540 drawn fibers produce up to
+    4,117 real junctions, about 22 per fiber. Cutting the skeleton at every
+    junction -- which is what :func:`walk_segments` does -- therefore measures
+    fragments. At wav-55 the median piece was 28 pixels against a drawn fiber
+    length of 160.
+
+    This follows a fiber through a junction instead, choosing the continuation
+    whose direction best matches the one arriving, and refusing the join when
+    the turn exceeds ``max_turn_deg``. Measured against the phantoms, linking
+    roughly doubles the median fiber length (wav-12: 38 -> 92 px) and widens
+    the straightness response to waviness by a third (p10 range 0.339 ->
+    0.450). The same approach is what CT-FIRE uses to rebuild fibers across
+    crossings.
+
+    Args:
+        skel:          (H, W) bool-ish, a one-pixel-wide skeleton.
+        max_turn_deg:  largest direction change still treated as one fiber.
+        dir_window_px: pixels used to estimate a link's direction at a node.
+
+    Returns:
+        list of pixel paths, each a list of (y, x) in order along the fiber.
+    """
+    sk = np.asarray(skel, dtype=bool)
+    if not sk.any():
+        return []
+    nb = neighbour_counts(sk)
+    junction = junction_mask(sk)
+    # Mask by the skeleton: a background pixel also has few neighbours, and
+    # leaving it in seeds a link from every pixel next to a fiber.
+    node = sk & (junction | (nb <= 1))
+    links = _trace_links(sk, node)
+    if not links:
+        return []
+    is_junction = {}
+    for a, b, _p in links:
+        is_junction[a] = bool(junction[a])
+        is_junction[b] = bool(junction[b])
+    partner = _pair_links_at_junctions(links, is_junction, max_turn_deg, dir_window_px)
+
+    out = []
+    used = set()
+    for idx in range(len(links)):
+        if idx in used:
+            continue
+        for end in (0, 1):
+            if (idx, end) in partner:
+                continue  # mid-chain, not a start
+            chain = []
+            ci, ce = idx, end
+            while ci not in used:
+                used.add(ci)
+                path = links[ci][2]
+                path = path if ce == 0 else path[::-1]
+                chain.extend(path if not chain else path[1:])
+                nxt = partner.get((ci, 1 - ce))
+                if nxt is None:
+                    break
+                ci, ce = nxt
+            if len(chain) >= 2:
+                out.append(chain)
+            break
+    for idx in range(len(links)):  # closed loops, which have no chain start
+        if idx not in used:
+            used.add(idx)
+            if len(links[idx][2]) >= 2:
+                out.append(links[idx][2])
+    return out
 
 
 def segment_tortuosity(path):
@@ -164,24 +404,84 @@ def segment_tortuosity(path):
     return chord / arc  # 1.0 = perfectly straight; lower = wavier
 
 
+#: Straightness below which a fiber is called wavy, for `wavy_fraction`.
+#: 0.85 is the cut that spreads the waviness phantoms best: 0.3% of fibers
+#: fall below it at wav-00, then 7.9%, 27.9%, 85.9%, 93.0% as waviness rises.
+#: No fixed cut spreads the whole range -- 0.95 is already at 89.9% by wav-12
+#: and 0.70 still reads 0% at wav-12 -- because a threshold on a shifting
+#: distribution is a step function. `wavy_fraction` is for interpretability;
+#: `straightness_p10` is the statistic to use when sensitivity matters.
+WAVY_STRAIGHTNESS_CUT = 0.85
+
+
 def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2):
-    """Compute per-skeleton-segment tortuosity (chord/arc), CT-FIRE convention.
+    """Per-fiber straightness (chord/arc), CT-FIRE convention.
+
+    Fibers are traced through crossings by :func:`trace_fibers` rather than
+    cut at every junction, so a value describes a fiber rather than the
+    piece of one that happened to fall between two overlaps.
+
+    Note the direction of the ratio: this is chord/arc, which is 1.0 for a
+    straight fiber and FALLS as the fiber becomes wavy. That is CT-FIRE's
+    `straightness`, not tortuosity, which is its reciprocal. The key name
+    `mean_tortuosity` is kept because it is already in shipped results.json
+    files and QuPath measurement tables.
 
     If ``window_grid`` is supplied (output of ``windows.compute_windows``),
-    a per-window tortuosity array is added: each window's value is the
-    median of all skeleton segments whose centroid falls inside that window.
+    a per-window array is added: each window's value is the median over all
+    fibers whose centroid falls inside that window.
 
-    Returns a dict with ``mean_tortuosity``, ``n_segments``, and
-    optionally ``per_window_tortuosity`` (np.ndarray, NaN where empty).
+    Returns a dict with the summary statistics below, plus optionally
+    ``per_window_tortuosity`` (np.ndarray, NaN where empty):
+
+      mean_tortuosity        unweighted mean over fibers (chord/arc).
+      mean_straightness_len  length-weighted mean. A 3-pixel stub and a
+                             300-pixel fiber count equally in the unweighted
+                             mean; weighting widens the response to waviness
+                             from 0.092 to 0.156 over the phantom sweep.
+      straightness_p10       10th percentile -- the waviest decile, and the
+                             single most responsive statistic measured
+                             (range 0.45 across the sweep after linking).
+      straightness_median    50th percentile.
+      straightness_sd        standard deviation across fibers.
+      wavy_fraction          fraction below WAVY_STRAIGHTNESS_CUT. Easy to
+                             read, but it saturates -- see that constant.
+      n_segments             number of fibers measured.
+      median_fiber_len_px    median traced length. Report it: it is the
+                             number that says whether the others describe
+                             fibers or fragments.
     """
     sk = skmorph.skeletonize(fiber_mask.astype(bool))
-    segs = [p for p in walk_segments(sk) if len(p) >= int(min_branch_px)]
-    tort = [segment_tortuosity(p) for p in segs]
-    tort = [t for t in tort if t == t]  # drop NaNs
-    out = {
-        "mean_tortuosity": float(np.mean(tort)) if tort else float("nan"),
-        "n_segments": len(tort),
-    }
+    segs = [p for p in trace_fibers(sk) if len(p) >= int(min_branch_px)]
+    paired = [(p, segment_tortuosity(p)) for p in segs]
+    paired = [(p, t) for p, t in paired if t == t]  # drop NaNs
+    segs = [p for p, _t in paired]
+    tort = np.array([t for _p, t in paired], dtype=np.float64)
+    lens = np.array([len(p) for p in segs], dtype=np.float64)
+    if tort.size:
+        out = {
+            "mean_tortuosity": float(tort.mean()),
+            "mean_straightness_len": float((tort * lens).sum() / max(lens.sum(), 1e-12)),
+            "straightness_p10": float(np.percentile(tort, 10)),
+            "straightness_median": float(np.median(tort)),
+            "straightness_sd": float(tort.std()),
+            "wavy_fraction": float(np.mean(tort < WAVY_STRAIGHTNESS_CUT)),
+            "n_segments": int(tort.size),
+            "median_fiber_len_px": float(np.median(lens)),
+        }
+    else:
+        nan = float("nan")
+        out = {
+            "mean_tortuosity": nan,
+            "mean_straightness_len": nan,
+            "straightness_p10": nan,
+            "straightness_median": nan,
+            "straightness_sd": nan,
+            "wavy_fraction": nan,
+            "n_segments": 0,
+            "median_fiber_len_px": nan,
+        }
+    tort = list(tort)
     if window_grid is None or not segs:
         return out
 

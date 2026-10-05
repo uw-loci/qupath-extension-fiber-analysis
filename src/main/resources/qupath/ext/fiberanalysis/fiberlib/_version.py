@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -155,3 +155,48 @@ __version__ = "0.3.3"
 #   removed because it asserted only that the order parameter was HIGH --
 #   which a collapsed angle field satisfies perfectly, every window agreeing
 #   on the same wrong value.
+
+# 0.3.4 (2026-10-05):
+#   Fiber tracing. The skeleton of overlapping collagen is a network, not a
+#   set of separate fibers, and the code was measuring the pieces between
+#   crossings.
+#
+#   - straightness: branch points were found with a raw 8-neighbour count.
+#     A rasterised diagonal runs as a staircase, and a staircase corner has
+#     three neighbours while being topologically ordinary, so every corner
+#     read as a branch. Measured on the waviness phantoms, 65% to 97% of the
+#     branch points found that way are corners; wav-00 -- straight horizontal
+#     fibers with 69 real junctions -- reported 2,245. New crossing_numbers()
+#     (Rutovitz) and junction_mask() do the test properly, and walk_segments
+#     no longer cuts a fiber at its own rasterisation. Endpoints keep the
+#     neighbour-count test, which is correct for them and which the crossing
+#     number is not.
+#   - morphometrics.branch_endpoint_counts: same fix. branch_points is a
+#     shipped measurement and was inflated by between 2x and 30x.
+#   - straightness.trace_fibers: NEW. Follows a fiber through a junction by
+#     choosing the continuation whose direction best matches the one
+#     arriving, refusing joins sharper than MAX_LINK_TURN_DEG. Even with
+#     correct junctions there are ~22 real crossings per fiber on these
+#     phantoms, so cutting at every one measured fragments: at wav-55 the
+#     median piece was 28 px against a drawn length of 160. Linking roughly
+#     doubles the median traced length (wav-12: 38 -> 92 px) and widens the
+#     straightness response to waviness by a third (p10 range 0.339 ->
+#     0.450). compute_skeleton_tortuosity and morphometrics.mean_curvature
+#     both now run on traced fibers.
+#   - compute_skeleton_tortuosity: new summary statistics beside the existing
+#     mean -- mean_straightness_len (length-weighted; a 3-px stub no longer
+#     counts as much as a 300-px fiber), straightness_p10 / _median / _sd,
+#     wavy_fraction, and median_fiber_len_px, which is the number that says
+#     whether the rest describe fibers or fragments. The order statistics are
+#     marked UNCOMBINABLE across tiles, because a mean of medians is not a
+#     median.
+#
+#   mean_tortuosity keeps its name although it computes chord/arc, which is
+#   CT-FIRE's STRAIGHTNESS (1.0 straight, falling as a fiber waves) and not
+#   tortuosity. The name is already in shipped results.json files and QuPath
+#   measurement tables; renaming it is a separate, deliberate break.
+#
+#   Validated against tools/collagen-phantom-creation: straightness mean,
+#   length-weighted mean, p10, wavy_fraction and curvature all rank BOTH the
+#   waviness series and the jaggedness series at Spearman |rho| = 1.000. The
+#   jaggedness series had never been tested.

@@ -207,7 +207,7 @@ Per-annotation files:
   "n_fiber_px": int,            # fiber-pixel count inside the window
   "mean_angle_deg": float,      # axial mean fiber orientation, 0-180 (0 = horizontal)
   "order_parameter": float,     # axial OS in [0, 1]; 1 = perfectly aligned
-  "tortuosity_median": float,   # per-window median chord/arc (when enabled)
+  "tortuosity_median": float,   # per-window median chord/arc (1.0 = straight)
   "n_fibers": int,              # path count contributing to tortuosity
   "glcm_<prop>": float,         # one field per enabled GLCM property
   "hdm": float,                 # local HDM (when enabled)
