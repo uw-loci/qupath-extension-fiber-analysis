@@ -23,6 +23,7 @@ import logging
 
 import numpy as np
 from scipy import ndimage
+from skimage import filters as skfilters
 from skimage import morphology as skmorph
 from skimage.transform import radon
 
@@ -31,26 +32,63 @@ logger = logging.getLogger("fiber.straightness")
 
 # ---- skeletonise + per-pixel tangents --------------------------------------
 
-def skeletonize_and_tangents(fiber_mask):
-    """Skeletonise the fiber mask and estimate per-pixel skeleton tangents.
+def skeletonize_and_tangents(fiber_mask, grad_sigma=1.0, tensor_sigma=4.0):
+    """Skeletonise the fiber mask and estimate per-pixel fiber orientation.
 
     Returns ``(skeleton, fiber_angles_deg)``:
       - ``skeleton`` : (H, W) bool, 1-pixel-wide medial axis.
-      - ``fiber_angles_deg`` : (H, W) float, tangent angle in degrees [0, 180);
-        NaN off-skeleton. Estimated from a small Sobel-like local gradient on
-        the smoothed skeleton mask.
+      - ``fiber_angles_deg`` : (H, W) float, fiber orientation in degrees
+        [0, 180); NaN outside the fiber mask. 0 is horizontal, 90 vertical.
+
+    The angle field is dense over the whole fiber mask, not just the
+    skeleton. ``windows.compute_windows`` gates a window on having at least
+    ``min_pixels`` angled pixels, defaulting to 10% of the window AREA -- a
+    threshold inherited from ppm_library, where the orientation map is dense.
+    A skeleton is one pixel wide, so a skeleton-only field could never reach
+    10% of an area unless fibers were packed ten pixels apart: on the
+    MH_Colon run that gate left 7,891 of 7,935 scored windows with a null
+    mean_angle_deg and order_parameter.
+
+    Orientation comes from the structure tensor of the smoothed fiber mask,
+    integrated over ``tensor_sigma``, and NOT from the gradient at the
+    skeleton pixel itself. The skeleton lies on the ridge crest of the
+    smoothed mask, where the gradient vanishes by construction: measured on a
+    clean phantom the gradient magnitude on-skeleton is 0.001 against 0.145
+    one pixel away on the flank, so ``arctan2(gx, -gy)`` degenerated to
+    ``arctan2(0, 0) == 0`` and every fiber read as horizontal. Integrating the
+    tensor over a neighbourhood pulls in the flanks, where the gradient is
+    both large and perpendicular to the fiber.
+
+    Validated on the known-angle phantoms in
+    ``tools/collagen-phantom-creation`` (oa-angle-000 .. -135): mean absolute
+    error 0.07 deg, worst case 0.16 deg. The gradient operator is Scharr
+    rather than a central difference because it is optimised for rotational
+    symmetry -- ``np.gradient`` biases 30 and 60 deg toward 45 by about 2 deg.
+
+    Args:
+        fiber_mask:   (H, W) bool-ish, segmented fiber pixels.
+        grad_sigma:   Gaussian smoothing applied before differentiating.
+        tensor_sigma: integration scale of the structure tensor. Should be
+                      comparable to the fiber spacing; too small re-exposes
+                      the vanishing-gradient problem, too large blurs
+                      neighbouring fibers of different orientation together.
     """
-    sk = skmorph.skeletonize(fiber_mask.astype(bool))
+    mask = np.asarray(fiber_mask).astype(bool)
+    sk = skmorph.skeletonize(mask)
     if not sk.any():
         return sk, np.full(sk.shape, np.nan, dtype=np.float32)
 
-    # Local gradients on a slightly-smoothed mask give a tangent direction.
-    smooth = ndimage.gaussian_filter(sk.astype(np.float32), sigma=1.0)
-    gy, gx = np.gradient(smooth)
-    # Tangent is perpendicular to gradient; angle in [0, pi).
-    tangent_rad = (np.arctan2(gx, -gy)) % np.pi
-    angles = np.rad2deg(tangent_rad).astype(np.float32)
-    angles[~sk] = np.nan
+    smooth = ndimage.gaussian_filter(mask.astype(np.float32), sigma=float(grad_sigma))
+    gy = skfilters.scharr_h(smooth)
+    gx = skfilters.scharr_v(smooth)
+    jxx = ndimage.gaussian_filter(gx * gx, float(tensor_sigma))
+    jyy = ndimage.gaussian_filter(gy * gy, float(tensor_sigma))
+    jxy = ndimage.gaussian_filter(gx * gy, float(tensor_sigma))
+
+    # Dominant GRADIENT direction; the fiber runs perpendicular to it.
+    theta_grad = 0.5 * np.arctan2(2.0 * jxy, jxx - jyy)
+    angles = np.rad2deg((theta_grad + np.pi / 2.0) % np.pi).astype(np.float32)
+    angles[~mask] = np.nan
     return sk, angles
 
 
@@ -178,18 +216,48 @@ def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2):
 
 # ---- Radon scalar metrics --------------------------------------------------
 
+# Fraction of the inscribed-circle radius kept when forming the angular
+# profile. The chord-length normalisation divides by 2*sqrt(R^2 - rho^2),
+# which tends to zero at the rim, so the outermost rho rows amplify noise by
+# an unbounded factor. Discarding them costs nothing measurable (the alignment
+# dynamic range varies by under 10% for guards between 0.6 and 1.0) and keeps
+# the variance profile from being driven by the rim.
+RHO_GUARD_FRAC = 0.8
+
+
 def compute_radon_scalar(image_scalar, fiber_mask, theta_step=1.0):
     """Per-ROI Radon transform with chord-length normalisation.
 
     Returns a dict with:
-        pmr            : peak-to-mean ratio at the dominant angle.
+        pmr            : peak-to-mean ratio of the angular profile.
         ai             : alignment index = sum(top 10% angles) / sum(all).
+                         0.1 is the isotropic floor; 1.0 is perfect alignment.
         fwhm_theta_deg : full-width-at-half-max of the angular profile (deg).
-        fwhm_rho_um    : FWHM along rho, in PIXELS. The caller must multiply by
-                         the pixel size to honour the key's name; pipeline.py
-                         does this at the call site.
-        entropy        : Shannon entropy of the normalised angular profile.
-        theta_star_deg : dominant angle in degrees.
+                         180 means no dominant orientation.
+        fwhm_rho_um    : FWHM along rho at the dominant angle, in PIXELS. The
+                         caller must multiply by the pixel size to honour the
+                         key's name; pipeline.py does this at the call site.
+        entropy        : Shannon entropy of the angular profile (bits).
+                         log2(n_angles) = 7.49 at 1 deg steps is isotropic.
+        theta_star_deg : dominant FIBER orientation in image coordinates,
+                         [0, 180), 0 horizontal -- the same convention as
+                         ``mean_angle_deg`` from ``windows.compute_windows``.
+
+    The angular profile is the VARIANCE of each projection over rho, not its
+    sum. The Radon transform conserves mass, so every column of the sinogram
+    sums to the same total and ``sino.sum(axis=0)`` is constant in theta by
+    construction -- measured CV 0.04% raw, 0.6% after chord normalisation.
+    Through v0.3.2 that constant was the angular profile, which pinned ai at
+    the isotropic 0.1018, entropy at 7.4918 against a 7.4919 ceiling, and
+    fwhm_theta_deg at 180.0, and left theta_star_deg reading the argmax of
+    numerical noise (errors of 63 to 89 deg on known-angle phantoms).
+    Orientation lives in how CONCENTRATED each projection is, which is what
+    the variance measures.
+
+    Validated against ``tools/collagen-phantom-creation``: theta_star_deg
+    exact to 1 deg on the known-angle series, and ai / entropy / pmr /
+    fwhm_theta_deg each rank the alignment sweep at Spearman |rho| >= 0.93
+    against the generator's order parameter (1.0000 down to 0.0203).
 
     Caller is responsible for choosing what scalar to feed in -- typically
     the HSV value channel.
@@ -229,22 +297,23 @@ def compute_radon_scalar(image_scalar, fiber_mask, theta_step=1.0):
     # post-normalisation sinogram is bias-free against rho. Constant in theta,
     # so the array is broadcast along the angle axis.
     n_rho = sino.shape[0]
-    rho_axis = np.arange(n_rho, dtype=np.float32) - (n_rho - 1) / 2.0
-    # Clip rho to <= R (skimage may emit a slightly wider rho grid for even
-    # side lengths; outside-disk rows get chord = 0 -> NaN after division).
-    rho_inside = np.where(np.abs(rho_axis) < R, rho_axis, np.nan)
-    chord_per_row = 2.0 * np.sqrt(np.maximum(R * R - rho_inside * rho_inside, 0.0))
+    rho_axis = np.arange(n_rho, dtype=np.float64) - (n_rho - 1) / 2.0
+    chord_per_row = 2.0 * np.sqrt(np.maximum(R * R - rho_axis * rho_axis, 0.0))
     chord_col = chord_per_row[:, np.newaxis]  # (n_rho, 1) -- broadcasts to (n_rho, n_theta)
     sino_n = np.where(chord_col > 1e-9, sino / np.maximum(chord_col, 1e-9), 0.0).astype(np.float32)
+    kept = np.abs(rho_axis) <= RHO_GUARD_FRAC * R
+    sino_k = sino_n[kept]
 
-    # Angular profile: total energy per angle.
-    angular = sino_n.sum(axis=0)
-    angular = angular / max(angular.sum(), 1e-12)
+    # Angular profile: how concentrated each projection is, per angle.
+    profile = sino_k.var(axis=0)
+    angular = profile / max(float(profile.sum()), 1e-12)
     theta_star_idx = int(np.argmax(angular))
-    theta_star = float(thetas[theta_star_idx])
+    # skimage projects along the direction that rotating by theta sends to
+    # vertical, so a fiber at image angle A peaks at theta = 90 - A.
+    theta_star = float((90.0 - thetas[theta_star_idx]) % 180.0)
 
-    peak = float(np.max(sino_n))
-    mean_v = float(np.mean(sino_n))
+    peak = float(profile.max())
+    mean_v = float(profile.mean())
     pmr = peak / max(mean_v, 1e-12)
 
     # Alignment index: top 10% angles vs all angles.
@@ -262,7 +331,7 @@ def compute_radon_scalar(image_scalar, fiber_mask, theta_step=1.0):
         fwhm_theta = 0.0
 
     # FWHM in rho at the dominant theta column.
-    col = sino_n[:, theta_star_idx]
+    col = sino_k[:, theta_star_idx]
     col_max = float(col.max())
     if col_max > 0:
         above_rho = col >= col_max / 2.0

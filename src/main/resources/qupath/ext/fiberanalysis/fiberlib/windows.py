@@ -30,13 +30,18 @@ def compute_windows(fiber_angles, fiber_mask, window_px, stride_px=None, min_pix
 
     Args:
         fiber_angles: (H, W) float, fiber orientations in degrees (0-180).
-            NaN where invalid. Pass an all-NaN array if angles are unknown
-            -- the n_pixels grid is still useful for the consumers.
+            NaN where invalid. Must be DENSE over fiber_mask: min_pixels is
+            a fraction of the window AREA, so a sparse field (one value per
+            skeleton pixel, say) is gated out of almost every window. Pass an
+            all-NaN array if angles are unknown -- the n_pixels grid is still
+            useful for the consumers.
         fiber_mask:  (H, W) bool, valid fiber pixels.
         window_px:   int, side length of each square window in pixels.
         stride_px:   int or None. None / equal to window_px = non-overlapping.
-        min_pixels:  int or None. Minimum valid fiber pixels per window
-                     to be considered non-empty. None = max(1, int(0.1*W^2)).
+        min_pixels:  int or None. Minimum angled fiber pixels per window for
+                     the window to carry axial statistics. None =
+                     max(1, int(0.1*W^2)), i.e. the window must be at least
+                     10% fiber by area.
 
     Returns:
         dict with:

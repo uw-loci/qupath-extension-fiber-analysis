@@ -439,22 +439,49 @@ length prune (`min_branch_um`, default 5 um) to suppress noise spurs
 that depress the ratio.
 
 **Math note -- per-ROI Radon.** scikit-image
-`radon(biref_intensity * fiber_mask, theta=arange(0, 180), circle=False)`.
-Chord-normalise (divide each column by chord length through the
-aperture at `(rho, theta)`) to suppress the spurious 45 deg peak.
-Scalars (Schaub & Gilbert 2011; see also Despotovic & Cosic 2022 for
-additional method support):
+`radon(biref_intensity * fiber_mask, theta=arange(0, 180), circle=True)`
+over the largest disk inscribed in the region. Chord-normalise (divide
+each row by the chord length `2*sqrt(R^2 - rho^2)` through the
+aperture) to suppress the spurious 45 deg peak, then keep
+`|rho| <= 0.8R`: that divisor goes to zero at the rim, so the
+outermost rows amplify noise without bound. Scalars (Schaub & Gilbert
+2011; see also Despotovic & Cosic 2022 for additional method support):
 
 ```
-PMR  = max_theta || R(., theta) ||_inf  /  mean_theta || R(., theta) ||_inf
-AI   = ( max E - min E ) / ( max E + min E ),   E(theta) = sum_rho R^2
-FWHM(theta*) of R(., theta*)   (narrower = straighter)
-entropy of normalised angular profile
+E(theta) = var_rho R(., theta)        the angular profile
+p(theta) = E(theta) / sum_theta E     normalised to a distribution
+PMR      = max_theta E / mean_theta E
+AI       = sum of the largest 10% of p   (0.1 = isotropic, 1 = aligned)
+FWHM(theta*) of E   (narrower = more strongly aligned)
+entropy  = -sum p log2 p   (log2(180) = 7.49 at 1 deg steps = isotropic)
+theta*   = (90 - argmax_theta E) mod 180, in image-angle convention
+           (0 = horizontal), matching `mean_angle_deg`
 ```
+
+**The profile must be a spread, not a total.** The Radon transform
+conserves mass: every column of the sinogram integrates to the same
+image total, so `sum_rho R` is constant in theta (measured CV 0.04%
+raw, 0.6% after chord normalisation) and carries no orientation
+information at all. Orientation lives in how *concentrated* each
+projection is. `sum_rho R^2` -- which earlier revisions of this note
+specified -- does vary with theta, but only as the variance plus that
+same large constant, which compresses AI into 0.103 to 0.119 across a
+full alignment sweep. The variance removes the constant. For the same
+reason AI is the top-decile mass rather than `(max E - min E) /
+(max E + min E)`: the min/max form rests on two order statistics and
+inverted on the sweep (Spearman 0.905 against 0.976).
 
 PMR is the headline straightness scalar per dilated-border segment;
 entropy detects misalignment to ~+/-2 deg vs FFT's +/-4 deg (Schaub
 2011).
+
+**Validation.** Measured against the synthetic phantoms in
+`tools/collagen-phantom-creation`, whose generator inputs are the
+ground truth. `theta*` and per-window `mean_angle_deg` are exact to
+0.2 deg on the known-angle series (0, 30, 45, 60, 90, 135). AI,
+entropy, PMR, `fwhm_theta_deg` and `order_parameter` each rank the
+alignment sweep at Spearman |rho| >= 0.93 against the generator's
+order parameter, over the range 1.0000 down to 0.0203.
 
 **When to use which.** Tortuosity is per-window and per-fiber; it is
 the right number to drive the **heatmap** (`straightness_overlay.png`)
@@ -593,8 +620,8 @@ per-annotation outputs.
   "w": int,                     # window width in pixels
   "h": int,                     # window height in pixels
   "n_fiber_px": int,            # fiber-pixel count inside the window
-  "mean_angle_deg": float,      # circular mean of axial skeleton tangent (0-180)
-  "order_parameter": float,     # axial OS in [0, 1]
+  "mean_angle_deg": float,      # axial mean fiber orientation, 0-180 (0 = horizontal)
+  "order_parameter": float,     # axial OS in [0, 1]; 1 = perfectly aligned
   "tortuosity_median": float,   # per-window median chord/arc (when enabled)
   "n_fibers": int,              # path count contributing to tortuosity
   "glcm_<prop>": float,         # one field per enabled GLCM property

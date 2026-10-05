@@ -78,28 +78,6 @@ def test_segment_internal_finds_mostly_stripes():
     assert 0.2 < coverage < 0.6
 
 
-def test_windows_axial_stats():
-    img = synthetic_stripes()
-    rgb = np.stack([img, img, img], axis=-1)
-    mask = segmentation.segment_internal(
-        image=rgb,
-        channel="raw",
-        threshold_method="otsu",
-        manual_threshold=128,
-        ridge_filter="none",
-        sigma_min=1.0,
-        sigma_max=3.0,
-        sigma_step=1.0,
-        min_fiber_area_px=0,
-    )
-    skel, angles = straightness.skeletonize_and_tangents(mask)
-    grid = windows.compute_windows(angles, mask, window_px=20, stride_px=20)
-    op = grid["order_parameter"]
-    # In stripe regions OS should be high (>0.5) where stripes exist.
-    # In mixed border rows it can be lower; check global mean instead.
-    assert np.nanmean(op) > 0.4
-
-
 def test_dilation_outside_zone_grows_by_width():
     h, w = 100, 100
     boundary = np.zeros((h, w), dtype=bool)
@@ -279,3 +257,127 @@ def test_unknown_zone_mode_still_raises():
 
     with pytest.raises(ValueError, match="whole"):
         dil.compute_border_zone_mask(np.ones((10, 10), dtype=bool), 3, mode="sideways")
+
+
+# ---- Orientation regressions ----------------------------------------------
+#
+# Every test below targets a defect that shipped through v0.3.2 and that the
+# original `test_windows_axial_stats` could not catch, because it asserted
+# only that the order parameter was HIGH. When the angle estimator collapsed
+# to a constant, every window agreed perfectly on the wrong answer, so the
+# order parameter read ~1.0 and the assertion passed. Assert the angle VALUE,
+# not just its concentration.
+
+
+def _axial_mean_deg(angles_deg):
+    """Circular mean of a 180-periodic angle field, ignoring NaN."""
+    a = np.asarray(angles_deg, dtype=np.float64)
+    a = a[np.isfinite(a)]
+    if a.size == 0:
+        return float("nan")
+    two = np.deg2rad(a) * 2.0
+    return float(np.rad2deg(0.5 * np.arctan2(np.sin(two).mean(), np.cos(two).mean())) % 180.0)
+
+
+def _axial_err_deg(measured, expected):
+    d = abs(float(measured) - float(expected)) % 180.0
+    return min(d, 180.0 - d)
+
+
+def _bars(angle_deg, n=192, pitch=12, width=3):
+    """A field of parallel bars at `angle_deg` (0 = horizontal, 90 = vertical)."""
+    yy, xx = np.mgrid[:n, :n]
+    # Offset along the bar NORMAL; the bars themselves run at angle_deg.
+    rad = np.deg2rad(angle_deg)
+    normal = (xx - n / 2.0) * -np.sin(rad) + (yy - n / 2.0) * np.cos(rad)
+    return (np.mod(normal, float(pitch)) < float(width))
+
+
+@pytest.mark.parametrize("true_deg", [0.0, 30.0, 45.0, 60.0, 90.0, 135.0])
+def test_tangents_recover_known_fiber_angles(true_deg):
+    # Through v0.3.2 the tangent was read from the gradient AT the skeleton
+    # pixel, which sits on the ridge crest of the smoothed mask where the
+    # gradient vanishes: |grad| measured 0.001 on-skeleton against 0.145 one
+    # pixel out on the flank, so arctan2(gx, -gy) degenerated to
+    # arctan2(0, 0) == 0 and every fiber read as horizontal. Only the 0 deg
+    # case passed, by accident of the degenerate value being 0.
+    mask = _bars(true_deg)
+    _, angles = straightness.skeletonize_and_tangents(mask)
+    err = _axial_err_deg(_axial_mean_deg(angles), true_deg)
+    assert err < 3.0, f"fiber angle {true_deg} deg read as {_axial_mean_deg(angles)}"
+
+
+def test_angle_field_is_dense_over_the_fiber_mask():
+    # windows.compute_windows gates a window on min_pixels, defaulting to 10%
+    # of the window AREA. A skeleton is one pixel wide and can never reach
+    # that, so a skeleton-only angle field silently emptied the axial stats:
+    # 7,891 of 7,935 scored windows on the MH_Colon run had a null
+    # mean_angle_deg and order_parameter.
+    mask = _bars(30.0)
+    skel, angles = straightness.skeletonize_and_tangents(mask)
+    finite = np.isfinite(angles)
+    assert not finite[~mask].any(), "angles must be NaN outside the fiber mask"
+    assert finite[mask].all(), "angles must be defined on every fiber pixel"
+    # The point of the test: far denser than the skeleton it used to follow.
+    # 3 px bars skeletonise to 1 px, so the mask carries roughly three times
+    # the samples -- and the ratio grows with fiber width.
+    assert int(finite.sum()) > 2 * int(skel.sum())
+
+
+def test_windows_report_the_actual_stripe_orientations():
+    # The fixture is horizontal stripes on top, vertical on the bottom. The
+    # old assertion (mean order parameter > 0.4) held even when every angle
+    # collapsed to 0, because agreeing on one wrong value is still agreement.
+    img = synthetic_stripes()
+    rgb = np.stack([img, img, img], axis=-1)
+    mask = segmentation.segment_internal(
+        image=rgb,
+        channel="raw",
+        threshold_method="otsu",
+        manual_threshold=128,
+        ridge_filter="none",
+        sigma_min=1.0,
+        sigma_max=3.0,
+        sigma_step=1.0,
+        min_fiber_area_px=0,
+    )
+    _, angles = straightness.skeletonize_and_tangents(mask)
+    h = angles.shape[0]
+    # Stay clear of the seam where the two stripe fields meet.
+    top = _axial_mean_deg(angles[: h // 2 - 20])
+    bottom = _axial_mean_deg(angles[h // 2 + 20 :])
+    assert _axial_err_deg(top, 0.0) < 10.0, f"top half should read horizontal, got {top}"
+    assert _axial_err_deg(bottom, 90.0) < 10.0, f"bottom half should read vertical, got {bottom}"
+
+
+def test_radon_recovers_a_known_dominant_angle():
+    # theta_star_deg was the argmax of a profile that is constant by
+    # construction, so it reported numerical noise: errors of 63 to 89 deg on
+    # the known-angle phantoms, and the same ~148 deg for true 30, 45 and 60.
+    mask = _bars(60.0)
+    scalar = mask.astype(np.float32)
+    out = straightness.compute_radon_scalar(scalar, mask)
+    assert _axial_err_deg(out["theta_star_deg"], 60.0) < 5.0
+
+
+def test_radon_alignment_separates_aligned_from_isotropic():
+    # The Radon transform conserves mass, so every column of the sinogram
+    # sums to the same total and sino.sum(axis=0) is flat in theta. Using
+    # that sum as the angular profile pinned ai at 0.1018 (the isotropic
+    # floor is exactly 0.1), entropy at 7.4918 against a 7.4919 ceiling, and
+    # fwhm_theta_deg at 180.0 -- for every image ever analysed.
+    aligned = _bars(30.0)
+    rng = np.random.default_rng(7)
+    iso = np.zeros((192, 192), dtype=bool)
+    for ang in rng.uniform(0.0, 180.0, 40):
+        iso |= _bars(float(ang), pitch=96, width=3)
+
+    a = straightness.compute_radon_scalar(aligned.astype(np.float32), aligned)
+    i = straightness.compute_radon_scalar(iso.astype(np.float32), iso)
+
+    assert a["ai"] > 2.0 * i["ai"], f"aligned ai {a['ai']} vs isotropic {i['ai']}"
+    assert a["entropy"] < i["entropy"] - 0.5
+    assert a["fwhm_theta_deg"] < i["fwhm_theta_deg"]
+    assert a["pmr"] > i["pmr"]
+    # The isotropic case must sit near, not at, the analytic floor of 0.1.
+    assert i["ai"] < 0.3
