@@ -8,6 +8,13 @@ appose = ">=0.7.2"
 numpy = ">=1.24.0,<2.0"
 scipy = ">=1.11.0"
 scikit-image = ">=0.21.0"
+# Pinned to the same minor QP-CAT resolves to, so the two Appose envs agree.
+# A saved model is a joblib pickle and is sklearn-version-fragile: letting
+# this float means a lock regeneration can silently invalidate every model a
+# user has trained. wmodel refuses to load across a version change rather
+# than letting an unpickle warning scroll past.
+scikit-learn = "1.9.*"
+joblib = ">=1.3"
 matplotlib-base = ">=3.7.0"
 pillow = ">=10.0.0"
 

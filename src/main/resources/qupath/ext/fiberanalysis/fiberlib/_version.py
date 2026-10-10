@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.3.7"
+__version__ = "0.3.8"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -361,3 +361,60 @@ __version__ = "0.3.7"
 #   per seed, so permuting within a seed is a coin flip. T3 separates
 #   perfectly on every held-out seed and still reports p = 0.079. Read p on
 #   those tasks as "not informative", not "not significant".
+
+# 0.3.8 (2026-10-10):
+#   P3, first half: the model layer. scikit-learn enters the environment,
+#   pinned to 1.9.* to match QP-CAT, with joblib. pixi.toml and pixi.lock
+#   move together (pre-push phase 1d enforces it); the numpy <2.0 pin held at
+#   1.26.4. CI's pip line and import check gained scikit-learn too, or the
+#   new tests would have been skipped there rather than run.
+#
+#   - NEW wmodel.py, the ONLY module in fiberlib that imports scikit-learn,
+#     so the feature bank and the whole validity layer stay runnable without
+#     it. HistGradientBoosting by default because it routes NaN natively, and
+#     "this measurement is undefined here" is both common and informative --
+#     tortuosity_median was null in 7,891 of 7,935 windows on the real run.
+#     A RandomForest cannot, so when one is asked for the median is imputed
+#     AND a <feature>_isnan indicator appended, keeping the fill visible to
+#     the model and to the reader.
+#
+#   Most of the module is refusal, and that is the point:
+#     - A feature-set mismatch is refused and CANNOT be overridden, including
+#       the same features in a different order. A model scores columns by
+#       position, so a reorder reads one measurement as another and nothing
+#       about the output looks wrong.
+#     - A pixel-size difference above 2% is refused. This is the subtle one:
+#       matching the window size in MICRONS is not sufficient, because
+#       lacunarity, gap statistics and texture are computed over box sizes in
+#       PIXELS. A 100 um window is 289 px at 0.3464 um/px and 200 px at 0.5,
+#       and the same feature name then means a different measurement.
+#     - Different segmentation settings are refused; the fiber mask defines
+#       every feature.
+#     - A newer schema is refused rather than guessed at, and a different
+#       scikit-learn version is refused rather than trusting an unpickle that
+#       merely did not raise.
+#     - The validation verdict is written INTO the artifact, so a model that
+#       failed its own checks says so wherever it travels rather than only in
+#       the dialog that was dismissed.
+#
+#   Probability columns are indexed by GLOBAL class, not by the classes that
+#   happened to appear in a training fold -- a fold missing a class would
+#   otherwise shift every column after it and attribute probabilities to the
+#   wrong classes with nothing visibly wrong.
+#
+#   Calibration, abstention and the risk-coverage curve are here too. Novelty
+#   is a Mahalanobis chi-square p and explicitly NOT a posterior: a
+#   closed-set softmax has to put its mass on a class it knows, so it is
+#   confidently wrong on tissue it has never seen, and novelty is the only
+#   signal that catches it. It returns NaN rather than a confident number
+#   when the covariance is singular. calibration_note() always states that a
+#   calibrated probability is calibrated against the TRAINING class mix,
+#   which is the most likely way a probability map misleads.
+#
+#   The phantom harness gained --model, so the identical seven tasks can be
+#   re-scored with the real estimator, and --perms / --imp-repeats, because
+#   the permutation null is n_perm * n_folds model fits and dominates
+#   everything else once the estimator is not a matrix multiply.
+#
+#   29 tests, most of them about what the layer declines to do. 100 Python
+#   tests in total.
