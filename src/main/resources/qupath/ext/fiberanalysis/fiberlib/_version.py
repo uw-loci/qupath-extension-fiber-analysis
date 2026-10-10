@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.3.5"
+__version__ = "0.3.6"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -250,3 +250,53 @@ __version__ = "0.3.5"
 #   actually ships, the two differ by 1e-7 and the pooled one is the more
 #   accurate; that gap is pinned by its own test so a future real discrepancy
 #   is not waved away as "just float32".
+
+# 0.3.6 (2026-10-10):
+#   P1 of the region classifier: the validity layer. Still no model -- this is
+#   the machinery that decides whether a model may be fitted and whether its
+#   score means anything.
+#
+#   - NEW wsplits.py: leave-one-slide-out and grouped k-fold, plus the
+#     pre-training viability gate. The split unit is the SLIDE and a random
+#     split over windows is not offered, because overlapping windows share
+#     most of their pixels, windows in one annotation share one labelling
+#     decision, and fields on one slide share thickness, staining and
+#     illumination. random_window_split() exists only to quantify the
+#     optimism that would buy, and says so in its own docstring.
+#   - NEW wvalidate.py: grouped cross-validation with a mandatory
+#     per-held-out-slide table, a cluster bootstrap over slides, a
+#     permutation null that shuffles whole annotations within their own
+#     slide, the leakage gap, and three baselines including a single-feature
+#     threshold chosen inside the training folds.
+#
+#   Both are numpy-only on purpose. scikit-learn is not in this environment
+#   and these splitters are a few lines each, so keeping the validity layer
+#   dependency-free means it runs in CI in milliseconds against a synthetic
+#   table with no images. scikit-learn arrives with the model, later.
+#
+#   Metrics beyond balanced accuracy are deliberately NOT computed here.
+#   Python emits confusion counts; the Java side turns them into the full
+#   battery through the confusion-matrix extension, so there is one
+#   implementation of kappa rather than two that must be kept agreeing.
+#
+#   Measured on the synthetic fixtures in test_wvalidate_stats.py, which have
+#   no images at all:
+#     - On data whose ONLY signal is slide identity, a random window split
+#       reports balanced accuracy 1.000 and the slide-grouped split 0.250.
+#       That 0.750 gap is what a naive cross-validation would have claimed.
+#       On a genuinely generalising signal the same gap is 0.000.
+#     - On slides that separate to different degrees (per-slide accuracy 0.52
+#       to 1.00), resampling windows gives [0.696, 0.771] and resampling
+#       slides gives [0.594, 0.872] -- 3.7x wider. The narrow interval
+#       excludes most of the per-slide performance it claims to summarise.
+#     - The permutation null rejects real signal (p < 0.05) and spares pure
+#       noise, and can never report exactly zero.
+#
+#   The viability gate blocks rather than warns when grouped validation is
+#   impossible: fewer than 3 slides, a class on fewer than 2 slides, a class
+#   under 30 windows. It excludes and NAMES features rather than imputing
+#   them -- a constant column, one missing in more than 20% of windows
+#   (tortuosity_median was null in 7,891 of 7,935 windows on the real
+#   MH_Colon run), and an exact duplicate, which is what hdm is of
+#   fiber_coverage_percent in every sidecar written to date. A test asserts
+#   every blocking message states a number and is long enough to act on.
