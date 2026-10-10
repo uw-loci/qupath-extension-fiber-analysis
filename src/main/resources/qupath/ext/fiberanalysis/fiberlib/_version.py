@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.3.6"
+__version__ = "0.3.7"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -300,3 +300,64 @@ __version__ = "0.3.6"
 #   MH_Colon run), and an exact duplicate, which is what hdm is of
 #   fiber_coverage_percent in every sidecar written to date. A test asserts
 #   every blocking message states a number and is long enough to act on.
+
+# 0.3.7 (2026-10-10):
+#   P2: the phantom suite, end to end on synthetic collagen with known
+#   classes. harness/phantom_classifier_suite.py, seven tasks, all passing.
+#
+#   - wvalidate.permutation_importance: out-of-fold permutation importance,
+#     measured on held-out slides. Impurity importance is computed on the
+#     training data, is biased toward continuous features and scores pure
+#     noise above zero; under collinearity it also splits arbitrarily between
+#     duplicate columns. The docstring records the mirror-image failure of
+#     the permutation version, because the suite then walked straight into it.
+#
+#   Results at six seeds, 768 px, nearest-centroid (P2 tests the FEATURES and
+#   the validation machinery, not a model; the real estimator arrives in P3
+#   and slots into the same harness):
+#
+#     T0  negative control   0.513  [0.426, 0.601]  p = 1.0000
+#     T1  alignment          0.811  [0.770, 0.845]  p = 0.0099
+#     T2  shape              0.968  [0.959, 0.981]  p = 0.0099
+#     T3  thickness          1.000  [1.000, 1.000]  p = 0.0792
+#     T4  realistic          0.959  [0.930, 0.988]  p = 0.0099
+#     T5  TACS-2 vs 3        0.682  [0.624, 0.742]  p = 0.0792
+#     T5b TACS, shape gone   0.573  [0.555, 0.587]  p = 0.0792
+#
+#   The must-fail test took three attempts, all wrong the same way: assuming
+#   feature families are independent when the geometry couples them.
+#
+#     TACS-2 vs TACS-3 was supposed to be unlearnable, since TACS class is
+#     defined relative to the tumour boundary and no feature encodes a
+#     boundary-relative angle. It separated at 0.682. Not a leak: a fiber
+#     tangential to a circle of radius r HAS curvature 1/r while a radial
+#     fiber is straight, so tangency leaves a rotation-invariant signature.
+#     Measured over four seeds, straightness 0.8115-0.8285 for TACS-2 against
+#     0.8445-0.8701 for TACS-3, no overlap.
+#
+#     Ablating the shape family was then supposed to make it unlearnable. It
+#     still separated at 0.573, led by branch_to_endpoint_ratio: radial
+#     fibers CONVERGE on the tumour, so radiality changes local density and
+#     crossing frequency too.
+#
+#     T2 was supposed to show that an orientation feature must not lead a
+#     shape task. A crimped fiber sweeps through angles inside the window, so
+#     the order parameter responds to waviness directly.
+#
+#   T0 is the sound control: two phantom sets from identical generator
+#   parameters differing only in seed, labelled arbitrarily. No signal by
+#   construction, so any separation is a pipeline defect and cannot be
+#   explained away by geometry. It sits at 0.513 with p = 1.0000.
+#
+#   Two defects in the harness itself, both found by running it:
+#     - It printed balanced accuracy 0.917 for a task its own viability gate
+#       had just BLOCKED. A block now stops the task and emits no score.
+#     - The phantom cache key ignored the generator arguments, so changing a
+#       parameter silently reused the previous render and the fix appeared to
+#       do nothing. The key now hashes the arguments.
+#
+#   Known limitation, documented rather than hidden: the permutation null is
+#   underpowered on the two-class tasks, which have one annotation per class
+#   per seed, so permuting within a seed is a coin flip. T3 separates
+#   perfectly on every held-out seed and still reports p = 0.079. Read p on
+#   those tasks as "not informative", not "not significant".

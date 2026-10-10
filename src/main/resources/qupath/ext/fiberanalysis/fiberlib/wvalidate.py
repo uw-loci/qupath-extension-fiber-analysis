@@ -292,3 +292,77 @@ def best_single_feature_baseline(n_classes, feature_names=None):
 
     fp.chosen = state
     return fp
+
+
+def permutation_importance(x, y, groups, n_classes, fit_predict, feature_names=None, n_repeats=5, seed=0):
+    """Out-of-fold permutation importance: the drop when a feature is shuffled.
+
+    Measured on held-out slides, not on the training data. Impurity-based
+    importance is computed on the data the model was fitted to, is biased
+    toward continuous features, and gives pure noise a non-zero score. The
+    decisive problem on this feature set is collinearity: with two columns
+    carrying the same information a tree splits arbitrarily between them, so
+    each reads as about half as important as the pair really is and an
+    unrelated feature can appear to outrank the most important measurement in
+    the model.
+
+    Permutation importance has the mirror-image failure, and the caller has to
+    know it: shuffling one of two redundant features leaves the model a
+    perfect substitute, so both read as unimportant. The fix is to permute
+    correlated features jointly, which belongs with the rest of the
+    explainability work; this is the single-feature version, and it is honest
+    only when the duplicate-column check in wsplits has already run.
+
+    Args:
+        x, y, groups:  as for :func:`cross_validate`.
+        n_classes:     number of classes.
+        fit_predict:   ``f(x_train, y_train, x_test) -> y_pred``.
+        feature_names: names in column order, for the returned records.
+        n_repeats:     shuffles per feature per fold.
+        seed:          shuffle seed.
+
+    Returns:
+        list of dicts sorted by importance, each with ``feature``, ``index``,
+        ``importance`` (mean drop in balanced accuracy) and ``sd``.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.int64)
+    groups = np.asarray(groups)
+    folds = wsplits.leave_one_group_out(groups)
+    rng = np.random.default_rng(seed)
+    n_feat = x.shape[1]
+
+    drops = [[] for _ in range(n_feat)]
+    for train_idx, test_idx in folds:
+        if len(train_idx) == 0 or len(test_idx) == 0:
+            continue
+        x_tr, y_tr = x[train_idx], y[train_idx]
+        x_te, y_te = x[test_idx], y[test_idx]
+        base = balanced_accuracy(
+            confusion_counts(y_te, np.asarray(fit_predict(x_tr, y_tr, x_te), dtype=np.int64), n_classes)
+        )
+        for j in range(n_feat):
+            for _ in range(int(n_repeats)):
+                shuffled = x_te.copy()
+                shuffled[:, j] = shuffled[rng.permutation(len(shuffled)), j]
+                score = balanced_accuracy(
+                    confusion_counts(
+                        y_te, np.asarray(fit_predict(x_tr, y_tr, shuffled), dtype=np.int64), n_classes
+                    )
+                )
+                drops[j].append(base - score)
+
+    out = []
+    for j in range(n_feat):
+        d = np.asarray(drops[j], dtype=np.float64)
+        d = d[np.isfinite(d)]
+        out.append(
+            {
+                "feature": feature_names[j] if feature_names is not None and j < len(feature_names) else f"feature[{j}]",
+                "index": j,
+                "importance": float(d.mean()) if d.size else float("nan"),
+                "sd": float(d.std()) if d.size else float("nan"),
+            }
+        )
+    out.sort(key=lambda r: (-(r["importance"] if r["importance"] == r["importance"] else -np.inf)))
+    return out
