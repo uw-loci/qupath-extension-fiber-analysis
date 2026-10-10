@@ -465,6 +465,15 @@ corners. `morphometrics.branch_points` was inflated by 2x to 30x before
 this was fixed. Endpoints keep the neighbour-count test, which is right
 for them and which the crossing number is not.
 
+The **per-window** branch count was fixed one release later, in v0.3.5.
+Until then the per-annotation scalar used the crossing number while the
+per-window array still counted neighbours, so the same skeleton gave two
+different answers: 2,493 branches per-annotation against 7,296
+per-window on the wav-25 phantom. Both now use the same rule, and a test
+asserts the per-window counts sum to the per-annotation total over a
+tiled region. **If you have `Branch points` measurements from a run made
+before v0.3.5, they are inflated and should be recomputed.**
+
 Summary statistics beside the mean: `mean_straightness_len`
 (length-weighted, so a 3-px stub does not count as much as a 300-px
 fiber), `straightness_p10` (the waviest decile -- the most responsive of

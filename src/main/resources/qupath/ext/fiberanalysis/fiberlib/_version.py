@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.3.4"
+__version__ = "0.3.5"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -200,3 +200,53 @@ __version__ = "0.3.4"
 #   length-weighted mean, p10, wavy_fraction and curvature all rank BOTH the
 #   waviness series and the jaggedness series at Spearman |rho| = 1.000. The
 #   jaggedness series had never been tested.
+
+# 0.3.5 (2026-10-10):
+#   Groundwork for the window region classifier. No model yet; this is the
+#   feature side only.
+#
+#   - morphometrics.per_window_morphometrics: the per-window branch mask used
+#     a raw neighbour count while the per-annotation branch_endpoint_counts
+#     had been corrected in 0.3.4 to the Rutovitz crossing number, so the two
+#     reported different numbers for the same skeleton. Measured on wav-25:
+#     the per-window rule gave 7,296 branches against the correct 2,493, a
+#     2.9x inflation. Both now use junction_mask for branches and a neighbour
+#     count for endpoints, and a regression test asserts the per-window counts
+#     sum to the per-annotation total over a tiled region.
+#   - NEW wfeatures.py: the poolable feature bank. A feature that is a fixed
+#     function of additive per-pixel accumulators over the window is four
+#     lookups into a summed-area table, so the whole bank costs
+#     O(tile_pixels) -- independent of stride. Measured on a 2048x2048
+#     phantom at a 289 px window: 64 windows and 9,801 windows both take
+#     about 3.5 s. A 6 um label grid therefore costs the same as a 100 um
+#     one, which is what makes a fine classifier map affordable.
+#
+#     Summed-area tables rather than uniform_filter, for two reasons: the SAT
+#     is exact about where the window sits, and compute_windows anchors at the
+#     top-left (iy*stride) while a filter centres, so an origin mistake would
+#     shift the whole map by half a window with every number still plausible;
+#     and the SAT is evaluated only at the window corners rather than at every
+#     pixel. One table is built at a time and freed. All accumulation is
+#     float64: a float32 running sum over 1.6e7 ones has an eps of 2.
+#
+#     The bank fixes three feature defects in passing. Straightness and
+#     curvature are painted onto every pixel of their fiber and pooled, giving
+#     a LENGTH-WEIGHTED mean instead of binning each fiber into one window by
+#     its centroid -- which left most windows empty once the stride got small.
+#     Counts are emitted as densities per um2, so a feature does not change
+#     meaning when the window size changes. Windows clamped at the region edge
+#     are emitted and flagged `partial` with their true smaller support as the
+#     denominator, closing the trailing strip that floor division leaves in no
+#     window at all; predict on them, never train on them.
+#
+#     mean_angle_deg is computed but listed in EXCLUDED_FROM_MODEL: absolute
+#     axial orientation is a property of how the section was mounted, so a
+#     model that sees it will memorise it and fail on the next slide.
+#
+#   Validated by test_wfeatures_pooling.py: pooled counts are bit-exact
+#   against windows.compute_windows across seven geometries including a
+#   one-pixel stride, and the order parameter agrees to 3.4e-15 when the
+#   reference is given a float64 angle field. Against the float32 field it
+#   actually ships, the two differ by 1e-7 and the pooled one is the more
+#   accurate; that gap is pinned by its own test so a future real discrepancy
+#   is not waved away as "just float32".

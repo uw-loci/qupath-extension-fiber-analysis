@@ -676,11 +676,12 @@ public class FiberAnalysisWorkflow {
         Path tilesDir = annDir.resolve("tiles");
         Files.createDirectories(tilesDir);
 
-        JsonArray mergedWindows = new JsonArray();
         // Windows are deduped by their GLOBAL position: tiles overlap by a
-        // window so seam windows exist whole somewhere, and the overlap would
-        // otherwise emit them twice.
-        Set<Long> seenWindows = new HashSet<>();
+        // window, so a seam window is offered by two tiles. Keyed by position
+        // so the tile that OWNS the window's core can override one from a
+        // tile that merely overlaps it.
+        Map<Long, JsonObject> mergedByPos = new LinkedHashMap<>();
+        Set<Long> coreOwned = new HashSet<>();
         List<Map<String, Double>> tileScalars = new ArrayList<>();
         List<Integer> tileWindowCounts = new ArrayList<>();
         // Grid index each successful tile came from: a failed tile adds nothing
@@ -757,7 +758,8 @@ public class FiberAnalysisWorkflow {
                     }
                 }
 
-                int kept = mergeTileWindows(tileDir.resolve("windows.json"), box, mergedWindows, seenWindows);
+                int kept = mergeTileWindows(
+                        tileDir.resolve("windows.json"), box, ownedBoxes.get(t), mergedByPos, coreOwned);
                 tileWindowCounts.add(kept);
                 tileScalars.add(flattenScalars(result));
                 tileIndices.add(t);
@@ -777,6 +779,8 @@ public class FiberAnalysisWorkflow {
         int windowPx = TileGrid.windowPx(params.windowSizeUm(), pixelSizeEffUm);
         int stridePx = TileGrid.stridePx(windowPx, params.windowOverlapPercent());
         Path mergedJson = annDir.resolve("windows.json");
+        JsonArray mergedWindows = new JsonArray();
+        for (JsonObject w : mergedByPos.values()) mergedWindows.add(w);
         writeMergedWindows(mergedJson, mergedWindows, windowPx, stridePx, grid, params, pixelSizeEffUm);
         logger.info(
                 "Annotation {}: merged {} windows from {} tiles into {}",
@@ -814,12 +818,34 @@ public class FiberAnalysisWorkflow {
     }
 
     /**
-     * Reads one tile's windows.json and appends its windows in region-global
-     * read coordinates, skipping positions an overlapping tile already supplied.
+     * Reads one tile's windows.json and merges its windows into the
+     * region-global map.
      *
-     * @return number of windows kept from this tile
+     * <p>Tiles overlap by one window, so a position is offered by more than
+     * one tile and the duplicates have to be resolved. The tile whose OWNED
+     * rectangle ({@link TileGrid#ownedBoxes}) contains the window's centre
+     * wins; any other tile's copy is only used when no owner has supplied one.
+     *
+     * <p>This used to be first-tile-wins, which is not the same thing and is
+     * worse: a window near a tile edge sits partly outside that tile, so it
+     * was measured against a boundary mask truncated at the tile edge. The
+     * owning tile has the window comfortably inside it and measured the whole
+     * thing. The owned boxes partition the region exactly, so every position
+     * has exactly one owner.
+     *
+     * @param tileWindowsJson the tile's windows.json
+     * @param box             tile box in region-local coordinates
+     * @param ownedBox        the tile's owned rectangle, in TILE-LOCAL coordinates
+     * @param out             region-global position to window, mutated
+     * @param coreOwned       positions already supplied by their owning tile, mutated
+     * @return number of windows this tile contributed or replaced
      */
-    private static int mergeTileWindows(Path tileWindowsJson, TileGrid.Box box, JsonArray out, Set<Long> seen)
+    private static int mergeTileWindows(
+            Path tileWindowsJson,
+            TileGrid.Box box,
+            TileGrid.Box ownedBox,
+            Map<Long, JsonObject> out,
+            Set<Long> coreOwned)
             throws IOException {
         if (!Files.isRegularFile(tileWindowsJson)) return 0;
         int kept = 0;
@@ -829,17 +855,43 @@ public class FiberAnalysisWorkflow {
             for (JsonElement el : root.getAsJsonArray("windows")) {
                 if (!el.isJsonObject()) continue;
                 JsonObject wObj = el.getAsJsonObject().deepCopy();
-                int gx = wObj.get("x").getAsInt() + box.x();
-                int gy = wObj.get("y").getAsInt() + box.y();
+                int lx = wObj.get("x").getAsInt();
+                int ly = wObj.get("y").getAsInt();
+                int gx = lx + box.x();
+                int gy = ly + box.y();
                 long key = ((long) gx << 32) | (gy & 0xFFFFFFFFL);
-                if (!seen.add(key)) continue;
+
+                boolean owns = ownsWindowCentre(ownedBox, wObj, lx, ly);
+                if (coreOwned.contains(key)) continue; // owner already supplied it
+                if (!owns && out.containsKey(key)) continue; // keep what we have
+
                 wObj.addProperty("x", gx);
                 wObj.addProperty("y", gy);
-                out.add(wObj);
+                out.put(key, wObj);
+                if (owns) coreOwned.add(key);
                 kept++;
             }
         }
         return kept;
+    }
+
+    /**
+     * @param ownedBox tile-local owned rectangle, or null when the grid is untiled
+     * @param wObj     the window entry, for its width and height
+     * @param lx       window left edge, tile-local
+     * @param ly       window top edge, tile-local
+     * @return true when the window's centre falls inside this tile's owned rectangle
+     */
+    private static boolean ownsWindowCentre(TileGrid.Box ownedBox, JsonObject wObj, int lx, int ly) {
+        if (ownedBox == null) return true;
+        int w = wObj.has("w") ? wObj.get("w").getAsInt() : 0;
+        int h = wObj.has("h") ? wObj.get("h").getAsInt() : 0;
+        int cx = lx + w / 2;
+        int cy = ly + h / 2;
+        return cx >= ownedBox.x()
+                && cy >= ownedBox.y()
+                && cx < ownedBox.x() + ownedBox.w()
+                && cy < ownedBox.y() + ownedBox.h();
     }
 
     /** Writes the merged window list in the same schema a single-shot run produces. */

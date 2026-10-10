@@ -479,3 +479,30 @@ def test_straightness_summary_reports_the_fiber_length_it_measured():
     assert out["mean_tortuosity"] > 0.97
     assert out["wavy_fraction"] == 0.0
     assert out["median_fiber_len_px"] > 100
+
+
+def test_per_window_and_per_annotation_branch_counts_agree():
+    # Through v0.3.4 these were computed by different rules: the
+    # per-annotation path used the Rutovitz crossing number, the per-window
+    # path a raw neighbour count. On a tiled region the per-window counts
+    # must sum to the per-annotation total, or one of them is wrong -- and
+    # it was the per-window one, by 2.9x on the wav-25 phantom.
+    mask = _bars(30.0, n=256, pitch=10, width=3) | _bars(120.0, n=256, pitch=10, width=3)
+    skel, _ = straightness.skeletonize_and_tangents(mask)
+
+    w = 64
+    hw, ww = skel.shape[0] // w, skel.shape[1] // w
+    sub = skel[: hw * w, : ww * w]
+
+    ann_branches, ann_endpoints = morphometrics.branch_endpoint_counts(sub)
+    out = morphometrics.per_window_morphometrics(
+        sub, mask[: hw * w, : ww * w], w, w, (hw, ww),
+        lac_boxes=(), fd_boxes=(), flags={"branch": True, "endpoints": True},
+    )
+    assert int(out["branch_points"].sum()) == ann_branches
+    assert int(out["endpoints"].sum()) == ann_endpoints
+
+    # And the branch count must be the crossing-number one, not the
+    # neighbour-count one, which is larger on any rasterised diagonal.
+    naive = int(((straightness.neighbour_counts(sub) >= 3) & sub).sum())
+    assert ann_branches < naive, "fixture has no staircase corners; it cannot detect the defect"

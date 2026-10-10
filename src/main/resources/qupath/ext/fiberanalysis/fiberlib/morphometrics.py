@@ -290,16 +290,25 @@ def per_window_morphometrics(
     fm = np.asarray(fiber_mask, dtype=bool)
     h, w = sk.shape
 
-    # Pre-compute neighbour-based branch/endpoint masks globally -- a
-    # per-window walk would re-do the same convolution Hw*Ww times.
+    # Pre-compute branch/endpoint masks globally -- a per-window walk would
+    # redo the same work Hw*Ww times.
+    #
+    # These must use the SAME rules as the per-annotation
+    # branch_endpoint_counts: the Rutovitz crossing number for branches,
+    # a neighbour count for endpoints. Through v0.3.4 this function used a
+    # raw neighbour count for both, so the per-window and per-annotation
+    # branch_points were computed by different, non-equivalent rules and
+    # the per-window one counted every rasterisation staircase corner as a
+    # branch -- 65% to 97% of them on the waviness phantoms.
     is_branch = None
     is_endpoint = None
     if flags.get("branch") or flags.get("endpoints"):
-        kernel = np.ones((3, 3), dtype=np.int32)
-        nb = ndimage.convolve(sk.astype(np.int32), kernel, mode="constant", cval=0)
-        nb_only = nb - sk.astype(np.int32)
-        is_branch = (nb_only >= 3) & sk
-        is_endpoint = (nb_only == 1) & sk
+        from . import straightness as _straight  # noqa: WPS433 -- avoids a cycle at import
+
+        if flags.get("branch"):
+            is_branch = _straight.junction_mask(sk)
+        if flags.get("endpoints"):
+            is_endpoint = (_straight.neighbour_counts(sk) == 1) & sk
 
     # Global distance transform for gap stats. Using the global transform
     # is the right physical quantity at window boundaries -- the "gap"
