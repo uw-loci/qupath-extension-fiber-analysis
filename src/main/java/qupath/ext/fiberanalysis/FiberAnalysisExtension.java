@@ -31,6 +31,8 @@ import qupath.ext.fiberanalysis.analysis.FiberAnalysisDialog;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisOverlayController;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisPanel;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog;
+import qupath.ext.fiberanalysis.classifier.FiberWindowApplyDialog;
+import qupath.ext.fiberanalysis.classifier.FiberWindowTrainDialog;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.ext.fiberanalysis.ui.PythonConsoleWindow;
 import qupath.ext.fiberanalysis.ui.SetupEnvironmentDialog;
@@ -369,6 +371,33 @@ public class FiberAnalysisExtension implements QuPathExtension {
             }
         });
 
+        // Window classifier. Train pools labelled window cores across images
+        // (one cross-validation group each), so it binds to the project;
+        // Apply scores the open image, so it binds to the image.
+        MenuItem trainClassifierItem = new MenuItem("Train window classifier...");
+        trainClassifierItem.disableProperty().bind(qupath.projectProperty().isNull());
+        trainClassifierItem.setOnAction(e -> {
+            logger.info("Opening Fiber window-classifier training dialog");
+            try {
+                new FiberWindowTrainDialog(qupath).show();
+            } catch (Exception ex) {
+                logger.error("Window classifier training dialog failed to launch", ex);
+                Dialogs.showErrorMessage(EXTENSION_NAME, "Failed to launch: " + ex.getMessage());
+            }
+        });
+
+        MenuItem applyClassifierItem = new MenuItem("Apply window classifier...");
+        applyClassifierItem.disableProperty().bind(qupath.imageDataProperty().isNull());
+        applyClassifierItem.setOnAction(e -> {
+            logger.info("Opening Fiber window-classifier apply dialog");
+            try {
+                new FiberWindowApplyDialog(qupath).show();
+            } catch (Exception ex) {
+                logger.error("Window classifier apply dialog failed to launch", ex);
+                Dialogs.showErrorMessage(EXTENSION_NAME, "Failed to launch: " + ex.getMessage());
+            }
+        });
+
         MenuItem setupItem = new MenuItem("Setup environment...");
         setupItem.setOnAction(e -> {
             logger.info("Opening Fiber Analysis setup environment dialog");
@@ -391,6 +420,9 @@ public class FiberAnalysisExtension implements QuPathExtension {
                         sampleDensityItem,
                         attachDensityItem,
                         stopAutoReattachItem,
+                        new SeparatorMenuItem(),
+                        trainClassifierItem,
+                        applyClassifierItem,
                         new SeparatorMenuItem(),
                         setupItem,
                         pyConsoleItem);

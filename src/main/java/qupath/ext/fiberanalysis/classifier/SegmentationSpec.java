@@ -14,6 +14,8 @@ import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import qupath.ext.fiberanalysis.analysis.FiberAnalysisWorkflow;
+import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 
 /**
  * The segmentation settings a window-feature run was computed with, in
@@ -53,6 +55,60 @@ public record SegmentationSpec(
         double minFiberAreaUm2,
         boolean invertIntensity,
         double rollingBallRadiusUm) {
+
+    /**
+     * Read the segmentation settings the user last ran with.
+     *
+     * <p>The classifier deliberately does not grow its own copy of the
+     * segmentation controls. The per-annotation Run dialog is where they are
+     * tuned and previewed, the preferences are where the result lives, and
+     * the density-map dialog already works this way -- a second set of
+     * controls would be a second source of truth, and the one the user did
+     * not look at would be the one that ran.
+     *
+     * @return the current settings, with a project-calibrated threshold
+     *         resolved to a number when that method is selected
+     */
+    public static SegmentationSpec fromPreferences() {
+        Double projectThresholdNorm = null;
+        String method = FiberAnalysisPreferences.thresholdMethodProperty().get();
+        if ("Project Otsu (calibrated)".equals(method)) {
+            String calName =
+                    FiberAnalysisPreferences.projectCalibrationNameProperty().get();
+            if (calName != null && !calName.isBlank()) {
+                projectThresholdNorm = FiberAnalysisWorkflow.loadCalibratedThreshold(calName);
+            }
+            method = "project_otsu";
+        } else {
+            method = method == null ? "otsu" : method.toLowerCase(Locale.ROOT);
+        }
+        return new SegmentationSpec(
+                FiberAnalysisPreferences.internalChannelProperty().get(),
+                method,
+                FiberAnalysisPreferences.manualThresholdProperty().get(),
+                projectThresholdNorm,
+                FiberAnalysisPreferences.ridgeFilterProperty().get(),
+                FiberAnalysisPreferences.sigmaMinProperty().get(),
+                FiberAnalysisPreferences.sigmaMaxProperty().get(),
+                FiberAnalysisPreferences.sigmaStepProperty().get(),
+                FiberAnalysisPreferences.minFiberAreaUm2Property().get(),
+                FiberAnalysisPreferences.invertIntensityProperty().get(),
+                FiberAnalysisPreferences.rollingBallRadiusUmProperty().get());
+    }
+
+    /**
+     * @return a short description of the threshold rule, for the dialog's
+     *         warning when it is recomputed per tile
+     */
+    public String thresholdDescription() {
+        if (projectThresholdNorm != null) {
+            return String.format(Locale.ROOT, "project-calibrated (%.4f)", projectThresholdNorm);
+        }
+        if ("manual".equalsIgnoreCase(thresholdMethod)) {
+            return "manual (" + manualThreshold + ")";
+        }
+        return thresholdMethod + ", recomputed per tile";
+    }
 
     /**
      * @return true when every tile will threshold at the same level -- a

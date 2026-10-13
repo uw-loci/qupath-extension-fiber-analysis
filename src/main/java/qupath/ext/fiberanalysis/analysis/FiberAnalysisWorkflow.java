@@ -1473,7 +1473,7 @@ public class FiberAnalysisWorkflow {
         return null;
     }
 
-    static Double loadCalibratedThreshold(String calibrationName) {
+    public static Double loadCalibratedThreshold(String calibrationName) {
         return loadCalibratedThreshold(calibrationName, resolveProjectDir());
     }
 

@@ -883,7 +883,8 @@ public class ApposeFiberService {
             "wfeatures.py",
             "wsplits.py",
             "wvalidate.py",
-            "wmodel.py");
+            "wmodel.py",
+            "wcontext.py");
 
     /**
      * Sync the on-disk pixi.toml AND pixi.lock with the JAR-bundled versions.
