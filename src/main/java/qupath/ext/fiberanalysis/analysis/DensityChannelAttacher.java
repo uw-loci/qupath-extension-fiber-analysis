@@ -14,10 +14,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import javafx.application.Platform;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.fx.dialogs.Dialogs;
+import qupath.lib.common.ColorTools;
 import qupath.lib.display.DirectServerChannelInfo;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.viewer.QuPathViewer;
@@ -142,6 +144,30 @@ public final class DensityChannelAttacher {
      * through the user-input checks.
      */
     static void attach(QuPathGUI gui, ImageData<BufferedImage> imageData, Path sidecar) throws Exception {
+        attachSidecar(gui, imageData, sidecar, null);
+    }
+
+    /**
+     * Attach any float32 sidecar whose pixel dimensions match the open image,
+     * optionally colouring named channels as they arrive.
+     *
+     * <p>The window classifier is the second caller: its probability map is
+     * the same {@code float[gridW * gridH]} contract upsampled to source
+     * dimensions, and the colours it passes are the pathologist's own
+     * PathClass colours, so {@code P(Dense collagen)} renders in the colour
+     * that class already has everywhere else in QuPath.
+     *
+     * @param gui           the QuPath GUI
+     * @param imageData     the open image to wrap
+     * @param sidecar       the sidecar OME-TIFF
+     * @param channelColors channel name to packed RGB, or null to leave the
+     *                      auto-assigned colours alone. Names not present in
+     *                      the sidecar are ignored.
+     * @throws Exception if the sidecar cannot be opened or wrapped
+     */
+    public static void attachSidecar(
+            QuPathGUI gui, ImageData<BufferedImage> imageData, Path sidecar, Map<String, Integer> channelColors)
+            throws Exception {
         if (!Files.isRegularFile(sidecar)) {
             throw new IOException("Sidecar not found: " + sidecar);
         }
@@ -166,6 +192,9 @@ public final class DensityChannelAttacher {
         Platform.runLater(() -> {
             try {
                 viewer.setImageData(newImageData);
+                if (channelColors != null && !channelColors.isEmpty()) {
+                    applyNamedChannelColors(viewer, channelColors);
+                }
                 if (sourceWasRgb) {
                     // Concat forces the wrapped server to multi-channel
                     // uint8, which drops QuPath's native RGB display path.
@@ -200,6 +229,25 @@ public final class DensityChannelAttacher {
      * skip any channel that doesn't expose it (e.g. transform channels in
      * a more exotic concat chain).
      */
+    /**
+     * Give named channels explicit LUT colours and select them. Used by the
+     * window classifier so each {@code P(<class>)} channel renders in that
+     * PathClass's own colour; a channel the sidecar does not have is simply
+     * skipped.
+     */
+    private static void applyNamedChannelColors(QuPathViewer viewer, Map<String, Integer> channelColors) {
+        var display = viewer.getImageDisplay();
+        if (display == null) return;
+        for (var info : display.availableChannels()) {
+            Integer rgb = channelColors.get(info.getName());
+            if (rgb == null) continue;
+            if (info instanceof DirectServerChannelInfo direct) {
+                direct.setLUTColor(ColorTools.red(rgb), ColorTools.green(rgb), ColorTools.blue(rgb));
+            }
+            display.setChannelSelected(info, true);
+        }
+    }
+
     private static void applyRgbDisplayRecovery(QuPathViewer viewer) {
         var display = viewer.getImageDisplay();
         if (display == null) return;

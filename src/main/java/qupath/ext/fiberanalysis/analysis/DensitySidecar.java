@@ -98,6 +98,33 @@ public final class DensitySidecar {
         return root.resolve(sanitize(entry.getImageName()) + "_density.ome.tif");
     }
 
+    /** Project-relative location of the classifier-map sidecar folder. */
+    public static Path classifierMapsRoot(Project<?> project) {
+        if (project == null || project.getPath() == null) return null;
+        Path projDir = project.getPath().getParent();
+        if (projDir == null) return null;
+        return projDir.resolve("fiber-analysis").resolve("classifier-maps");
+    }
+
+    /**
+     * Sidecar path for a window-classifier probability map.
+     *
+     * <p>A separate folder from the density maps, and a filename carrying the
+     * classifier id: two classifiers applied to one image are two maps, and a
+     * density run on the same image must not be able to overwrite either.
+     *
+     * @param project      the open project; {@code null} path yields {@code null}
+     * @param entry        the image the map was computed for
+     * @param classifierId the model id the map came from
+     * @return the sidecar path, or {@code null} if the project has no path
+     */
+    public static Path classifierSidecarPathFor(Project<?> project, ProjectImageEntry<?> entry, String classifierId) {
+        Path root = classifierMapsRoot(project);
+        if (root == null || entry == null) return null;
+        String id = sanitize(classifierId == null || classifierId.isBlank() ? "model" : classifierId);
+        return root.resolve(sanitize(entry.getImageName()) + "_" + id + ".ome.tif");
+    }
+
     /** True iff the sidecar exists on disk and is non-empty. */
     public static boolean exists(Path sidecar) {
         try {
