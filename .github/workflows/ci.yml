@@ -34,8 +34,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      # numpy is pinned to match the shipped Appose environment, which pins
+      # numpy<2 (resolves to 1.26.4). Left unpinned, pip resolves numpy 2.x
+      # here and CI then tests a stack no user runs. Measured 2026-10-13:
+      # every numeric output is bit-identical across the two majors except
+      # the axial angle mean, which differs by 8e-7 because the angle field
+      # is float32 -- so this pin is about testing what ships, not about a
+      # known numpy 2 incompatibility.
       - name: Install Python test dependencies
-        run: python -m pip install --upgrade pip numpy scipy scikit-image pillow matplotlib pytest scikit-learn joblib
+        run: python -m pip install --upgrade pip "numpy<2" scipy scikit-image pillow matplotlib pytest scikit-learn joblib
 
       - name: Confirm the Python suite will actually run
         shell: bash
