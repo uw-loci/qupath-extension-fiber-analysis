@@ -26,6 +26,7 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TitledPane;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -82,6 +83,7 @@ public final class FiberWindowApplyDialog {
     private CheckBox overrideCheck;
     private CheckBox acknowledgeCheck;
     private Label countLabel;
+    private TitledPane overridesPane;
     private TextArea logArea;
     private Button applyBtn;
 
@@ -134,10 +136,8 @@ public final class FiberWindowApplyDialog {
         modelCombo.getSelectionModel().selectFirst();
         modelCombo.valueProperty().addListener((o, a, b) -> refresh());
 
-        modelInfoLabel = new Label();
-        modelInfoLabel.setWrapText(true);
-        compatibilityLabel = new Label();
-        compatibilityLabel.setWrapText(true);
+        modelInfoLabel = wrapping(new Label());
+        compatibilityLabel = wrapping(new Label());
         compatibilityLabel.setStyle("-fx-text-fill: -fx-accent;");
 
         ToggleGroup scope = new ToggleGroup();
@@ -165,14 +165,14 @@ public final class FiberWindowApplyDialog {
         overrideCheck = new CheckBox("Apply despite a geometry mismatch (recorded in the run)");
         acknowledgeCheck = new CheckBox("I understand this model failed its own validation");
 
-        countLabel = new Label();
-        countLabel.setWrapText(true);
+        countLabel = wrapping(new Label());
 
         logArea = new TextArea();
         logArea.setEditable(false);
         logArea.setWrapText(true);
         logArea.setPrefRowCount(8);
 
+        overridesPane = SectionBuilder.createSection("Overrides", false, new VBox(4, overrideCheck, acknowledgeCheck));
         VBox body = new VBox(
                 8,
                 SectionBuilder.createSection(
@@ -180,7 +180,7 @@ public final class FiberWindowApplyDialog {
                 SectionBuilder.createSection("Scope", true, new VBox(4, scopeImageRadio, scopeAnnotationRadio)),
                 SectionBuilder.createSection(
                         "Output", true, new VBox(4, rasterCheck, attachCheck, detectionsCheck, countLabel)),
-                SectionBuilder.createSection("Overrides", false, new VBox(4, overrideCheck, acknowledgeCheck)),
+                overridesPane,
                 SectionBuilder.createSection("Log", true, logArea));
         VBox.setVgrow(body, Priority.ALWAYS);
         return body;
@@ -198,6 +198,14 @@ public final class FiberWindowApplyDialog {
     }
 
     // ---------- state ----------
+
+    /** A label that wraps instead of ellipsising -- these carry the warnings. */
+    private static Label wrapping(Label label) {
+        label.setWrapText(true);
+        label.setMaxWidth(Double.MAX_VALUE);
+        label.setMinHeight(Label.USE_PREF_SIZE);
+        return label;
+    }
 
     private PathObject selectedAnnotation() {
         ImageData<BufferedImage> data = gui == null ? null : gui.getImageData();
@@ -245,6 +253,12 @@ public final class FiberWindowApplyDialog {
         if (model.provisional()) {
             acknowledgeCheck.setText("I understand this model failed its own validation (" + model.verdict()
                     + "); its objects will be marked provisional");
+        }
+        // Open the section when it holds something the run needs. Leaving a
+        // required acknowledgement folded away means the user clicks Apply,
+        // is told to tick a box, and cannot see one.
+        if (overridesPane != null && (model.provisional() || !problems.isEmpty())) {
+            overridesPane.setExpanded(true);
         }
 
         RegionRequest region = scopeRegion();

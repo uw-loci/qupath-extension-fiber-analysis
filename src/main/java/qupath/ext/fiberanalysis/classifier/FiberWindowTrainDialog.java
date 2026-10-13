@@ -120,7 +120,7 @@ public final class FiberWindowTrainDialog {
     private VBox buildBody(Project<BufferedImage> project) {
         imageList = new ListView<>(FXCollections.observableArrayList(collectImages(project)));
         imageList.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
-        imageList.setPrefHeight(150);
+        imageList.setPrefHeight(110);
         for (ImageRow row : imageList.getItems()) {
             if (row.annotationCount > 0) imageList.getSelectionModel().select(row);
         }
@@ -129,13 +129,11 @@ public final class FiberWindowTrainDialog {
 
         classList = new ListView<>();
         classList.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
-        classList.setPrefHeight(120);
+        classList.setPrefHeight(90);
         refreshClasses();
 
-        geometryLabel = new Label();
-        geometryLabel.setWrapText(true);
-        thresholdWarning = new Label();
-        thresholdWarning.setWrapText(true);
+        geometryLabel = wrapping(new Label());
+        thresholdWarning = wrapping(new Label());
         thresholdWarning.setStyle("-fx-text-fill: -fx-accent;");
 
         modelNameField = new TextField("window-classifier");
@@ -170,7 +168,11 @@ public final class FiberWindowTrainDialog {
         reportArea.setPromptText("The validation report appears here. It is written whatever the verdict:"
                 + " refusing to predict is not refusing to inform.");
 
-        VBox box = new VBox(
+        // The report sits OUTSIDE the scroll pane. Inside it, "Check
+        // training set" wrote its answer below the fold and the button
+        // looked like it had done nothing -- the same defect as a required
+        // checkbox folded into a collapsed section.
+        VBox scrolled = new VBox(
                 8,
                 SectionBuilder.createSection("Images (one cross-validation group each)", true, imageList),
                 SectionBuilder.createSection("Classes to train", true, classList),
@@ -178,14 +180,12 @@ public final class FiberWindowTrainDialog {
                         "Geometry (from the Run dialog's settings)",
                         true,
                         new VBox(4, geometryLabel, thresholdWarning)),
-                SectionBuilder.createSection("Model and validation", true, settings),
-                SectionBuilder.createSection("Report", true, reportArea));
-        VBox.setVgrow(box, Priority.ALWAYS);
-        ScrollPane scroll = new ScrollPane(box);
+                SectionBuilder.createSection("Model and validation", true, settings));
+        ScrollPane scroll = new ScrollPane(scrolled);
         scroll.setFitToWidth(true);
-        VBox wrapper = new VBox(scroll);
+        scroll.setPrefHeight(380);
+        VBox wrapper = new VBox(8, scroll, SectionBuilder.createSection("Report", true, reportArea));
         VBox.setVgrow(scroll, Priority.ALWAYS);
-        VBox.setVgrow(wrapper, Priority.ALWAYS);
         return wrapper;
     }
 
@@ -200,6 +200,14 @@ public final class FiberWindowTrainDialog {
         HBox footer = new HBox(8, check, trainBtn, close);
         footer.setPadding(new Insets(8, 0, 0, 0));
         return footer;
+    }
+
+    /** A label that wraps instead of ellipsising -- these carry the warnings. */
+    private static Label wrapping(Label label) {
+        label.setWrapText(true);
+        label.setMaxWidth(Double.MAX_VALUE);
+        label.setMinHeight(Label.USE_PREF_SIZE);
+        return label;
     }
 
     // ---------- state ----------
