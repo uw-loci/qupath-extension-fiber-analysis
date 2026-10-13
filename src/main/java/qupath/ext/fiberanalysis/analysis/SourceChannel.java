@@ -35,7 +35,7 @@ import qupath.lib.regions.RegionRequest;
  * out as single-band 16-bit, which survives intact -- so a manual threshold
  * stays a real gray level on 16-bit sources.
  */
-final class SourceChannel {
+public final class SourceChannel {
 
     private static final Logger logger = LoggerFactory.getLogger(SourceChannel.class);
 
@@ -114,7 +114,7 @@ final class SourceChannel {
      * @param width  pixels actually written
      * @param height pixels actually written
      */
-    record WrittenSize(int width, int height) {}
+    public record WrittenSize(int width, int height) {}
 
     /**
      * Reads a region and writes it where the Python segmenter expects it.
@@ -134,7 +134,7 @@ final class SourceChannel {
      * @return the written width and height
      * @throws IOException if the region cannot be read or no PNG writer accepts it
      */
-    static WrittenSize writeRegionPng(
+    public static WrittenSize writeRegionPng(
             ImageServer<BufferedImage> server, RegionRequest request, String choice, Path outPng) throws IOException {
         BufferedImage region = server.readRegion(request);
         if (region == null) {

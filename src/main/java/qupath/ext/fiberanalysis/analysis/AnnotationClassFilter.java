@@ -22,14 +22,14 @@ import qupath.lib.objects.classes.PathClass;
  * {@link PathObjectPredicates#exactClassification} matching. Only the name
  * round-trip lives here; the matching rule is QuPath's.
  */
-final class AnnotationClassFilter {
+public final class AnnotationClassFilter {
 
     /**
      * Picker entry standing for objects with no class. This is QuPath's own
      * name for the null class, so it stays in step with the class list, the
      * measurement table and the annotation pane.
      */
-    static final String UNCLASSIFIED = PathClass.NULL_CLASS.toString();
+    public static final String UNCLASSIFIED = PathClass.NULL_CLASS.toString();
 
     private AnnotationClassFilter() {}
 
@@ -37,7 +37,7 @@ final class AnnotationClassFilter {
      * @param obj object to name (may be null)
      * @return the object's class name as QuPath displays it
      */
-    static String displayName(PathObject obj) {
+    public static String displayName(PathObject obj) {
         return displayName(obj == null ? null : obj.getPathClass());
     }
 
@@ -45,7 +45,7 @@ final class AnnotationClassFilter {
      * @param pc class to name (may be null)
      * @return {@code pc.toString()}, or {@link #UNCLASSIFIED} for null / the null class
      */
-    static String displayName(PathClass pc) {
+    public static String displayName(PathClass pc) {
         return pc == null ? UNCLASSIFIED : pc.toString();
     }
 
@@ -53,7 +53,7 @@ final class AnnotationClassFilter {
      * @param csv comma-separated class names as persisted by the dialogs
      * @return the trimmed, non-empty names; empty when the CSV is blank
      */
-    static Set<String> parse(String csv) {
+    public static Set<String> parse(String csv) {
         if (csv == null || csv.isBlank()) return Collections.emptySet();
         Set<String> out = new LinkedHashSet<>();
         for (String tok : csv.split(",")) {
@@ -69,7 +69,7 @@ final class AnnotationClassFilter {
      * @return a predicate accepting objects in one of those classes; matches
      *     nothing when {@code names} is empty
      */
-    static Predicate<PathObject> predicate(Set<String> names) {
+    public static Predicate<PathObject> predicate(Set<String> names) {
         if (names == null || names.isEmpty()) return obj -> false;
         PathClass[] classes = names.stream()
                 // fromString("Unclassified") is a real class of that name, not the

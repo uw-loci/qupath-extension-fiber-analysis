@@ -97,8 +97,11 @@ class BoxPooler:
         origins = np.arange(n_whole, dtype=np.int64) * stride_px
         covered = (n_whole - 1) * stride_px + window_px
         if covered < extent:
-            origins = np.append(origins, extent - window_px + ((extent - window_px) % 1))
-            origins[-1] = n_whole * stride_px
+            # The extra window stays ON the lattice and is truncated at the
+            # edge, rather than being pulled back to `extent - window_px`.
+            # Keeping the origin on the lattice is what lets the Java side
+            # compute any window's position from its index alone.
+            origins = np.append(origins, n_whole * stride_px)
         return origins
 
     def pool(self, plane):

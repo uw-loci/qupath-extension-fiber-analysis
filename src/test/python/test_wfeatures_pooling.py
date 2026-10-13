@@ -172,6 +172,22 @@ def test_partial_windows_are_emitted_and_flagged():
     assert np.isfinite(got["coverage_fraction"][hw, ww])
 
 
+def test_the_clamped_window_stays_on_the_lattice():
+    # The Java side maps a tile's window j to slide window
+    # tile_origin_px // stride + j, which is only exact while EVERY window
+    # origin, clamped or not, is a multiple of the stride. Pulling the last
+    # window back to `extent - window_px` would be the natural thing to do
+    # and would put it off-lattice.
+    window_px, stride_px = 32, 16
+    pooler = wfeatures.BoxPooler((100, 100), window_px, stride_px)
+    assert (pooler.ys0 % stride_px == 0).all()
+    assert (pooler.xs0 % stride_px == 0).all()
+    # 100 px: whole origins 0..64, the clamped one continues at 80 and is
+    # truncated at the edge rather than being pulled back to 68.
+    assert pooler.ys0.tolist() == [0, 16, 32, 48, 64, 80]
+    assert pooler.ys1.tolist() == [32, 48, 64, 80, 96, 100]
+
+
 def test_coverage_never_exceeds_one_even_on_a_clamped_window():
     mask = np.ones((70, 70), dtype=bool)
     got, meta = wfeatures.window_features(mask, 32, 16, min_pixels=1)
