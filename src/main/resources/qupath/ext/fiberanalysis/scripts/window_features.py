@@ -32,6 +32,13 @@ Inputs (Appose injected as variables):
     window_size_um         : float
     window_overlap_percent : float
     tensor_sigma           : float, optional (default 4.0)
+    grad_sigma             : float, optional; smoothing before the intensity
+                             gradient, pixels
+
+  Tiling
+    crop_x/crop_y/crop_w/crop_h : int, optional. The tile's core inside the
+                             read; the rest is halo, context for the filters
+                             only. Default: the whole read.
     min_window_pixels      : int, optional; None uses 10% of the window area
 
   Intensity features
@@ -154,6 +161,12 @@ try:
     overlap = max(0.0, min(0.95, win_overlap_pct / 100.0))
     stride_px = max(1, int(round(window_px * (1.0 - overlap))))
 
+    ih, iw = fiber_mask.shape
+    cx = int(opt_get("crop_x", 0))
+    cy = int(opt_get("crop_y", 0))
+    crop = (cx, cy, int(opt_get("crop_w", iw - cx)), int(opt_get("crop_h", ih - cy)))
+    grad_sig = float(opt_get("grad_sigma", 1.0))
+
     features, meta = wf.window_features(
         fiber_mask,
         window_px=window_px,
@@ -162,6 +175,8 @@ try:
         pixel_size_um=px_um,
         min_pixels=min_win_px,
         tensor_sigma=tensor_sig,
+        grad_sigma=grad_sig,
+        crop=crop,
     )
 
     grid_h, grid_w = meta["grid_shape"]
@@ -188,8 +203,8 @@ try:
         grid_shape=np.array([int(grid_h), int(grid_w)], dtype=np.int32),
         window_px=np.int32(window_px),
         stride_px=np.int32(stride_px),
-        tile_w=np.int32(rw),
-        tile_h=np.int32(rh),
+        tile_w=np.int32(crop[2]),
+        tile_h=np.int32(crop[3]),
     )
     with open(out_npz + ".names.json", "w", encoding="ascii") as fh:
         json.dump(

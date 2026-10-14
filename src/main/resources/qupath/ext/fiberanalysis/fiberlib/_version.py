@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.3.8"
+__version__ = "0.3.10"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -418,3 +418,29 @@ __version__ = "0.3.8"
 #
 #   29 tests, most of them about what the layer declines to do. 100 Python
 #   tests in total.
+
+# 0.3.10 (2026-10-14):
+#   - intensity.py (new): threshold-free channels. "Signal density" is the
+#     window mean of the intensity segmentation sees (channel pick, inversion,
+#     rolling ball), as a fraction of the channel's full scale -- never
+#     rescaled per image, so slides acquired the same way compare. "Intensity
+#     coherence" is (l1-l2)/(l1+l2) of the image's structure tensor summed
+#     over the window, so orientation strength no longer has to come from the
+#     segmented mask, which over-reads coverage by 20-30 points on the bio-*
+#     phantoms. Prompted by PyTextureAnalysis (Kulkarni,
+#     doi:10.5281/zenodo.7562833; GPL, no code taken).
+#   - segmentation.flatten_background: the invert + rolling-ball step pulled
+#     out of segment_internal so both paths share it. Behaviour unchanged.
+#   - density_tile.py: signal_density and intensity_coherence channels; reads
+#     a halo-padded tile and reports only its core (crop_*), so no filter sees
+#     a tile edge as the end of the tissue; pixel mode samples every
+#     pixel_step pixels so a whole slide fits in memory, normalises a window
+#     hanging off the slide by its in-image part instead of zero padding, and
+#     counts branch points by crossing number (it still used >= 3 neighbours).
+#   - wfeatures / window_features.py: signal_density, signal_sd,
+#     intensity_coherence, gradient_energy (raw channel, unmasked); the same
+#     halo crop.
+#
+#   Requires the Java side of the same change: the density map's tiles used
+#   to drop every window that straddled a seam and, unless the tile width was
+#   a whole number of strides, slot most windows one cell off.

@@ -30,6 +30,8 @@ import javafx.scene.control.Label;
 import javafx.scene.control.RadioButton;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
+import javafx.scene.control.Spinner;
+import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
@@ -105,6 +107,7 @@ public final class FiberDensityMapDialog {
     private CheckBox smoothCheck;
 
     private ToggleGroup densityModeGroup;
+    private Spinner<Double> pixelStepSpinner;
     private RadioButton windowModeRadio;
     private RadioButton pixelModeRadio;
 
@@ -310,7 +313,7 @@ public final class FiberDensityMapDialog {
         densityModeLabel.setStyle("-fx-font-weight: bold;");
         densityModeGroup = new ToggleGroup();
         windowModeRadio = new RadioButton("Per-window (fast; values are constant across each window)");
-        pixelModeRadio = new RadioButton("Per-pixel (true density; one value per source pixel)");
+        pixelModeRadio = new RadioButton("Per-pixel (smooth; a window centred on every sample)");
         windowModeRadio.setToggleGroup(densityModeGroup);
         pixelModeRadio.setToggleGroup(densityModeGroup);
         windowModeRadio.setSelected(true);
@@ -319,22 +322,30 @@ public final class FiberDensityMapDialog {
                         "One value per window of the grid, so the map is tiled at that granularity: 15 um windows show 15 um cells. Scales to any slide size."));
         pixelModeRadio.setTooltip(
                 new Tooltip(
-                        "Density at every source pixel. Needs about 700 MB for 5000x5000 with 7 channels; refused above half QuPath's max heap. ridge_count is NaN here."));
-        Label densityModeHelp = new Label("Per-pixel is what you usually want for visualization.\n"
-                + "Per-window is faster and is required for whole-slide runs that would\n"
-                + "exceed available memory in per-pixel mode.");
+                        "A window centred on each sample point, sampled every 'Output step' microns. Same window size as per-window mode, so the values are comparable; only the spacing differs. Ridge count is not available here."));
+        pixelStepSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(0.0, 1000.0, 0.0, 0.5));
+        pixelStepSpinner.setEditable(true);
+        pixelStepSpinner.setPrefWidth(110);
+        pixelStepSpinner
+                .disableProperty()
+                .bind(pixelModeRadio.selectedProperty().not());
+        pixelStepSpinner.setTooltip(
+                new Tooltip(
+                        "Microns between samples of the per-pixel map. 0 = automatic: an eighth of the window, made coarser if the map would not fit in half of QuPath's memory. Smaller is smoother and costs more memory, not more compute."));
+        HBox pixelStepRow = new HBox(6, new Label("Output step (um, 0 = auto):"), pixelStepSpinner);
+        pixelStepRow.setAlignment(Pos.CENTER_LEFT);
+        pixelStepRow.setPadding(new Insets(0, 0, 0, 24));
+        Label densityModeHelp = new Label("Per-pixel is what you usually want for visualization. Whole slides are\n"
+                + "processed in tiles either way; the output step only sets how many\n"
+                + "points the finished map holds.");
         densityModeHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         densityModeHelp.setWrapText(true);
 
         // --- Render style ---
         Label renderLabel = new Label("Render style");
         renderLabel.setStyle("-fx-font-weight: bold;");
-        smoothCheck = new CheckBox("Smooth (bilinear interpolation between window centers)");
+        smoothCheck = new CheckBox("Smooth (bilinear interpolation between sample centers)");
         smoothCheck.setSelected(false);
-        // Bilinear smoothing is a window-mode concept; in pixel mode the data
-        // is already at source resolution and bilinear-between-centres is
-        // identity. Disable the toggle when pixel mode is active.
-        smoothCheck.disableProperty().bind(pixelModeRadio.selectedProperty());
         smoothCheck.setTooltip(
                 new Tooltip(
                         "Off: each window's value fills its footprint, so boundaries show. On: values are interpolated between window centers. The stored data is identical."));
@@ -384,7 +395,8 @@ public final class FiberDensityMapDialog {
         VBox modeBox = new VBox(
                 4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp, autoReattachCheck, autoReattachHelp);
         VBox winBox = new VBox(4, windowLabel, windowHelp);
-        VBox densityModeBox = new VBox(4, densityModeLabel, windowModeRadio, pixelModeRadio, densityModeHelp);
+        VBox densityModeBox =
+                new VBox(4, densityModeLabel, windowModeRadio, pixelModeRadio, pixelStepRow, densityModeHelp);
         VBox objDensBox = new VBox(4, objDensLabel, objectDensityCheck, objectDensityClassesList, objDensHelp);
         VBox renderBox = new VBox(4, renderLabel, smoothCheck, renderHelp);
         VBox sideBox = new VBox(4, sidecarLabel, sidecarBody);
@@ -491,6 +503,7 @@ public final class FiberDensityMapDialog {
                 autoReattach,
                 smoothCheck != null && smoothCheck.isSelected(),
                 pixelModeRadio != null && pixelModeRadio.isSelected() ? "pixel" : "window",
+                pixelStepSpinner != null ? pixelStepSpinner.getValue() : 0.0,
                 objectDensityCheck != null && objectDensityCheck.isSelected(),
                 objectDensityCheck != null && objectDensityCheck.isSelected()
                         ? new ArrayList<>(

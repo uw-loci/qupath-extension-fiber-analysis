@@ -135,7 +135,11 @@ public final class DensityChannelSpec {
                 new DensityChannelSpec("skeleton_length_um", "Skeleton length (um)", "um", null, null, null),
                 new DensityChannelSpec("branch_points", "Branch points", null, null, null, null),
                 new DensityChannelSpec("mean_angle_deg", "Mean angle (deg)", "deg", null, null, null),
-                new DensityChannelSpec("order_parameter", "Order parameter", null, null, null, null));
+                new DensityChannelSpec("order_parameter", "Order parameter", null, null, null, null),
+                new DensityChannelSpec(
+                        "signal_density", "Signal density (no threshold)", "fraction of full scale", null, null, null),
+                new DensityChannelSpec(
+                        "intensity_coherence", "Intensity coherence (no threshold)", null, null, null, null));
     }
 
     /**

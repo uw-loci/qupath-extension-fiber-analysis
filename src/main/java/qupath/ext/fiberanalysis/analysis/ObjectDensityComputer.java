@@ -70,9 +70,10 @@ final class ObjectDensityComputer {
      * @param srcW           source image width in pixels
      * @param srcH           source image height in pixels
      * @param windowPx       neighborhood size in source pixels (box filter window)
-     * @param stridePx       output grid stride (1 = pixel mode, windowPx-overlap = window mode)
+     * @param stridePx       window stride, or the sampling step in pixel mode
      * @param gridW          output grid columns
      * @param gridH          output grid rows
+     * @param centred        true in pixel mode: boxes centred on each step block
      * @return map from class name to a float[gridW*gridH] (NaN = no-data)
      */
     static Map<String, float[]> compute(
@@ -83,7 +84,8 @@ final class ObjectDensityComputer {
             int windowPx,
             int stridePx,
             int gridW,
-            int gridH) {
+            int gridH,
+            boolean centred) {
 
         Map<String, float[]> out = new LinkedHashMap<>();
         if (classNames == null || classNames.isEmpty()) return out;
@@ -137,7 +139,7 @@ final class ObjectDensityComputer {
                     maskPx,
                     String.format(java.util.Locale.ROOT, "%.2f", 100.0 * maskPx / Math.max(1L, (long) srcW * srcH)));
 
-            float[] grid = boxFilterToGrid(mask, srcW, srcH, windowPx, stridePx, gridW, gridH);
+            float[] grid = MaskBoxSampler.sample(mask, srcW, srcH, windowPx, stridePx, gridW, gridH, centred);
             out.put(name, grid);
         }
         return out;
@@ -178,60 +180,5 @@ final class ObjectDensityComputer {
         long c = 0;
         for (byte b : mask) if (b != 0) c++;
         return c;
-    }
-
-    /**
-     * Box-filter a binary mask via an integral image (summed-area table)
-     * and sample the result into a grid of shape (gridH, gridW), where each
-     * output cell at (gx, gy) corresponds to source-pixel anchor
-     * {@code (gx * stridePx, gy * stridePx)} and reports the fraction of
-     * mask=1 pixels in the {@code windowPx x windowPx} box starting at that
-     * anchor.
-     *
-     * <p>Cells whose box would extend past the slide boundary are NaN -- they
-     * are no-data and should be rendered transparent. This matches the
-     * fiber-density grid's "partial trailing window dropped" semantics.
-     */
-    private static float[] boxFilterToGrid(
-            byte[] mask, int srcW, int srcH, int windowPx, int stridePx, int gridW, int gridH) {
-
-        // Build integral image: I[y, x] = sum over (y' <= y, x' <= x). We
-        // pad by one row/col on the top/left so I[0, *] = I[*, 0] = 0, which
-        // lets the rect-sum formula avoid bounds checks.
-        int W = srcW + 1;
-        int H = srcH + 1;
-        // long[] to avoid overflow on a 100k x 100k binary mask (1e10 pixels).
-        long[] integral = new long[W * H];
-        for (int y = 0; y < srcH; y++) {
-            long rowSum = 0;
-            int srcRowBase = y * srcW;
-            int intRowBase = (y + 1) * W;
-            int intPrevRowBase = y * W;
-            for (int x = 0; x < srcW; x++) {
-                rowSum += mask[srcRowBase + x] != 0 ? 1 : 0;
-                integral[intRowBase + (x + 1)] = integral[intPrevRowBase + (x + 1)] + rowSum;
-            }
-        }
-
-        float[] grid = new float[gridW * gridH];
-        Arrays.fill(grid, Float.NaN);
-        double box = (double) windowPx * (double) windowPx;
-        for (int gy = 0; gy < gridH; gy++) {
-            int y0 = gy * stridePx;
-            int y1 = y0 + windowPx;
-            if (y1 > srcH) continue;
-            int rowBase = gy * gridW;
-            for (int gx = 0; gx < gridW; gx++) {
-                int x0 = gx * stridePx;
-                int x1 = x0 + windowPx;
-                if (x1 > srcW) continue;
-                // Rect sum via integral image: A + D - B - C
-                // where A=(x0, y0), D=(x1, y1), B=(x1, y0), C=(x0, y1).
-                long sum =
-                        integral[y1 * W + x1] + integral[y0 * W + x0] - integral[y0 * W + x1] - integral[y1 * W + x0];
-                grid[rowBase + gx] = (float) (sum / box);
-            }
-        }
-        return grid;
     }
 }

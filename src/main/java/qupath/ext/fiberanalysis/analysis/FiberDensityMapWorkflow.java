@@ -213,57 +213,33 @@ public final class FiberDensityMapWorkflow {
         int stridePxWindow = Math.max(1, (int) Math.round(windowPx * (1.0 - overlapFrac)));
 
         boolean pixelMode = "pixel".equals(spec.densityMode);
-        int gridH;
-        int gridW;
-        int stridePx;
-        if (pixelMode) {
-            // Per-pixel mode: accumulator is at source resolution, stride = 1.
-            // Memory cost grows with srcW * srcH; preflight to avoid OOM.
-            gridH = srcH;
-            gridW = srcW;
-            stridePx = 1;
-            // Count EVERY channel the accumulator will hold, not just the fiber
-            // ones. The object-density and pixel-positivity channels are
-            // appended below and are the same srcW*srcH size, so counting only
-            // the defaults let a run with several selected classes sail through
-            // the preflight and then OOM anyway -- which is exactly the failure
-            // this check exists to prevent.
-            int nChannels = DensityChannelSpec.defaultChannels().size()
-                    + (spec.includeObjectDensity ? spec.objectDensityClasses.size() : 0)
-                    + (spec.includePixelPositivity ? spec.pixelPositivitySpecs.size() : 0);
-            long memBytes = DensityMapJobSpec.estimatePerPixelMemoryBytes(srcW, srcH, nChannels);
-            long maxHeap = Runtime.getRuntime().maxMemory();
-            // Refuse if the accumulator alone would consume > 50% of max heap.
-            long memCap = maxHeap / 2L;
-            if (memBytes > memCap) {
-                throw new IOException(String.format(
-                        java.util.Locale.ROOT,
-                        "Per-pixel density on %dx%d image with %d channels needs ~%.1f GB of heap"
-                                + " (max heap %.1f GB, cap %.1f GB). Re-run in window mode, run on a"
-                                + " smaller image / cropped region, or increase QuPath's max heap.",
-                        srcW,
-                        srcH,
-                        nChannels,
-                        memBytes / 1.0e9,
-                        maxHeap / 1.0e9,
-                        memCap / 1.0e9));
-            }
-            logger.info(
-                    "Per-pixel density: accumulator ~{} MB ({}x{} x {} channels x 6 bytes)",
-                    memBytes / (1024L * 1024L),
-                    srcW,
-                    srcH,
-                    nChannels);
-        } else {
-            // Slide-wide grid dimensions, computed the same way fiberlib.windows.compute_windows does:
-            // Hw = (H - windowPx) / stridePx + 1 (floor; partial trailing windows are dropped).
-            stridePx = stridePxWindow;
-            gridH = Math.max(0, (srcH - windowPx) / stridePx + 1);
-            gridW = Math.max(0, (srcW - windowPx) / stridePx + 1);
-        }
-        if (gridH == 0 || gridW == 0) {
+        // Count EVERY channel the accumulator will hold, not just the fiber
+        // ones, or a run with several selected classes passes the memory
+        // check and then runs out of memory anyway.
+        int nChannels = DensityChannelSpec.defaultChannels().size()
+                + (spec.includeObjectDensity ? spec.objectDensityClasses.size() : 0)
+                + (spec.includePixelPositivity ? spec.pixelPositivitySpecs.size() : 0);
+
+        Geometry geo = pixelMode
+                ? Geometry.pixel(srcW, srcH, windowPx, pixelStepPx(spec, pxUm, windowPx, srcW, srcH, nChannels))
+                : Geometry.window(srcW, srcH, windowPx, stridePxWindow, TILE_WIN);
+        if (geo.gridW() == 0 || geo.gridH() == 0) {
             throw new IOException("Image is smaller than one window in at least one dimension (window_px=" + windowPx
                     + "; image=" + srcW + "x" + srcH + ")");
+        }
+        int gridW = geo.gridW();
+        int gridH = geo.gridH();
+        int stridePx = geo.cellPx();
+        int halo = TileHalo.px(pxUm, spec.rollingBallRadiusUm, spec.ridgeFilter, spec.sigmaMaxUm)
+                + (pixelMode ? windowPx / 2 + 1 : 0);
+        if (pixelMode) {
+            logger.info(
+                    "Per-pixel density: {}x{} samples every {} px ({} um), accumulator ~{} MB",
+                    gridW,
+                    gridH,
+                    stridePx,
+                    String.format(Locale.ROOT, "%.2f", stridePx * pxUm),
+                    DensityMapJobSpec.estimateGridMemoryBytes(gridW, gridH, nChannels) / (1024L * 1024L));
         }
 
         // Per-channel float accumulators (slide-wide). NaN = no data.
@@ -286,58 +262,49 @@ public final class FiberDensityMapWorkflow {
         float[][] accum = new float[channels.size()][gridW * gridH];
         for (float[] arr : accum) java.util.Arrays.fill(arr, Float.NaN);
 
-        // Tile size = TILE_WIN whole windows.
-        int tilePx = TILE_WIN * windowPx;
-        // Total compute tiles = ceil(srcW / tilePx) * ceil(srcH / tilePx).
-        int nTilesX = (srcW + tilePx - 1) / tilePx;
-        int nTilesY = (srcH + tilePx - 1) / tilePx;
-        int totalTiles = nTilesX * nTilesY;
+        int totalTiles = geo.nTilesX() * geo.nTilesY();
         int doneTiles = 0;
 
         Path workDir = Files.createTempDirectory("fiber-density-tile-");
         try {
-            for (int ty = 0; ty < nTilesY; ty++) {
-                int tileY = ty * tilePx;
-                int thh = Math.min(tilePx, srcH - tileY);
-                if (thh <= 0) continue;
-                for (int tx = 0; tx < nTilesX; tx++) {
-                    int tileX = tx * tilePx;
-                    int tww = Math.min(tilePx, srcW - tileX);
-                    if (tww <= 0) continue;
+            for (int ty = 0; ty < geo.nTilesY(); ty++) {
+                for (int tx = 0; tx < geo.nTilesX(); tx++) {
+                    doneTiles++;
+                    // The tile's core: the pixels whose windows (window mode)
+                    // or samples (pixel mode) this tile owns.
+                    int coreX = tx * geo.tileStep();
+                    int coreY = ty * geo.tileStep();
+                    int coreW = Math.min(geo.tileStep() + geo.margin(), srcW - coreX);
+                    int coreH = Math.min(geo.tileStep() + geo.margin(), srcH - coreY);
+                    int tileGridW = geo.cellsIn(coreW);
+                    int tileGridH = geo.cellsIn(coreH);
+                    if (tileGridW <= 0 || tileGridH <= 0) continue;
 
-                    // Pixel mode: each tile's per-pixel arrays have shape
-                    // (thh, tww) -- one cell per source pixel. Window mode:
-                    // the tile produces (Hw, Ww) per-window cells; the last
-                    // tile in a row/column may be partial.
-                    int tileGridW;
-                    int tileGridH;
-                    if (pixelMode) {
-                        tileGridW = tww;
-                        tileGridH = thh;
-                    } else {
-                        tileGridW = (tww - windowPx) / stridePx + 1;
-                        tileGridH = (thh - windowPx) / stridePx + 1;
-                    }
-                    if (tileGridW <= 0 || tileGridH <= 0) {
-                        doneTiles++;
-                        continue;
-                    }
+                    // What is actually read: the core plus a halo of filter
+                    // context, clamped at the slide edge.
+                    int readX = Math.max(0, coreX - halo);
+                    int readY = Math.max(0, coreY - halo);
+                    int readW = Math.min(srcW, coreX + coreW + halo) - readX;
+                    int readH = Math.min(srcH, coreY + coreH + halo) - readY;
 
-                    final int tdoneTiles = doneTiles + 1;
-                    progress.setSub("Tile " + tdoneTiles + " of " + totalTiles + " (" + tileX + "," + tileY + ")");
+                    progress.setSub("Tile " + doneTiles + " of " + totalTiles + " (" + coreX + "," + coreY + ")");
 
                     Path tilePng = workDir.resolve(String.format("tile_%04d_%04d.png", tx, ty));
-                    RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, tileX, tileY, tww, thh);
+                    RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, readX, readY, readW, readH);
                     try {
                         SourceChannel.writeRegionPng(server, req, spec.segChannel, tilePng);
                     } catch (IOException ioe) {
-                        logger.warn("Tile ({},{}) skipped: {}", tileX, tileY, ioe.getMessage());
-                        doneTiles++;
+                        logger.warn("Tile ({},{}) skipped: {}", coreX, coreY, ioe.getMessage());
                         continue;
                     }
 
                     Path tileNpz = workDir.resolve(String.format("tile_%04d_%04d.npz", tx, ty));
-                    Map<String, Object> in = buildTileInputs(spec, pxUm, tilePng, tww, thh, tileNpz);
+                    Map<String, Object> in = buildTileInputs(spec, pxUm, tilePng, readW, readH, tileNpz);
+                    in.put("crop_x", coreX - readX);
+                    in.put("crop_y", coreY - readY);
+                    in.put("crop_w", coreW);
+                    in.put("crop_h", coreH);
+                    if (pixelMode) in.put("pixel_step", stridePx);
                     Task task;
                     try {
                         task = ApposeFiberService.getInstance().runTask("density_tile", in);
@@ -351,18 +318,19 @@ public final class FiberDensityMapWorkflow {
                                 "density_tile did not complete (error=" + (errObj != null ? errObj : "unknown") + ")");
                     }
 
-                    // Slot the tile into the slide-wide accumulator. We pass
-                    // the tile's first source-pixel coords (tileX, tileY) plus
-                    // stridePx so the function maps each tile's per-window
-                    // results back to the slide-wide window grid via integer
-                    // (source_px / stridePx). The previous formula
-                    // `slideX = tx * TILE_WIN` was only correct when
-                    // stridePx == windowPx (overlap = 0%); at overlap > 0 it
-                    // caused tiles to overwrite each other in the upper-left
-                    // of the slide grid.
+                    // Every core origin is a whole number of cells from the
+                    // slide origin, so the tile's cell (0, 0) is slide cell
+                    // (coreX / cellPx, coreY / cellPx) exactly.
                     accumulateTile(
-                            accum, channels, tileNpz, tileX, tileY, stridePx, gridW, gridH, tileGridW, tileGridH);
-                    doneTiles++;
+                            accum,
+                            channels,
+                            tileNpz,
+                            coreX / stridePx,
+                            coreY / stridePx,
+                            gridW,
+                            gridH,
+                            tileGridW,
+                            tileGridH);
                 }
             }
         } finally {
@@ -389,7 +357,7 @@ public final class FiberDensityMapWorkflow {
         if (spec.includeObjectDensity && !spec.objectDensityClasses.isEmpty()) {
             progress.setSub("Computing object-density channels...");
             Map<String, float[]> objDensities = ObjectDensityComputer.compute(
-                    data, spec.objectDensityClasses, srcW, srcH, windowPx, stridePx, gridW, gridH);
+                    data, spec.objectDensityClasses, srcW, srcH, windowPx, stridePx, gridW, gridH, pixelMode);
             int idx = nFiberChannels;
             for (String cls : spec.objectDensityClasses) {
                 float[] grid = objDensities.get(cls);
@@ -407,7 +375,7 @@ public final class FiberDensityMapWorkflow {
         if (spec.includePixelPositivity && !spec.pixelPositivitySpecs.isEmpty()) {
             progress.setSub("Computing pixel-positivity channels...");
             List<float[]> posGrids = PixelPositivityComputer.compute(
-                    server, spec.pixelPositivitySpecs, srcW, srcH, windowPx, stridePx, gridW, gridH);
+                    server, spec.pixelPositivitySpecs, srcW, srcH, windowPx, stridePx, gridW, gridH, pixelMode);
             for (int i = 0; i < posGrids.size(); i++) {
                 float[] grid = posGrids.get(i);
                 int dst = nAfterObject + i;
@@ -417,27 +385,14 @@ public final class FiberDensityMapWorkflow {
             }
         }
 
-        // Sidecar is written at SOURCE pixel dimensions (not grid dimensions)
-        // via nearest-neighbour upsampling inside DensityTiffWriter. This
-        // keeps Attach / Sample / standalone-open all in identity source-pixel
-        // coords -- a 68x68 sidecar opened standalone would otherwise look
-        // miniscule next to its 2048x2048 source. LZW absorbs the replicated
-        // blocks efficiently. Channels are written as float32 directly, so
-        // the values on disk ARE the physical values (no quantization).
-
+        // Sidecar is written at SOURCE pixel dimensions, each value drawn over
+        // the block centred on the window that produced it, so Attach /
+        // Sample / standalone-open all work in identity source-pixel coords.
+        // Channels are float32, so the values on disk ARE the physical values.
         String safeName = sanitize(entry.getImageName());
         Path outPath = outRoot.resolve(safeName + "_density.ome.tif");
         DensityTiffWriter.write(
-                outPath.toString(),
-                srcW,
-                srcH,
-                pxUm,
-                gridW,
-                gridH,
-                stridePx,
-                channels,
-                accum,
-                spec.smoothInterpolation);
+                outPath.toString(), srcW, srcH, pxUm, geo.lattice(), channels, accum, spec.smoothInterpolation);
         // Drop / refresh the auto-reattach marker. We intentionally do not
         // delete an existing marker when the user runs without the checkbox
         // checked -- removing the marker is an explicit user action via the
@@ -502,41 +457,36 @@ public final class FiberDensityMapWorkflow {
         return in;
     }
 
-    /** Copy the per-window arrays from one tile's npz into the slide-wide accumulator. */
+    /** Copy one tile's cells into the slide-wide accumulator, starting at slide cell (slideX, slideY). */
     private static void accumulateTile(
             float[][] accum,
             List<DensityChannelSpec> channels,
             Path npzPath,
-            int tileSrcX,
-            int tileSrcY,
-            int stridePx,
+            int slideX,
+            int slideY,
             int slideGridW,
             int slideGridH,
             int tileGridW,
             int tileGridH)
             throws IOException {
         Map<String, NpzReader.Entry> npz = NpzReader.read(npzPath);
-        // Verify the tile produced the expected grid shape (the Python side
-        // may have computed slightly fewer rows/cols if the tile clipped at
-        // the image edge; the smaller of the two governs).
         NpzReader.Entry shape = npz.get("grid_shape");
         int npyH = tileGridH;
         int npyW = tileGridW;
         if (shape != null) {
-            int[] s = shape.asInt32();
-            if (s.length >= 2) {
-                npyH = s[0];
-                npyW = s[1];
+            int[] sh = shape.asInt32();
+            if (sh.length >= 2) {
+                npyH = sh[0];
+                npyW = sh[1];
             }
         }
-        int copyH = Math.min(npyH, tileGridH);
-        int copyW = Math.min(npyW, tileGridW);
-
-        // Map tile-origin source pixels to the slide-wide window grid. Window
-        // i starts at source pixel `i * stridePx`, so tile origin (tileSrcX,
-        // tileSrcY) maps to grid cell (tileSrcX / stridePx, tileSrcY / stridePx).
-        int slideX = tileSrcX / stridePx;
-        int slideY = tileSrcY / stridePx;
+        if (npyH != tileGridH || npyW != tileGridW) {
+            // The tiling guarantees the shape; a mismatch means Java and
+            // Python disagree about the lattice, and slotting it anyway would
+            // shift every cell of this tile.
+            throw new IOException("Tile " + npzPath.getFileName() + " returned a " + npyW + "x" + npyH + " grid where "
+                    + tileGridW + "x" + tileGridH + " was expected");
+        }
 
         for (int c = 0; c < channels.size(); c++) {
             String key = channels.get(c).npzKey;
@@ -549,15 +499,129 @@ public final class FiberDensityMapWorkflow {
                 continue;
             }
             float[] tileArr = e.asFloat32();
-            for (int ry = 0; ry < copyH; ry++) {
+            for (int ry = 0; ry < npyH; ry++) {
                 int sy = slideY + ry;
                 if (sy >= slideGridH) break;
-                for (int rx = 0; rx < copyW; rx++) {
+                for (int rx = 0; rx < npyW; rx++) {
                     int sx = slideX + rx;
                     if (sx >= slideGridW) break;
                     accum[c][sy * slideGridW + sx] = tileArr[ry * npyW + rx];
                 }
             }
+        }
+    }
+
+    /**
+     * The output step in per-pixel mode. An explicit step that will not fit
+     * in memory is refused; the automatic one (an eighth of a window) is
+     * coarsened until it fits, and the coarsening is logged.
+     */
+    static int pixelStepPx(DensityMapJobSpec spec, double pxUm, int windowPx, int srcW, int srcH, int nChannels)
+            throws IOException {
+        long cap = Runtime.getRuntime().maxMemory() / 2L;
+        if (spec.pixelStepUm > 0) {
+            int step = Math.max(1, (int) Math.round(spec.pixelStepUm / pxUm));
+            long need = DensityMapJobSpec.estimateGridMemoryBytes(ceilDiv(srcW, step), ceilDiv(srcH, step), nChannels);
+            if (need > cap) {
+                throw new IOException(String.format(
+                        Locale.ROOT,
+                        "A per-pixel map of %dx%d sampled every %.2f um with %d channels needs ~%.1f GB of heap"
+                                + " (cap %.1f GB, half of QuPath's max). Use a coarser output step, set it to 0"
+                                + " (automatic), or use window mode.",
+                        srcW,
+                        srcH,
+                        step * pxUm,
+                        nChannels,
+                        need / 1.0e9,
+                        cap / 1.0e9));
+            }
+            return step;
+        }
+        int step = Math.max(1, (int) Math.round(windowPx / 8.0));
+        int first = step;
+        while (DensityMapJobSpec.estimateGridMemoryBytes(ceilDiv(srcW, step), ceilDiv(srcH, step), nChannels) > cap) {
+            step *= 2;
+        }
+        if (step != first) {
+            logger.info(
+                    "Per-pixel density: output step coarsened from {} px to {} px to fit half the heap", first, step);
+        }
+        return step;
+    }
+
+    static int ceilDiv(int a, int b) {
+        return (a + b - 1) / b;
+    }
+
+    /**
+     * How a slide is cut into tiles and where its cells sit.
+     *
+     * @param gridW     cells across the slide
+     * @param gridH     cells down the slide
+     * @param cellPx    stride (window mode) or output step (pixel mode)
+     * @param windowPx  window side
+     * @param tileStep  distance between tile core origins, a whole number of cells
+     * @param margin    extra core pixels each tile reads past its step, so its
+     *                  last window is whole (window mode; 0 in pixel mode)
+     * @param nTilesX   tiles across
+     * @param nTilesY   tiles down
+     * @param pixel     true for pixel mode
+     */
+    record Geometry(
+            int gridW,
+            int gridH,
+            int cellPx,
+            int windowPx,
+            int tileStep,
+            int margin,
+            int nTilesX,
+            int nTilesY,
+            boolean pixel) {
+
+        /** Window mode: floor windows, tiles overlapping by window - stride. */
+        static Geometry window(int srcW, int srcH, int windowPx, int stridePx, int tileWindows) {
+            int gridW = Math.max(0, (srcW - windowPx) / stridePx + 1);
+            int gridH = Math.max(0, (srcH - windowPx) / stridePx + 1);
+            int tileStep = Math.max(1, tileWindows) * windowPx;
+            tileStep = Math.max(stridePx, (tileStep / stridePx) * stridePx);
+            int perTile = tileStep / stridePx;
+            return new Geometry(
+                    gridW,
+                    gridH,
+                    stridePx,
+                    windowPx,
+                    tileStep,
+                    windowPx - stridePx,
+                    ceilDiv(gridW, perTile),
+                    ceilDiv(gridH, perTile),
+                    false);
+        }
+
+        /** Pixel mode: one sample per step block; tiles are a whole number of blocks. */
+        static Geometry pixel(int srcW, int srcH, int windowPx, int stepPx) {
+            int tileStep = Math.max(stepPx, ((TILE_WIN * windowPx) / stepPx) * stepPx);
+            return new Geometry(
+                    ceilDiv(srcW, stepPx),
+                    ceilDiv(srcH, stepPx),
+                    stepPx,
+                    windowPx,
+                    tileStep,
+                    0,
+                    ceilDiv(srcW, tileStep),
+                    ceilDiv(srcH, tileStep),
+                    true);
+        }
+
+        /** Cells a core of this length holds, matching density_tile.py. */
+        int cellsIn(int coreLen) {
+            if (pixel) return ceilDiv(coreLen, cellPx);
+            return coreLen < windowPx ? 0 : (coreLen - windowPx) / cellPx + 1;
+        }
+
+        DensityLattice lattice() {
+            return pixel
+                    ? DensityLattice.blocks(gridW, gridH, cellPx)
+                    : DensityLattice.windows(gridW, gridH, cellPx, windowPx, 0, 0);
         }
     }
 
@@ -616,12 +680,16 @@ public final class FiberDensityMapWorkflow {
 
         /**
          * Density compute mode: "window" (per-window aggregation; cheap, blocky)
-         * or "pixel" (per-pixel local-neighborhood density via uniform_filter;
-         * one value per source pixel, smooth). Pixel mode allocates a slide-wide
-         * float[] per channel sized to source dimensions -- see
-         * {@link #estimatePerPixelMemoryBytes} before running on WSIs.
+         * or "pixel" (a window centred on every pixel via uniform_filter,
+         * sampled every {@link #pixelStepUm}; smooth).
          */
         public final String densityMode;
+
+        /**
+         * Pixel mode only: microns between output samples. 0 = automatic (an
+         * eighth of a window, coarsened until the map fits half the heap).
+         */
+        public final double pixelStepUm;
 
         /**
          * When true, the sidecar grows additional channels: one per class
@@ -662,6 +730,7 @@ public final class FiberDensityMapWorkflow {
                 boolean writeAutoReattachMarker,
                 boolean smoothInterpolation,
                 String densityMode,
+                double pixelStepUm,
                 boolean includeObjectDensity,
                 List<String> objectDensityClasses,
                 boolean includePixelPositivity,
@@ -687,6 +756,10 @@ public final class FiberDensityMapWorkflow {
                         "densityMode must be 'window' or 'pixel', got '" + densityMode + "'");
             }
             this.densityMode = mode;
+            if (!(pixelStepUm >= 0)) {
+                throw new IllegalArgumentException("pixelStepUm must be >= 0 (0 = automatic), got " + pixelStepUm);
+            }
+            this.pixelStepUm = pixelStepUm;
             this.includeObjectDensity = includeObjectDensity;
             this.objectDensityClasses = objectDensityClasses == null
                     ? java.util.Collections.emptyList()
@@ -716,6 +789,7 @@ public final class FiberDensityMapWorkflow {
             m.put("writeAutoReattachMarker", writeAutoReattachMarker);
             m.put("smoothInterpolation", smoothInterpolation);
             m.put("densityMode", densityMode);
+            m.put("pixelStepUm", pixelStepUm);
             m.put("includeObjectDensity", includeObjectDensity);
             m.put("objectDensityClasses", objectDensityClasses);
             m.put("includePixelPositivity", includePixelPositivity);
@@ -736,13 +810,15 @@ public final class FiberDensityMapWorkflow {
         }
 
         /**
-         * Estimated heap cost (bytes) for a per-pixel run at the given source
-         * dimensions. One float accumulator per channel; the writer streams
-         * tiles to disk so there is no additional staging buffer.
+         * Heap for the slide-wide accumulator: one float per cell per channel.
+         *
+         * @param gridW     cells across
+         * @param gridH     cells down
+         * @param nChannels channels
+         * @return bytes
          */
-        public static long estimatePerPixelMemoryBytes(int srcW, int srcH, int nChannels) {
-            long cells = (long) srcW * (long) srcH;
-            return cells * 4L * (long) nChannels;
+        public static long estimateGridMemoryBytes(int gridW, int gridH, int nChannels) {
+            return (long) gridW * (long) gridH * 4L * (long) nChannels;
         }
 
         /**
@@ -775,6 +851,7 @@ public final class FiberDensityMapWorkflow {
                     jbool(p, "writeAutoReattachMarker", false),
                     jbool(p, "smoothInterpolation", false),
                     jstring(p, "densityMode", "window"),
+                    jdouble(p, "pixelStepUm", 0.0),
                     jbool(p, "includeObjectDensity", false),
                     jstringList(p, "objectDensityClasses"),
                     jbool(p, "includePixelPositivity", false),
@@ -856,6 +933,28 @@ public final class FiberDensityMapWorkflow {
                 logger.info("Fiber density map (headless mode -- progress logged below).");
                 return;
             }
+            // A Stage can only be built on the FX thread, and a script run
+            // from QuPath's script editor calls in from its own thread.
+            if (javafx.application.Platform.isFxApplicationThread()) {
+                build(owner);
+            } else {
+                java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
+                    build(owner);
+                    return null;
+                });
+                javafx.application.Platform.runLater(task);
+                try {
+                    task.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while opening the progress window", e);
+                } catch (java.util.concurrent.ExecutionException e) {
+                    throw new IllegalStateException("Could not open the progress window", e.getCause());
+                }
+            }
+        }
+
+        private void build(Window owner) {
             this.mainLabel = new Label("Starting...");
             this.mainBar = new ProgressBar(0);
             this.subLabel = new Label("");

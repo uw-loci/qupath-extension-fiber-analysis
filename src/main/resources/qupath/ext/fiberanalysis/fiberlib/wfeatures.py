@@ -26,12 +26,14 @@ Accumulate in float64. A float32 running sum over 1.6e7 ones has an eps of 2 at
 the top of its range, so a count plane pooled in float32 is wrong by more than
 the thing being counted.
 """
+
 import logging
 
 import numpy as np
 from scipy import ndimage
 from skimage import morphology as skmorph
 
+from . import intensity as inten
 from . import straightness as straight
 
 logger = logging.getLogger("fiber.wfeatures")
@@ -78,7 +80,9 @@ class BoxPooler:
 
         # Actual support of each window, which is the denominator for every
         # area-normalised feature. Equals window_px**2 except at the edges.
-        self.area_px = ((self.ys1 - self.ys0)[:, None] * (self.xs1 - self.xs0)[None, :]).astype(np.float64)
+        self.area_px = (
+            (self.ys1 - self.ys0)[:, None] * (self.xs1 - self.xs0)[None, :]
+        ).astype(np.float64)
 
     @staticmethod
     def _origins(extent, window_px, stride_px):
@@ -132,7 +136,13 @@ def _safe_div(num, den, where=None):
     return out
 
 
-def build_planes(fiber_mask, image_scalar=None, pixel_size_um=1.0, tensor_sigma=4.0):
+def build_planes(
+    fiber_mask,
+    image_scalar=None,
+    pixel_size_um=1.0,
+    tensor_sigma=4.0,
+    grad_sigma=inten.DEFAULT_GRAD_SIGMA,
+):
     """Per-pixel accumulator planes every poolable feature is summed from.
 
     Built once per region. Each plane is float64 so pooling is exact.
@@ -142,6 +152,7 @@ def build_planes(fiber_mask, image_scalar=None, pixel_size_um=1.0, tensor_sigma=
         image_scalar:   (H, W) optional intensity image for intensity features.
         pixel_size_um:  microns per pixel.
         tensor_sigma:   structure-tensor integration scale for orientation.
+        grad_sigma:     smoothing before the intensity gradient, pixels.
 
     Returns:
         ``(planes, extras)`` -- a dict of named float64 planes, and a dict with
@@ -168,7 +179,9 @@ def build_planes(fiber_mask, image_scalar=None, pixel_size_um=1.0, tensor_sigma=
     # for endpoints -- see straightness.crossing_numbers for why the two tests
     # are deliberately different.
     planes["junction"] = straight.junction_mask(skel).astype(np.float64)
-    planes["endpoint"] = ((straight.neighbour_counts(skel) == 1) & skel).astype(np.float64)
+    planes["endpoint"] = ((straight.neighbour_counts(skel) == 1) & skel).astype(
+        np.float64
+    )
 
     # Fiber width from the distance transform: 2 * EDT at a skeleton pixel is
     # the local fiber diameter. The transform is already computed for gaps.
@@ -209,6 +222,12 @@ def build_planes(fiber_mask, image_scalar=None, pixel_size_um=1.0, tensor_sigma=
             raise ValueError(f"image shape {img.shape} != mask {mask.shape}")
         planes["intensity"] = img * planes["mask"]
         planes["intensity_sq"] = (img**2) * planes["mask"]
+        # Threshold-free: the whole window, not just the fiber pixels, and
+        # the structure tensor of the image rather than of the mask. None of
+        # these move when the segmentation does.
+        planes["signal"] = img
+        planes["signal_sq"] = img**2
+        planes.update(inten.tensor_planes(img, grad_sigma))
 
     return planes, {"skeleton": skel, "angles": angles}
 
@@ -241,6 +260,8 @@ def window_features(
     pixel_size_um=1.0,
     min_pixels=None,
     tensor_sigma=4.0,
+    grad_sigma=inten.DEFAULT_GRAD_SIGMA,
+    crop=None,
 ):
     """Pool the whole poolable bank onto a window lattice.
 
@@ -254,6 +275,11 @@ def window_features(
                        be defined. None uses the ``compute_windows`` default of
                        10% of the window area.
         tensor_sigma:  structure-tensor integration scale.
+        grad_sigma:    smoothing before the intensity gradient, pixels.
+        crop:          ``(x, y, w, h)`` of the tile's core inside the read, or
+                       None for all of it. Planes are built on the whole read
+                       (the halo is context for the filters) and pooled over
+                       the core only.
 
     Returns:
         ``(features, meta)``. ``features`` maps a name to a (Hw, Ww) float64
@@ -261,7 +287,19 @@ def window_features(
         ``window_px``, ``stride_px``, ``partial`` and ``area_px``.
     """
     mask = np.asarray(fiber_mask, dtype=bool)
-    planes, _extras = build_planes(mask, image_scalar, pixel_size_um, tensor_sigma)
+    planes, _extras = build_planes(
+        mask, image_scalar, pixel_size_um, tensor_sigma, grad_sigma
+    )
+    if crop is not None:
+        cx, cy, cw, ch = (int(v) for v in crop)
+        h, w = mask.shape
+        if cx < 0 or cy < 0 or cw <= 0 or ch <= 0 or cx + cw > w or cy + ch > h:
+            raise ValueError(
+                f"crop ({cx},{cy},{cw},{ch}) lies outside the {w}x{h} read"
+            )
+        core = (slice(cy, cy + ch), slice(cx, cx + cw))
+        planes = {k: v[core] for k, v in planes.items()}
+        mask = mask[core]
     pooler = BoxPooler(mask.shape, window_px, stride_px)
 
     if min_pixels is None:
@@ -286,7 +324,9 @@ def window_features(
     enough = n_valid >= min_pixels
     order = np.hypot(c_bar, s_bar)
     f["order_parameter"] = np.where(enough, order, np.nan)
-    f["mean_angle_deg"] = np.where(enough, np.rad2deg(0.5 * np.arctan2(s_bar, c_bar)) % 180.0, np.nan)
+    f["mean_angle_deg"] = np.where(
+        enough, np.rad2deg(0.5 * np.arctan2(s_bar, c_bar)) % 180.0, np.nan
+    )
 
     # Densities, not raw counts: a raw count changes meaning the moment the
     # user changes the window size.
@@ -306,14 +346,29 @@ def window_features(
 
     # Length-weighted, because a 3 pixel stub and a 300 pixel fiber counted
     # equally in the old unweighted mean over segments.
-    f["straightness_mean_lenweighted"] = _safe_div(pooler.pool(planes["straightness"]), n_skel)
-    f["curvature_mean_per_um"] = _safe_div(pooler.pool(planes["curvature"]), n_skel) / px_um
+    f["straightness_mean_lenweighted"] = _safe_div(
+        pooler.pool(planes["straightness"]), n_skel
+    )
+    f["curvature_mean_per_um"] = (
+        _safe_div(pooler.pool(planes["curvature"]), n_skel) / px_um
+    )
 
     if "intensity" in planes:
         i_mean = _safe_div(pooler.pool(planes["intensity"]), n_fiber)
         i_sq = _safe_div(pooler.pool(planes["intensity_sq"]), n_fiber)
         f["intensity_mean"] = i_mean
         f["intensity_sd"] = np.sqrt(np.maximum(i_sq - i_mean**2, 0.0))
+
+        s_mean = pooler.pool(planes["signal"]) / pooler.area_px
+        s_sq = pooler.pool(planes["signal_sq"]) / pooler.area_px
+        f["signal_density"] = s_mean
+        f["signal_sd"] = np.sqrt(np.maximum(s_sq - s_mean**2, 0.0))
+        sxx = pooler.pool(planes["jxx"])
+        syy = pooler.pool(planes["jyy"])
+        f["intensity_coherence"] = inten.coherence(
+            sxx, syy, pooler.pool(planes["jxy"]), n=pooler.area_px
+        )
+        f["gradient_energy"] = (sxx + syy) / pooler.area_px
 
     meta = {
         "grid_shape": pooler.grid_shape,

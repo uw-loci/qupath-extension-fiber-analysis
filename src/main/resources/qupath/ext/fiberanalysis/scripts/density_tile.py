@@ -15,12 +15,20 @@ Two density modes via ``density_mode``:
   ``window`` (default): per-window aggregation at the user's chosen
     window-size + overlap, output shape ``(Hw, Ww)``. Cheap, blocky.
 
-  ``pixel``: per-pixel local-neighborhood density via ``uniform_filter``
-    (stride = 1) over the full binary fiber mask + per-pixel orientation.
-    Output shape ``(tile_h, tile_w)`` -- one value per source pixel.
-    ``ridge_count`` is NaN in this mode (per-pixel "distinct component
-    count" has no cheap closed form; ``skeleton_length_um`` carries the
-    same fiber-density information).
+  ``pixel``: a window centred on every pixel via ``uniform_filter``, then
+    sampled every ``pixel_step`` pixels (the pixel at offset
+    ``pixel_step // 2`` of each step block). Output shape
+    ``(ceil(core_h / step), ceil(core_w / step))``. ``ridge_count`` is NaN in
+    this mode (per-pixel "distinct component count" has no cheap closed
+    form; ``skeleton_length_um`` carries the same fiber-density information).
+    A window that hangs off the SLIDE is normalised by the part inside it,
+    not padded with zeros.
+
+Tiling contract: Java reads each tile with a halo of context on every side
+(clamped at the slide edge) and says which box of the read is the tile's
+core (``crop_*``). Every filter runs on the whole read; only the core is
+reported. That keeps a Gaussian, a rolling ball or a centred window from
+seeing a tile edge as the end of the tissue.
 
 Inputs (Appose 0.10+ injected as variables):
 
@@ -48,6 +56,14 @@ Inputs (Appose 0.10+ injected as variables):
 
   Density mode
     density_mode             : str  'window' | 'pixel'  (default 'window')
+    pixel_step               : int  output step in pixel mode (default 1)
+
+  Tiling
+    crop_x/crop_y/crop_w/crop_h : int  the tile's core inside the read image
+                                       (default: the whole read)
+
+  Threshold-free channels
+    grad_sigma               : float  pixels; smoothing before the gradient
 
   Output
     output_npz_path          : str   where to write the per-window arrays
@@ -62,10 +78,13 @@ Outputs:
       branch_points           (float32)
       mean_angle_deg          (float32, NaN where ill-defined)
       order_parameter         (float32, NaN where ill-defined)
+      signal_density          (float32, fraction of full scale; no threshold)
+      intensity_coherence     (float32, [0, 1]; no threshold; NaN where flat)
     plus metadata:
       window_px (int), stride_px (int), grid_shape (int[2]),
       tile_w (int), tile_h (int), density_mode (uint8 array)
 """
+
 import logging
 import os
 
@@ -81,12 +100,40 @@ def opt_get(name, default):
 
 
 def _run_window_mode(
-    out_npz, fiber_mask, skeleton, fiber_angles, window_px, stride_px, px_um, rw, rh,
-    win_mod, straight_mod, morph_mod,
+    out_npz,
+    fiber_mask,
+    skeleton,
+    fiber_angles,
+    signal,
+    tensor,
+    window_px,
+    stride_px,
+    px_um,
+    rw,
+    rh,
+    win_mod,
+    straight_mod,
+    morph_mod,
+    wfeat_mod,
+    inten_mod,
 ):
     """Compute and write per-window density arrays. Returns (Hw, Ww)."""
-    grid = win_mod.compute_windows(fiber_angles, fiber_mask, window_px, stride_px=stride_px)
+    grid = win_mod.compute_windows(
+        fiber_angles, fiber_mask, window_px, stride_px=stride_px
+    )
     Hw, Ww = grid["grid_shape"]
+
+    # Threshold-free channels, pooled on the same lattice. BoxPooler appends
+    # one clamped window at the far edge; compute_windows does not, so slice.
+    pooler = wfeat_mod.BoxPooler(fiber_mask.shape, window_px, stride_px)
+    area = float(window_px * window_px)
+    signal_density = (pooler.pool(signal) / area)[:Hw, :Ww]
+    intensity_coherence = inten_mod.coherence(
+        pooler.pool(tensor["jxx"])[:Hw, :Ww],
+        pooler.pool(tensor["jyy"])[:Hw, :Ww],
+        pooler.pool(tensor["jxy"])[:Hw, :Ww],
+        n=area,
+    )
 
     n_pix = grid["n_pixels"]
     window_area_px = float(window_px * window_px)
@@ -119,7 +166,9 @@ def _run_window_mode(
     total_length_px = pw_morph.get("total_length_px")
     branch_points = pw_morph.get("branch_points")
     skeleton_length_um = (
-        total_length_px * px_um if total_length_px is not None else np.zeros((Hw, Ww), dtype=np.float64)
+        total_length_px * px_um
+        if total_length_px is not None
+        else np.zeros((Hw, Ww), dtype=np.float64)
     )
 
     mean_angle_deg = grid.get("mean_angle_deg")
@@ -135,9 +184,15 @@ def _run_window_mode(
         hdm=hdm.astype(np.float32),
         ridge_count=ridge_count.astype(np.float32),
         skeleton_length_um=skeleton_length_um.astype(np.float32),
-        branch_points=(branch_points.astype(np.float32) if branch_points is not None else np.zeros((Hw, Ww), dtype=np.float32)),
+        branch_points=(
+            branch_points.astype(np.float32)
+            if branch_points is not None
+            else np.zeros((Hw, Ww), dtype=np.float32)
+        ),
         mean_angle_deg=mean_angle_deg.astype(np.float32),
         order_parameter=order_parameter.astype(np.float32),
+        signal_density=signal_density.astype(np.float32),
+        intensity_coherence=intensity_coherence.astype(np.float32),
         window_px=np.int32(window_px),
         stride_px=np.int32(stride_px),
         grid_shape=np.array([Hw, Ww], dtype=np.int32),
@@ -145,84 +200,113 @@ def _run_window_mode(
         tile_h=np.int32(rh),
         density_mode=np.array([ord(c) for c in "window"], dtype=np.uint8),
     )
-    logger.info("density_tile (window) wrote %s (grid=%dx%d, fiber=%d px)",
-                out_npz, Hw, Ww, int(fiber_mask.sum()))
+    logger.info(
+        "density_tile (window) wrote %s (grid=%dx%d, fiber=%d px)",
+        out_npz,
+        Hw,
+        Ww,
+        int(fiber_mask.sum()),
+    )
     return Hw, Ww
 
 
+def _box_mean(plane, size):
+    """Mean over a centred box, over the part of the box inside the read."""
+    plane = np.asarray(plane, dtype=np.float64)
+    num = ndimage.uniform_filter(plane, size=size, mode="constant", cval=0.0)
+    den = ndimage.uniform_filter(
+        np.ones_like(plane), size=size, mode="constant", cval=0.0
+    )
+    return num / np.maximum(den, 1e-12)
+
+
 def _run_pixel_mode(
-    out_npz, fiber_mask, skeleton, fiber_angles, window_px, px_um, rw, rh,
+    out_npz,
+    fiber_mask,
+    skeleton,
+    fiber_angles,
+    signal,
+    tensor,
+    window_px,
+    px_um,
+    crop,
+    step,
+    straight_mod,
+    inten_mod,
 ):
-    """Compute and write per-pixel density arrays via uniform_filter."""
-    mask_f = fiber_mask.astype(np.float32)
+    """Centred-window density on the whole read, reported on the core every `step` px."""
+    cx, cy, cw, ch = crop
     box_area = float(window_px * window_px)
+    rows = np.minimum(np.arange(0, ch, step) + step // 2, ch - 1) + cy
+    cols = np.minimum(np.arange(0, cw, step) + step // 2, cw - 1) + cx
 
-    # Coverage / HDM: mean of binary mask in window_px box -> coverage fraction.
-    coverage_frac = ndimage.uniform_filter(mask_f, size=window_px, mode="constant", cval=0.0)
-    fiber_coverage_percent = (100.0 * coverage_frac).astype(np.float32)
-    # NaN where the local box has zero fiber, matching the window-mode contract.
-    fiber_coverage_percent = np.where(coverage_frac > 0, fiber_coverage_percent, np.nan)
-    hdm = coverage_frac.astype(np.float32)
+    def sample(a):
+        return np.asarray(a)[np.ix_(rows, cols)]
 
-    # Skeleton length per pixel: skeleton-pixel count in box * px_um.
-    sk_f = skeleton.astype(np.float32)
-    sk_count = ndimage.uniform_filter(sk_f, size=window_px, mode="constant", cval=0.0) * box_area
-    skeleton_length_um = (sk_count * px_um).astype(np.float32)
+    mask_f = fiber_mask.astype(np.float64)
+    coverage_frac = sample(_box_mean(mask_f, window_px))
+    fiber_coverage_percent = np.where(coverage_frac > 0, 100.0 * coverage_frac, np.nan)
+    hdm = coverage_frac
 
-    # Branch points per pixel: count of branchpoint-pixels (skeleton pixels with
-    # 3+ skeleton neighbours) in box. Computed once globally for the tile.
-    nb_kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int32)
-    sk_int = skeleton.astype(np.int32)
-    nb_counts = ndimage.convolve(sk_int, nb_kernel, mode="constant", cval=0)
-    branch_mask = (sk_int > 0) & (nb_counts >= 3)
-    branch_count = (
-        ndimage.uniform_filter(branch_mask.astype(np.float32), size=window_px, mode="constant", cval=0.0) * box_area
-    ).astype(np.float32)
+    # Counts are scaled to a full window, so an edge window reads the same
+    # density as an interior one rather than a smaller count.
+    skeleton_length_um = (
+        sample(_box_mean(skeleton.astype(np.float64), window_px)) * box_area * px_um
+    )
+    junctions = straight_mod.junction_mask(skeleton).astype(np.float64)
+    branch_count = sample(_box_mean(junctions, window_px)) * box_area
 
-    # Orientation: per-pixel circular mean of fiber_angles, weighted by mask.
-    # cos(2theta) / sin(2theta) are circular-mean components; uniform_filter
-    # over the masked components gives the local <cos> / <sin> values.
     theta = np.where(np.isnan(fiber_angles), 0.0, np.deg2rad(fiber_angles))
-    cos2 = np.where(mask_f > 0, np.cos(2.0 * theta), 0.0).astype(np.float32)
-    sin2 = np.where(mask_f > 0, np.sin(2.0 * theta), 0.0).astype(np.float32)
-    cos_mean = ndimage.uniform_filter(cos2, size=window_px, mode="constant", cval=0.0)
-    sin_mean = ndimage.uniform_filter(sin2, size=window_px, mode="constant", cval=0.0)
-    mask_density = ndimage.uniform_filter(mask_f, size=window_px, mode="constant", cval=0.0)
-    valid = mask_density > 0
-    cos_norm = np.where(valid, cos_mean / np.maximum(mask_density, 1e-12), 0.0)
-    sin_norm = np.where(valid, sin_mean / np.maximum(mask_density, 1e-12), 0.0)
+    cos2 = np.where(mask_f > 0, np.cos(2.0 * theta), 0.0)
+    sin2 = np.where(mask_f > 0, np.sin(2.0 * theta), 0.0)
+    cos_mean = sample(_box_mean(cos2, window_px))
+    sin_mean = sample(_box_mean(sin2, window_px))
+    valid = coverage_frac > 0
+    cos_norm = np.where(valid, cos_mean / np.maximum(coverage_frac, 1e-12), 0.0)
+    sin_norm = np.where(valid, sin_mean / np.maximum(coverage_frac, 1e-12), 0.0)
     mean_angle_deg = np.where(
-        valid, np.rad2deg(0.5 * np.arctan2(sin_norm, cos_norm)), np.nan
-    ).astype(np.float32)
-    # Fold to [0, 180) so the visual scale stays clean.
-    mean_angle_deg = np.where(valid, (mean_angle_deg + 180.0) % 180.0, np.nan)
-    order_parameter = np.where(
-        valid, np.sqrt(cos_norm * cos_norm + sin_norm * sin_norm), np.nan
-    ).astype(np.float32)
+        valid, np.rad2deg(0.5 * np.arctan2(sin_norm, cos_norm)) % 180.0, np.nan
+    )
+    order_parameter = np.where(valid, np.hypot(cos_norm, sin_norm), np.nan)
 
-    # ridge_count has no cheap closed-form per pixel; leave NaN (per docstring).
-    ridge_count = np.full((rh, rw), np.nan, dtype=np.float32)
+    signal_density = sample(_box_mean(signal, window_px))
+    intensity_coherence = inten_mod.coherence(
+        sample(_box_mean(tensor["jxx"], window_px)),
+        sample(_box_mean(tensor["jyy"], window_px)),
+        sample(_box_mean(tensor["jxy"], window_px)),
+    )
+
+    out_h, out_w = len(rows), len(cols)
+    ridge_count = np.full((out_h, out_w), np.nan, dtype=np.float32)
 
     np.savez_compressed(
         out_npz,
         fiber_coverage_percent=fiber_coverage_percent.astype(np.float32),
         hdm=hdm.astype(np.float32),
         ridge_count=ridge_count,
-        skeleton_length_um=skeleton_length_um,
-        branch_points=branch_count,
+        skeleton_length_um=skeleton_length_um.astype(np.float32),
+        branch_points=branch_count.astype(np.float32),
         mean_angle_deg=mean_angle_deg.astype(np.float32),
         order_parameter=order_parameter.astype(np.float32),
+        signal_density=signal_density.astype(np.float32),
+        intensity_coherence=intensity_coherence.astype(np.float32),
         window_px=np.int32(window_px),
-        stride_px=np.int32(1),
-        grid_shape=np.array([rh, rw], dtype=np.int32),
-        tile_w=np.int32(rw),
-        tile_h=np.int32(rh),
+        stride_px=np.int32(step),
+        grid_shape=np.array([out_h, out_w], dtype=np.int32),
+        tile_w=np.int32(cw),
+        tile_h=np.int32(ch),
         density_mode=np.array([ord(c) for c in "pixel"], dtype=np.uint8),
     )
     logger.info(
-        "density_tile (pixel) wrote %s (tile=%dx%d, window_px=%d, fiber=%d px)",
-        out_npz, rw, rh, window_px, int(fiber_mask.sum()),
+        "density_tile (pixel) wrote %s (core=%dx%d, step=%d, window_px=%d, fiber=%d px)",
+        out_npz,
+        cw,
+        ch,
+        step,
+        window_px,
+        int(fiber_mask.sum()),
     )
+    return out_h, out_w
 
 
 try:
@@ -231,6 +315,8 @@ try:
         windows as win,
         straightness as straight,
         morphometrics as morph,
+        wfeatures as wfeat,
+        intensity as inten,
     )
 
     region_path = region_image_path  # required
@@ -261,7 +347,9 @@ try:
     out_npz = str(output_npz_path)
     density_mode = str(opt_get("density_mode", "window")).lower()
     if density_mode not in ("window", "pixel"):
-        raise ValueError(f"density_mode must be 'window' or 'pixel', got '{density_mode}'")
+        raise ValueError(
+            f"density_mode must be 'window' or 'pixel', got '{density_mode}'"
+        )
 
     # ---- Load tile ----
     pil = Image.open(region_path)
@@ -292,19 +380,61 @@ try:
     # ---- Skeleton + per-pixel orientation ----
     skeleton, fiber_angles = straight.skeletonize_and_tangents(fiber_mask)
 
+    # ---- Threshold-free planes, from the same intensity segmentation saw ----
+    grad_sigma = float(opt_get("grad_sigma", inten.DEFAULT_GRAD_SIGMA))
+    signal = inten.signal_scalar(image_rgb, seg_chan, invert, rolling_ball)
+    tensor = inten.tensor_planes(signal, grad_sigma)
+
+    # ---- The tile's core inside the halo-padded read ----
+    ih, iw = fiber_mask.shape
+    cx = int(opt_get("crop_x", 0))
+    cy = int(opt_get("crop_y", 0))
+    cw = int(opt_get("crop_w", iw - cx))
+    ch = int(opt_get("crop_h", ih - cy))
+    if cx < 0 or cy < 0 or cw <= 0 or ch <= 0 or cx + cw > iw or cy + ch > ih:
+        raise ValueError(f"crop ({cx},{cy},{cw},{ch}) lies outside the {iw}x{ih} read")
+
     # ---- Window grid ----
     window_px = max(2, int(round(win_um / px_um)))
     overlap = max(0.0, min(0.95, win_overlap_pct / 100.0))
     stride_px = max(1, int(round(window_px * (1.0 - overlap))))
 
     if density_mode == "pixel":
-        _run_pixel_mode(out_npz, fiber_mask, skeleton, fiber_angles, window_px, px_um, rw, rh)
-        out_h, out_w = rh, rw
-        out_stride = 1
+        step = max(1, int(opt_get("pixel_step", 1)))
+        out_h, out_w = _run_pixel_mode(
+            out_npz,
+            fiber_mask,
+            skeleton,
+            fiber_angles,
+            signal,
+            tensor,
+            window_px,
+            px_um,
+            (cx, cy, cw, ch),
+            step,
+            straight,
+            inten,
+        )
+        out_stride = step
     else:
+        core = (slice(cy, cy + ch), slice(cx, cx + cw))
         out_h, out_w = _run_window_mode(
-            out_npz, fiber_mask, skeleton, fiber_angles, window_px, stride_px, px_um, rw, rh,
-            win, straight, morph,
+            out_npz,
+            fiber_mask[core],
+            skeleton[core],
+            fiber_angles[core],
+            signal[core],
+            {k: v[core] for k, v in tensor.items()},
+            window_px,
+            stride_px,
+            px_um,
+            cw,
+            ch,
+            win,
+            straight,
+            morph,
+            wfeat,
+            inten,
         )
         out_stride = stride_px
 

@@ -22,8 +22,9 @@ import java.util.zip.ZipInputStream;
 
 /**
  * Minimal reader for NumPy's npz format -- a zip of npy files, one per array.
- * Only the subset needed by the density-map pipeline is implemented:
- * little-endian float32 (C-order) and little-endian int32 arrays. Headers are
+ * Every little-endian (or byte-order-free) numeric entry is read; only
+ * float32 and int32 can be converted, and the accessors refuse anything
+ * else rather than reinterpret its bytes. Headers are
  * parsed via a tiny string-scan instead of pulling in a full Python-literal
  * evaluator -- the npy header dict is always single-line ASCII written by
  * numpy itself, so a regex-light scan is sufficient.
@@ -56,20 +57,34 @@ public final class NpzReader {
             return n;
         }
 
-        /** Convert little-endian float32 bytes to a float[]. Caller validates dtype. */
+        /**
+         * @return the values
+         * @throws IllegalStateException if the entry is not float32
+         */
         public float[] asFloat32() {
+            require("<f4");
             ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
             float[] out = new float[size()];
             bb.asFloatBuffer().get(out);
             return out;
         }
 
-        /** Convert little-endian int32 bytes to an int[]. Caller validates dtype. */
+        /**
+         * @return the values
+         * @throws IllegalStateException if the entry is not int32
+         */
         public int[] asInt32() {
+            require("<i4");
             ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
             int[] out = new int[size()];
             bb.asIntBuffer().get(out);
             return out;
+        }
+
+        private void require(String expected) {
+            if (!expected.equals(dtype)) {
+                throw new IllegalStateException("npy entry is " + dtype + ", not " + expected);
+            }
         }
 
         /** First scalar element (handy for the 0-d ints in the metadata block). */
@@ -148,20 +163,23 @@ public final class NpzReader {
         return new Entry(dtype, effectiveShape, data);
     }
 
-    private static int itemSizeForDtype(String dtype) throws IOException {
+    /**
+     * Bytes per element of a numeric npy dtype such as {@code <f4} or
+     * {@code |u1}. An entry the pipeline does not convert (a uint8 tag, say)
+     * must still be skipped correctly, or one stray array would fail the
+     * whole file.
+     */
+    static int itemSizeForDtype(String dtype) throws IOException {
         if (dtype == null) throw new IOException("npy header missing descr");
-        // dtype is something like '<f4', '<i4', '<i8'. We support the float32
-        // and int32 forms used by density_tile.py.
-        switch (dtype) {
-            case "<f4":
-                return 4;
-            case "<i4":
-                return 4;
-            case "<i8":
-                return 8;
-            default:
-                throw new IOException("Unsupported npy dtype: " + dtype + " (need '<f4' or '<i4')");
+        if (dtype.length() >= 3 && "<|=".indexOf(dtype.charAt(0)) >= 0 && "fiub".indexOf(dtype.charAt(1)) >= 0) {
+            try {
+                int size = Integer.parseInt(dtype.substring(2));
+                if (size > 0) return size;
+            } catch (NumberFormatException ignored) {
+                // falls through to the refusal below
+            }
         }
+        throw new IOException("Unsupported npy dtype: " + dtype + " (need a little-endian numeric type)");
     }
 
     /**

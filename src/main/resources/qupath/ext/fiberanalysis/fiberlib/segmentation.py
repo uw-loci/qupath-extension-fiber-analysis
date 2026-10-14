@@ -230,6 +230,40 @@ def threshold_scalar(
 # ---- entry points ----------------------------------------------------------
 
 
+def flatten_background(
+    scalar, invert_intensity=False, rolling_ball_radius=0, rescale=False
+):
+    """Invert (optionally) then subtract local background with a rolling ball.
+
+    The one preprocessing rule shared by segmentation and the threshold-free
+    signal channels, so both see the same image.
+
+    Args:
+        scalar:              (H, W) float scalar in [0, 1].
+        invert_intensity:    flip bright and dark first (DAB-style images).
+        rolling_ball_radius: white top-hat disk radius in pixels; 0 disables.
+        rescale:             divide by the max afterwards. Only for a ridge
+                             RESPONSE: on an intensity it would put the gray
+                             levels back on a per-region scale.
+
+    Returns:
+        (H, W) float array.
+    """
+    out = 1.0 - scalar if invert_intensity else scalar
+    if rolling_ball_radius and rolling_ball_radius > 0:
+        try:
+            from skimage.morphology import white_tophat, disk
+
+            out = white_tophat(out, footprint=disk(int(rolling_ball_radius)))
+            if rescale:
+                m = float(out.max())
+                if m > 1e-12:
+                    out = out / m
+        except Exception as exc:
+            logger.warning("Rolling-ball failed: %s -- using raw scalar", exc)
+    return out
+
+
 def segment_internal(
     image,
     channel,
@@ -287,22 +321,9 @@ def segment_internal(
     else:
         normed = enhanced
 
-    if invert_intensity:
-        normed = 1.0 - normed
-
-    if rolling_ball_radius and rolling_ball_radius > 0:
-        try:
-            from skimage.morphology import white_tophat, disk
-
-            normed = white_tophat(normed, footprint=disk(int(rolling_ball_radius)))
-            # Only a response is safe to rescale -- doing it on the absolute
-            # scalar would put the gray levels back on a per-region scale.
-            if response:
-                m = float(normed.max())
-                if m > 1e-12:
-                    normed = normed / m
-        except Exception as exc:
-            logger.warning("Rolling-ball failed: %s -- using raw scalar", exc)
+    normed = flatten_background(
+        normed, invert_intensity, rolling_ball_radius, rescale=response
+    )
 
     mask = threshold_scalar(
         normed,

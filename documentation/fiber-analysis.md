@@ -135,7 +135,7 @@ place.
 For density-of-fiber maps across an entire slide, use the separate
 **Project density map** workflow rather than the per-annotation Run
 dialog. It tile-streams each selected image, runs the same per-window
-computations, and writes a uint16 pyramidal OME-TIFF "sidecar" per
+computations, and writes a float32 pyramidal OME-TIFF "sidecar" per
 image at
 `<project>/fiber-analysis/density-maps/<image>_density.ome.tif`.
 
@@ -164,15 +164,72 @@ listener that re-attaches automatically on every future open in this
 project. To stop: `Stop auto-reattaching density channels` (deletes
 the marker; sidecar stays).
 
-Sidecar format (recoverable units): channels are uint16 with
-sentinel `raw=0` for no-data. Per-channel scale + offset live in
-the OME-XML image description so `real = raw * scale + offset` round-
-trips the original float values. Channel names match the QuPath
-measurement-table column names (`Fiber coverage (%)`, `HDM`,
-`Ridge count`, `Skeleton length (um)`, `Branch points`,
-`Mean angle (deg)`, `Order parameter`). Pixel size = `stride_px *
-source_pixel_size_um`, so QuPath aligns the sidecar back to the
-source physically.
+Sidecar format: float32, so the values on disk are the physical values
+(`Fiber coverage (%)` reads 0-100, `Order parameter` 0-1); NaN means
+no data. The sidecar has the source image's pixel dimensions and pixel
+size, so it lines up with the image with no scaling. Each window's value
+is drawn over the block centred on that window, so the map sits over the
+tissue that produced it. Pixels outside every window (a strip less than
+one window wide at the right and bottom edges in per-window mode) are
+NaN. Channel names match the QuPath measurement-table column names:
+`Fiber coverage (%)`, `HDM`, `Ridge count`, `Skeleton length (um)`,
+`Branch points`, `Mean angle (deg)`, `Order parameter`,
+`Signal density (no threshold)`, `Intensity coherence (no threshold)`.
+
+### Per-window or per-pixel
+
+- **Per-window** gives one value per window of the grid, so the map shows
+  cells the size of the window stride.
+- **Per-pixel** centres a window of the same size on each sample point, so
+  values are comparable with per-window mode; only their spacing differs.
+  The **Output step (um)** sets that spacing. At 0 (automatic) it is one
+  eighth of the window, made coarser if the map would not fit in half of
+  QuPath's memory; the step it used is written to the log. A smaller step
+  gives a smoother map and costs memory, not computation: the work is one
+  pass of box filters over each tile whatever the step. `Ridge count` is not
+  available per pixel. Near the slide edge, a window that hangs off the image
+  is averaged over the part inside it.
+- **Smooth** (render style) interpolates between sample centres in either
+  mode.
+
+### Collagen presence without a threshold
+
+Every other channel is measured on the segmented fiber mask, so it carries
+whatever the threshold got wrong. On synthetic test images the mask
+over-reads collagen coverage by 20-30 percentage points. Two channels never
+see the threshold:
+
+- **Signal density (no threshold)** is the mean intensity in the window, as a
+  fraction of the channel's full scale (0-1 of 255 for 8-bit, of 65535 for
+  16-bit). It uses the same intensity the segmentation thresholds: the
+  chosen channel, **Invert intensity** if set, and **Rolling-ball radius** if
+  set. It is never rescaled to each image's own brightest value, so two slides
+  imaged with the same settings can be compared directly. Without a rolling
+  ball it includes the background level. Use it to find where collagen signal
+  is, independent of where a threshold puts the fiber edges.
+- **Intensity coherence (no threshold)** measures how aligned the texture is,
+  from 0 (no preferred direction) to 1 (perfectly parallel). It is the
+  coherency `(l1 - l2) / (l1 + l2)` of the image's structure tensor summed
+  over the window (Bigun and Granlund 1987; used for collagen by Rezakhaniha
+  et al. 2011). It describes the whole window, background included, and is
+  NaN only where the image is perfectly flat. In a dark, noisy window it can
+  pick up faint structure in the noise, so read it together with signal
+  density.
+
+These channels were prompted by the local density and coherence maps of
+PyTextureAnalysis (Kulkarni 2023), whose density follows Qian et al. (2022).
+No code was taken from it.
+
+### Tiling
+
+Whole slides are computed in tiles. Each tile is read with a margin of
+surrounding image, so that filters near the tile edge (smoothing, rolling
+ball, ridge filters, the windows themselves) see real tissue rather than the
+edge of the tile. Only the tile's own windows are kept. Within that margin the
+threshold-free channels, coverage and orientation are exactly what a single
+whole-image run would give. Skeleton-based counts (ridge count, branch points,
+skeleton length) are not local, because a fiber can run any distance, so they
+can still differ slightly at tile seams.
 
 See the project README's "Project density map (WSI scale)" section
 for the full menu / validation matrix / limitations.
@@ -736,6 +793,11 @@ Aerts H J W L, Velazquez E R, Leijenaar R T H, et al. (2014).
   -- Texture feature set framing (section 8, README "What the
   analyses tell you").
 
+Bigun J, Granlund G H (1987). Optimal orientation detection of linear
+  symmetry. *Proceedings of the First International Conference on
+  Computer Vision* (London), 433-438. -- Structure-tensor coherency
+  behind the `Intensity coherence (no threshold)` density channel.
+
 Bredfeldt J S, Liu Y, Pehlke C A, Conklin M W, Szulczewski J M,
   Inman D R, Keely P J, Nowak R D, Mackie T R, Eliceiri K W (2014).
   Computational segmentation of collagen fibers from second-harmonic
@@ -775,6 +837,12 @@ Hapach L A, Carey S P, Schwager S C, Taufalele P V, Wang W, Mosier
   cells motility and migration. *Communications Biology* 5:1051.
   -- Mechanical/biological framing (section 1, section 6).
 
+Kulkarni A (2023). PyTextureAnalysis v1.0. Zenodo.
+  [doi:10.5281/zenodo.7562833](https://doi.org/10.5281/zenodo.7562833)
+  ([github.com/ajinkya-kulkarni/PyTextureAnalysis](https://github.com/ajinkya-kulkarni/PyTextureAnalysis),
+  GPL-3.0; acknowledged for the idea, no code taken). -- Prompted the
+  threshold-free signal density and coherence density channels.
+
 Li H, Bera K, Toro P, et al. (2021). Collagen fiber orientation
   disorder from H&E images is prognostic for early stage breast
   cancer: clinical trial validation study. *npj Breast Cancer*
@@ -786,6 +854,14 @@ Provenzano P P, Inman D R, Eliceiri K W, et al. (2008). Collagen
   Medicine* 6:11. -- Foundational framing for collagen-density and
   organisation in tumour biology (section 1, section 6).
 
+Qian S, Wang G, Meng J, Jiang S, Zhou L, Lu J, et al. (2022).
+  Identification of human ovarian cancer relying on collagen fiber
+  coverage features by quantitative second harmonic generation imaging.
+  *Optics Express* 30(14):25718.
+  [doi:10.1364/OE.452767](https://doi.org/10.1364/OE.452767) -- Local
+  collagen density as a box mean of intensity (the basis of
+  PyTextureAnalysis's density map).
+
 Qian X, Guhan R, et al. (2025). Perpendicularity Score for Tumor-
   Associated Collagen Signatures (PS-TACS). *American Journal of
   Pathology* 195(7):1242-1255. -- Boundary-referenced PS-TACS
@@ -796,6 +872,14 @@ Schaub N J, Gilbert R J (2011). Radon transform-based methods for
   characterizing fiber alignment in tissue-engineered scaffolds.
   *Proceedings of SPIE* 7897:78970M. -- Radon entropy detects
   misalignment to ~+/-2 deg vs FFT's +/-4 deg (section 6, README).
+
+Rezakhaniha R, Agianniotis A, Schrauwen J T C, Griffa A, Sage D,
+  Bouten C V C, van de Vosse F N, Unser M, Stergiopulos N (2011).
+  Experimental investigation of collagen waviness and orientation in
+  the arterial adventitia using confocal laser scanning microscopy.
+  *Biomechanics and Modeling in Mechanobiology* 11:461-473.
+  [doi:10.1007/s10237-011-0325-z](https://doi.org/10.1007/s10237-011-0325-z)
+  -- Structure-tensor coherency applied to collagen (OrientationJ).
 
 scikit-image (van der Walt S, Schonberger J L, Nunez-Iglesias J, et
   al.; 2014). scikit-image: image processing in Python. *PeerJ*

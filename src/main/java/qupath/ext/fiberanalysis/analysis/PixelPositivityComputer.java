@@ -64,9 +64,10 @@ final class PixelPositivityComputer {
      * @param srcW           source image width in pixels
      * @param srcH           source image height in pixels
      * @param windowPx       neighborhood size in source pixels (box-filter window)
-     * @param stridePx       output grid stride (1 = pixel mode, else window mode)
+     * @param stridePx       window stride, or the sampling step in pixel mode
      * @param gridW          output grid columns
      * @param gridH          output grid rows
+     * @param centred        true in pixel mode: boxes centred on each step block
      * @return grids in the same order as {@code specs}. Each is
      *         float[gridW*gridH]; NaN = no data at that cell.
      */
@@ -78,7 +79,8 @@ final class PixelPositivityComputer {
             int windowPx,
             int stridePx,
             int gridW,
-            int gridH)
+            int gridH,
+            boolean centred)
             throws IOException {
 
         List<float[]> out = new ArrayList<>(specs.size());
@@ -105,7 +107,7 @@ final class PixelPositivityComputer {
                     maskPx,
                     String.format(java.util.Locale.ROOT, "%.2f", 100.0 * maskPx / Math.max(1L, (long) srcW * srcH)));
 
-            float[] grid = boxFilterToGrid(mask, srcW, srcH, windowPx, stridePx, gridW, gridH);
+            float[] grid = MaskBoxSampler.sample(mask, srcW, srcH, windowPx, stridePx, gridW, gridH, centred);
             out.add(grid);
         }
         return out;
@@ -148,48 +150,5 @@ final class PixelPositivityComputer {
         long c = 0;
         for (byte b : mask) if (b != 0) c++;
         return c;
-    }
-
-    /**
-     * Box-filter a binary mask via an integral image and sample the result
-     * into the output grid. Identical shape to
-     * {@code ObjectDensityComputer.boxFilterToGrid} -- kept here rather than
-     * exposed publicly to keep the two computers' internals independent.
-     */
-    private static float[] boxFilterToGrid(
-            byte[] mask, int srcW, int srcH, int windowPx, int stridePx, int gridW, int gridH) {
-
-        int W = srcW + 1;
-        int H = srcH + 1;
-        long[] integral = new long[W * H];
-        for (int y = 0; y < srcH; y++) {
-            long rowSum = 0;
-            int srcRowBase = y * srcW;
-            int intRowBase = (y + 1) * W;
-            int intPrevRowBase = y * W;
-            for (int x = 0; x < srcW; x++) {
-                rowSum += mask[srcRowBase + x] != 0 ? 1 : 0;
-                integral[intRowBase + (x + 1)] = integral[intPrevRowBase + (x + 1)] + rowSum;
-            }
-        }
-
-        float[] grid = new float[gridW * gridH];
-        Arrays.fill(grid, Float.NaN);
-        double box = (double) windowPx * (double) windowPx;
-        for (int gy = 0; gy < gridH; gy++) {
-            int y0 = gy * stridePx;
-            int y1 = y0 + windowPx;
-            if (y1 > srcH) continue;
-            int rowBase = gy * gridW;
-            for (int gx = 0; gx < gridW; gx++) {
-                int x0 = gx * stridePx;
-                int x1 = x0 + windowPx;
-                if (x1 > srcW) continue;
-                long sum =
-                        integral[y1 * W + x1] + integral[y0 * W + x0] - integral[y0 * W + x1] - integral[y1 * W + x0];
-                grid[rowBase + gx] = (float) (sum / box);
-            }
-        }
-        return grid;
     }
 }

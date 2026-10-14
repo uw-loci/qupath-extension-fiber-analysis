@@ -31,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.analysis.AnnotationClassFilter;
 import qupath.ext.fiberanalysis.analysis.DensityChannelSpec;
+import qupath.ext.fiberanalysis.analysis.DensityLattice;
 import qupath.ext.fiberanalysis.analysis.DensityTiffWriter;
 import qupath.ext.fiberanalysis.analysis.NpzReader;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
@@ -485,11 +486,14 @@ public final class WindowClassifierWorkflow {
      * @param srcW         source image width
      * @param srcH         source image height
      * @param srcPxUm      source pixel size
+     * @param regionX      x of the region the windows were laid on
+     * @param regionY      y of that region
      * @return the channels written, in order, so the caller can colour them
      * @throws IOException if the sidecar cannot be written
      */
     public static List<DensityChannelSpec> writeProbabilityMap(
-            ApplyResult result, Path outputPath, int srcW, int srcH, double srcPxUm) throws IOException {
+            ApplyResult result, Path outputPath, int srcW, int srcH, double srcPxUm, int regionX, int regionY)
+            throws IOException {
 
         int n = result.features().windowCount();
         List<DensityChannelSpec> channels = new ArrayList<>();
@@ -525,9 +529,13 @@ public final class WindowClassifierWorkflow {
                 srcW,
                 srcH,
                 srcPxUm,
-                result.features().gridW(),
-                result.features().gridH(),
-                result.features().stridePx(),
+                DensityLattice.windows(
+                        result.features().gridW(),
+                        result.features().gridH(),
+                        result.features().stridePx(),
+                        result.features().windowPx(),
+                        regionX,
+                        regionY),
                 channels,
                 grids.toArray(new float[0][]),
                 false);

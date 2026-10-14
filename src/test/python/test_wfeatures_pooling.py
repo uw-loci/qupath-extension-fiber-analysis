@@ -21,7 +21,9 @@ import pytest
 
 THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 PKG_ROOT = os.path.abspath(
-    os.path.join(THIS_DIR, "..", "..", "main", "resources", "qupath", "ext", "fiberanalysis")
+    os.path.join(
+        THIS_DIR, "..", "..", "main", "resources", "qupath", "ext", "fiberanalysis"
+    )
 )
 sys.path.insert(0, PKG_ROOT)
 
@@ -56,7 +58,9 @@ GEOMETRIES = [
 def test_pooled_counts_match_the_window_loop(window_px, stride_px):
     mask = _bars(30.0, n=160) | _bars(100.0, n=160, pitch=17, width=2)
     _skel, angles = straightness.skeletonize_and_tangents(mask)
-    ref = windows.compute_windows(angles, mask, window_px, stride_px=stride_px, min_pixels=1)
+    ref = windows.compute_windows(
+        angles, mask, window_px, stride_px=stride_px, min_pixels=1
+    )
     got, meta = wfeatures.window_features(mask, window_px, stride_px, min_pixels=1)
 
     hw, ww = ref["grid_shape"]
@@ -106,13 +110,18 @@ def test_pooling_is_exact_on_an_awkward_random_mask():
     mask = _speckle()
     for window_px, stride_px in [(32, 8), (31, 7), (16, 16)]:
         ref = windows.compute_windows(
-            np.where(mask, 45.0, np.nan).astype(np.float32), mask, window_px,
-            stride_px=stride_px, min_pixels=1,
+            np.where(mask, 45.0, np.nan).astype(np.float32),
+            mask,
+            window_px,
+            stride_px=stride_px,
+            min_pixels=1,
         )
         pooler = wfeatures.BoxPooler(mask.shape, window_px, stride_px)
         pooled = pooler.pool(mask.astype(np.float64))
         hw, ww = ref["grid_shape"]
-        np.testing.assert_array_equal(pooled[:hw, :ww], ref["n_pixels"].astype(np.float64))
+        np.testing.assert_array_equal(
+            pooled[:hw, :ww], ref["n_pixels"].astype(np.float64)
+        )
 
 
 def test_min_pixels_gate_matches():
@@ -134,8 +143,11 @@ def test_an_offset_lattice_would_be_caught():
     mask = _bars(30.0, n=160)
     window_px, stride_px = 64, 16
     ref = windows.compute_windows(
-        np.where(mask, 30.0, np.nan).astype(np.float32), mask, window_px,
-        stride_px=stride_px, min_pixels=1,
+        np.where(mask, 30.0, np.nan).astype(np.float32),
+        mask,
+        window_px,
+        stride_px=stride_px,
+        min_pixels=1,
     )
     pooler = wfeatures.BoxPooler(mask.shape, window_px, stride_px)
     correct = pooler.pool(mask.astype(np.float64))
@@ -154,8 +166,11 @@ def test_partial_windows_are_emitted_and_flagged():
     mask = _bars(0.0, n=100, pitch=10, width=3)
     window_px, stride_px = 32, 16
     ref = windows.compute_windows(
-        np.where(mask, 0.0, np.nan).astype(np.float32), mask, window_px,
-        stride_px=stride_px, min_pixels=1,
+        np.where(mask, 0.0, np.nan).astype(np.float32),
+        mask,
+        window_px,
+        stride_px=stride_px,
+        min_pixels=1,
     )
     got, meta = wfeatures.window_features(mask, window_px, stride_px, min_pixels=1)
 
@@ -163,7 +178,9 @@ def test_partial_windows_are_emitted_and_flagged():
     # 100 px, window 32, stride 16 -> 5 whole windows reaching 96, 4 px left.
     assert meta["grid_shape"][0] == hw + 1
     assert meta["grid_shape"][1] == ww + 1
-    assert not meta["partial"][:hw, :ww].any(), "whole windows must not be flagged partial"
+    assert not meta["partial"][
+        :hw, :ww
+    ].any(), "whole windows must not be flagged partial"
     assert meta["partial"][hw, :].all()
     assert meta["partial"][:, ww].all()
     # A clamped window has a smaller support, and that is the denominator the
@@ -249,6 +266,65 @@ def test_float32_reference_differs_only_at_its_own_precision():
 
     d32 = np.nanmax(np.abs(pooled - ref32["order_parameter"]))
     d64 = np.nanmax(np.abs(pooled - ref64["order_parameter"]))
-    assert d32 < 1e-6, f"float32 gap {d32:.2e} is larger than float32 precision explains"
-    assert d64 < 1e-12, f"float64 gap {d64:.2e} means the lattice is wrong, not the dtype"
+    assert (
+        d32 < 1e-6
+    ), f"float32 gap {d32:.2e} is larger than float32 precision explains"
+    assert (
+        d64 < 1e-12
+    ), f"float64 gap {d64:.2e} means the lattice is wrong, not the dtype"
     assert d64 < d32
+
+
+# --------------------------------------------------------------------------
+# Threshold-free features
+# --------------------------------------------------------------------------
+
+
+def _textured(h=96, w=128, seed=3):
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+    img = (
+        0.5
+        + 0.4 * np.cos(2 * np.pi * (xx * 0.5 - yy * 0.866) / 7.0)
+        + rng.normal(0, 0.02, (h, w))
+    )
+    return np.clip(img, 0, 1)
+
+
+def test_signal_density_is_the_unmasked_window_mean():
+    img = _textured()
+    mask = img > 0.7
+    f, meta = wfeatures.window_features(mask, 32, 16, image_scalar=img)
+    assert f["signal_density"][1, 2] == pytest.approx(
+        img[16:48, 32:64].mean(), rel=1e-9
+    )
+    assert f["signal_sd"][1, 2] == pytest.approx(img[16:48, 32:64].std(), rel=1e-6)
+
+
+def test_threshold_free_features_ignore_the_mask():
+    img = _textured()
+    a, _ = wfeatures.window_features(img > 0.3, 32, 16, image_scalar=img)
+    b, _ = wfeatures.window_features(img > 0.8, 32, 16, image_scalar=img)
+    for k in ("signal_density", "signal_sd", "intensity_coherence", "gradient_energy"):
+        assert np.array_equal(a[k], b[k], equal_nan=True), k
+    assert not np.array_equal(a["coverage_fraction"], b["coverage_fraction"])
+
+
+def test_cropping_pools_the_core_with_the_halo_as_filter_context():
+    img = _textured()
+    mask = img > 0.7
+    whole, _ = wfeatures.window_features(mask, 32, 16, image_scalar=img)
+    # A read of the core plus a 12 px halo, told where its core is.
+    sub, meta = wfeatures.window_features(
+        mask[4:88, 20:116],
+        32,
+        16,
+        image_scalar=img[4:88, 20:116],
+        crop=(12, 12, 64, 64),
+    )
+    # The core starts at (16, 32) in the whole image: window (1, 2) there.
+    assert meta["grid_shape"] == (3, 3)
+    for k in ("signal_density", "intensity_coherence", "gradient_energy"):
+        np.testing.assert_allclose(
+            sub[k][:3, :3], whole[k][1:4, 2:5], rtol=1e-9, err_msg=k
+        )

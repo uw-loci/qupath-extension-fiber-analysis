@@ -66,11 +66,9 @@ public final class DensityTiffWriter {
     /**
      * Write a density-map sidecar.
      *
-     * <p>The compact density grid ({@code gridW x gridH}) is upsampled on
-     * the fly into a sidecar with the SAME pixel dimensions as the source
-     * image ({@code srcW x srcH}) via nearest-neighbour replication: each
-     * grid cell {@code (gx, gy)} covers source pixels
-     * {@code [gx*stridePx, (gx+1)*stridePx) x [gy*stridePx, (gy+1)*stridePx)}.
+     * <p>The compact grid is drawn into a sidecar with the SAME pixel
+     * dimensions as the source image, each value placed over the block
+     * centred on the window that produced it ({@link DensityLattice}).
      * Matching source dimensions lets {@code TransformedServerBuilder.concatChannels}
      * attach directly without scale plumbing.
      *
@@ -78,25 +76,22 @@ public final class DensityTiffWriter {
      * @param srcW        sidecar pixel width = source image width
      * @param srcH        sidecar pixel height = source image height
      * @param srcPxUm     source pixel size in microns
-     * @param gridW       compact density-grid width (windows across)
-     * @param gridH       compact density-grid height (windows down)
-     * @param stridePx    source-pixel stride between density-grid cells
-     *                    (= {@code window_px - overlap_px}); nearest-neighbour
-     *                    upsample factor
+     * @param lattice     where the grid sits on the source
      * @param channels    channel descriptors in canonical order; must match
      *                    {@code grids.length}
-     * @param grids       per-channel float buffers, length {@code gridW * gridH}.
+     * @param grids       per-channel float buffers, {@code gridW * gridH}.
      *                    {@code NaN} = no data; everything else is the physical
      *                    value.
+     * @param smoothInterpolation bilinear between window centres instead of
+     *                    one flat block per window
+     * @throws IOException if the write fails
      */
     public static void write(
             String outputPath,
             int srcW,
             int srcH,
             double srcPxUm,
-            int gridW,
-            int gridH,
-            int stridePx,
+            DensityLattice lattice,
             List<DensityChannelSpec> channels,
             float[][] grids,
             boolean smoothInterpolation)
@@ -106,12 +101,10 @@ public final class DensityTiffWriter {
             throw new IllegalArgumentException(
                     "channels/grids size mismatch: " + channels.size() + " / " + grids.length);
         }
-        if (stridePx <= 0) {
-            throw new IllegalArgumentException("stridePx must be positive, got " + stridePx);
-        }
+        int cells = lattice.gridW() * lattice.gridH();
         for (float[] g : grids) {
-            if (g.length != gridW * gridH) {
-                throw new IllegalArgumentException("grid length " + g.length + " != gridW*gridH " + (gridW * gridH));
+            if (g.length != cells) {
+                throw new IllegalArgumentException("grid length " + g.length + " != gridW*gridH " + cells);
             }
         }
 
@@ -126,12 +119,10 @@ public final class DensityTiffWriter {
         initializeMetadata(meta, srcW, srcH, nChannels, srcPxUm, channels, downsamples);
 
         logger.info(
-                "Density OME-TIFF (float32): {}x{} (from {}x{} grid, stride={}, smooth={}), {} channels, {} levels, tile={}, compression={}, bigTiff={}",
+                "Density OME-TIFF (float32): {}x{} (from {}, smooth={}), {} channels, {} levels, tile={}, compression={}, bigTiff={}",
                 srcW,
                 srcH,
-                gridW,
-                gridH,
-                stridePx,
+                lattice,
                 smoothInterpolation,
                 nChannels,
                 numLevels,
@@ -187,9 +178,7 @@ public final class DensityTiffWriter {
                         int hh = Math.min(TILE_SIZE, levelH - yy);
                         for (int xx = 0; xx < levelW; xx += TILE_SIZE) {
                             int ww = Math.min(TILE_SIZE, levelW - xx);
-                            byte[] buf = smoothInterpolation
-                                    ? packTileBilinear(grids[c], gridW, gridH, stridePx, xx, yy, ww, hh, d)
-                                    : packTile(grids[c], gridW, gridH, stridePx, xx, yy, ww, hh, d);
+                            byte[] buf = packTile(lattice, grids[c], smoothInterpolation, xx, yy, ww, hh, d);
                             try {
                                 tiffWriter.saveBytes(c, buf, ifd, xx, yy, ww, hh);
                             } catch (FormatException e) {
@@ -213,108 +202,19 @@ public final class DensityTiffWriter {
     // ---- internals ----
 
     /**
-     * Pack a tile of source-coord pixels into big-endian float32 bytes,
-     * resolving each output pixel back to its compact-grid cell. {@code NaN}
-     * grid cells pass straight through to the output (no-data sentinel).
+     * Pack one output tile into big-endian float32 bytes. Each output pixel
+     * is sampled at its centre in source coordinates, so every pyramid level
+     * is drawn from the same geometry.
      */
-    private static byte[] packTile(
-            float[] grid, int gridW, int gridH, int stridePx, int xx, int yy, int ww, int hh, double downsample) {
+    static byte[] packTile(
+            DensityLattice lattice, float[] grid, boolean smooth, int xx, int yy, int ww, int hh, double downsample) {
         byte[] buf = new byte[ww * hh * 4];
         ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN);
         for (int ty = 0; ty < hh; ty++) {
-            int sy = (int) Math.round((yy + ty) * downsample);
-            int gy = sy / stridePx;
-            if (gy < 0) gy = 0;
-            if (gy >= gridH) gy = gridH - 1;
-            int rowBase = gy * gridW;
+            double v = (yy + ty + 0.5) * downsample;
             for (int tx = 0; tx < ww; tx++) {
-                int sx = (int) Math.round((xx + tx) * downsample);
-                int gx = sx / stridePx;
-                if (gx < 0) gx = 0;
-                if (gx >= gridW) gx = gridW - 1;
-                bb.putFloat(grid[rowBase + gx]);
-            }
-        }
-        return buf;
-    }
-
-    /**
-     * Bilinear-with-NaN-skip variant of {@link #packTile}. Each grid cell
-     * is treated as a sample at its centre; each output pixel is interpolated
-     * from the four surrounding centres, skipping NaN corners and
-     * renormalising weights. If all four corners are NaN, the output is NaN.
-     */
-    private static byte[] packTileBilinear(
-            float[] grid, int gridW, int gridH, int stridePx, int xx, int yy, int ww, int hh, double downsample) {
-        byte[] buf = new byte[ww * hh * 4];
-        ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN);
-        double halfStride = 0.5;
-        for (int ty = 0; ty < hh; ty++) {
-            int sy = (int) Math.round((yy + ty) * downsample);
-            double fy = (double) sy / stridePx - halfStride;
-            int gy0 = (int) Math.floor(fy);
-            int gy1 = gy0 + 1;
-            double wy1 = fy - gy0;
-            double wy0 = 1.0 - wy1;
-            if (gy0 < 0) {
-                gy0 = 0;
-                wy0 = 1.0;
-                wy1 = 0.0;
-                gy1 = 0;
-            } else if (gy1 >= gridH) {
-                gy1 = gridH - 1;
-                wy1 = 0.0;
-                wy0 = 1.0;
-                gy0 = gy1;
-            }
-            int rowBase0 = gy0 * gridW;
-            int rowBase1 = gy1 * gridW;
-            for (int tx = 0; tx < ww; tx++) {
-                int sx = (int) Math.round((xx + tx) * downsample);
-                double fx = (double) sx / stridePx - halfStride;
-                int gx0 = (int) Math.floor(fx);
-                int gx1 = gx0 + 1;
-                double wx1 = fx - gx0;
-                double wx0 = 1.0 - wx1;
-                if (gx0 < 0) {
-                    gx0 = 0;
-                    wx0 = 1.0;
-                    wx1 = 0.0;
-                    gx1 = 0;
-                } else if (gx1 >= gridW) {
-                    gx1 = gridW - 1;
-                    wx1 = 0.0;
-                    wx0 = 1.0;
-                    gx0 = gx1;
-                }
-                float v00 = grid[rowBase0 + gx0];
-                float v01 = grid[rowBase0 + gx1];
-                float v10 = grid[rowBase1 + gx0];
-                float v11 = grid[rowBase1 + gx1];
-                double w00 = wx0 * wy0;
-                double w01 = wx1 * wy0;
-                double w10 = wx0 * wy1;
-                double w11 = wx1 * wy1;
-                double sum = 0.0;
-                double wsum = 0.0;
-                if (!Float.isNaN(v00)) {
-                    sum += v00 * w00;
-                    wsum += w00;
-                }
-                if (!Float.isNaN(v01)) {
-                    sum += v01 * w01;
-                    wsum += w01;
-                }
-                if (!Float.isNaN(v10)) {
-                    sum += v10 * w10;
-                    wsum += w10;
-                }
-                if (!Float.isNaN(v11)) {
-                    sum += v11 * w11;
-                    wsum += w11;
-                }
-                float outv = wsum <= 0.0 ? Float.NaN : (float) (sum / wsum);
-                bb.putFloat(outv);
+                double u = (xx + tx + 0.5) * downsample;
+                bb.putFloat(smooth ? lattice.bilinear(grid, u, v) : lattice.nearest(grid, u, v));
             }
         }
         return buf;

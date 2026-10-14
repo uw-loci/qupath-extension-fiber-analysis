@@ -23,6 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.analysis.NpzReader;
 import qupath.ext.fiberanalysis.analysis.SourceChannel;
+import qupath.ext.fiberanalysis.analysis.TileHalo;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.regions.RegionRequest;
@@ -176,6 +177,8 @@ public final class WindowFeatureMatrix {
         Arrays.fill(partial, true);
         int tilesFailed = 0;
         int done = 0;
+        SegmentationSpec seg = spec.segmentation();
+        int halo = TileHalo.px(pixelSizeUm, seg.rollingBallRadiusUm(), seg.ridgeFilter(), seg.sigmaMaxUm());
 
         Files.createDirectories(workDir);
         for (int ty = 0; ty < nTilesY; ty++) {
@@ -186,9 +189,18 @@ public final class WindowFeatureMatrix {
                 done++;
                 int localX = tx * tileStep;
                 int localY = ty * tileStep;
-                int readW = Math.min(tileStep + margin, regionW - localX);
-                int readH = Math.min(tileStep + margin, regionH - localY);
-                if (readW <= 0 || readH <= 0) continue;
+                int coreW = Math.min(tileStep + margin, regionW - localX);
+                int coreH = Math.min(tileStep + margin, regionH - localY);
+                if (coreW <= 0 || coreH <= 0) continue;
+                // Read a halo of filter context around the core. It may run
+                // past the region (an annotation's bounds) but never past the
+                // image; the features still pool over the core only.
+                int coreX = region.getX() + localX;
+                int coreY = region.getY() + localY;
+                int readX = Math.max(0, coreX - halo);
+                int readY = Math.max(0, coreY - halo);
+                int readW = Math.min(server.getWidth(), coreX + coreW + halo) - readX;
+                int readH = Math.min(server.getHeight(), coreY + coreH + halo) - readY;
 
                 if (progress != null) {
                     progress.accept("Tile " + done + " of " + totalTiles);
@@ -196,8 +208,7 @@ public final class WindowFeatureMatrix {
 
                 Path tilePng = workDir.resolve(String.format("wf_%04d_%04d.png", tx, ty));
                 Path tileNpz = workDir.resolve(String.format("wf_%04d_%04d.npz", tx, ty));
-                RegionRequest req = RegionRequest.createInstance(
-                        server.getPath(), 1.0, region.getX() + localX, region.getY() + localY, readW, readH);
+                RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, readX, readY, readW, readH);
                 try {
                     SourceChannel.writeRegionPng(
                             server, req, spec.segmentation().segChannel(), tilePng);
@@ -211,6 +222,10 @@ public final class WindowFeatureMatrix {
                 in.put("region_image_path", tilePng.toString());
                 in.put("region_w", readW);
                 in.put("region_h", readH);
+                in.put("crop_x", coreX - readX);
+                in.put("crop_y", coreY - readY);
+                in.put("crop_w", coreW);
+                in.put("crop_h", coreH);
                 in.put("pixel_size_um", pixelSizeUm);
                 in.put("window_size_um", spec.windowSizeUm());
                 in.put("window_overlap_percent", spec.windowOverlapPercent());

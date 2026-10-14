@@ -79,7 +79,7 @@ public class ApposeFiberService {
      * to this string on init; mismatch triggers a re-extraction of the bundled
      * package over the on-disk copy.
      */
-    public static final String REQUIRED_FIBERLIB_VERSION = "0.3.8";
+    public static final String REQUIRED_FIBERLIB_VERSION = "0.3.10";
 
     private static ApposeFiberService instance;
 
@@ -884,7 +884,8 @@ public class ApposeFiberService {
             "wsplits.py",
             "wvalidate.py",
             "wmodel.py",
-            "wcontext.py");
+            "wcontext.py",
+            "intensity.py");
 
     /**
      * Sync the on-disk pixi.toml AND pixi.lock with the JAR-bundled versions.
