@@ -9,17 +9,14 @@
  */
 package qupath.ext.fiberanalysis.service;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -27,7 +24,6 @@ import java.util.Set;
 import java.util.function.Consumer;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
-import java.util.stream.Collectors;
 import org.apposed.appose.Appose;
 import org.apposed.appose.Environment;
 import org.apposed.appose.Service;
@@ -52,6 +48,11 @@ import qupath.lib.common.GeneralTools;
  *     {@code pixi install} -- it never pip-installs anything.</li>
  * </ol>
  *
+ * <p>The generic plumbing (manifest staging, pixi, worker shutdown, failure
+ * classification, the thread-death retry) lives in the shared copies
+ * {@link ApposeSupport} and {@link ApposeTaskRunner}; this class holds only
+ * what is specific to the fiber environment.
+ *
  * <p>All Appose calls go through {@link #withExtensionClassLoader} to satisfy
  * the TCCL requirement (Appose ServiceLoader / Groovy JSON / SharedMemory all
  * need the extension classloader).
@@ -60,6 +61,7 @@ public class ApposeFiberService {
 
     private static final Logger logger = LoggerFactory.getLogger(ApposeFiberService.class);
 
+    private static final String TITLE = "Fiber Analysis";
     private static final String RESOURCE_BASE = "qupath/ext/fiberanalysis/";
     private static final String PIXI_TOML_RESOURCE = RESOURCE_BASE + "pixi.toml";
     // Bundled lockfile pinning the full transitive dependency tree. Installed
@@ -79,15 +81,17 @@ public class ApposeFiberService {
      * to this string on init; mismatch triggers a re-extraction of the bundled
      * package over the on-disk copy.
      */
-    public static final String REQUIRED_FIBERLIB_VERSION = "0.3.10";
+    public static final String REQUIRED_FIBERLIB_VERSION = "0.3.11";
 
     private static ApposeFiberService instance;
 
     private Environment environment;
-    private Service pythonService;
-    private boolean initialized;
+    // Read outside the synchronized methods by runTask()/isAvailable(); a
+    // restart swaps the reference, so readers must not see a stale one.
+    private volatile Service pythonService;
+    private volatile boolean initialized;
     private String installedFiberlibVersion;
-    private String initError;
+    private volatile String initError;
     private Thread shutdownHook;
 
     /**
@@ -97,6 +101,25 @@ public class ApposeFiberService {
      * fresh worker.
      */
     private Path fiberlibDir;
+
+    /** How {@link ApposeTaskRunner} reaches the worker and replaces a stale one. */
+    private final ApposeTaskRunner.WorkerSource workerSource = new ApposeTaskRunner.WorkerSource() {
+        @Override
+        public Service worker() throws IOException {
+            ensureInitialized();
+            Service service = pythonService;
+            if (service == null) {
+                throw new IOException(
+                        TITLE + " task cannot start: the Python worker is being replaced. " + "Retry the operation.");
+            }
+            return service;
+        }
+
+        @Override
+        public void replaceWorker(Service stale) throws IOException {
+            restartWorker(stale);
+        }
+    };
 
     private ApposeFiberService() {}
 
@@ -111,13 +134,7 @@ public class ApposeFiberService {
      * Fast filesystem check -- does the env directory contain a built .pixi?
      */
     public static boolean isEnvironmentBuilt() {
-        ApposeFiberService svc = instance;
-        if (svc != null && svc.environment != null) {
-            Path envDir = Path.of(svc.environment.base());
-            return Files.isDirectory(envDir.resolve(".pixi"));
-        }
-        Path envDir = getEnvironmentPath();
-        return Files.isDirectory(envDir.resolve(".pixi"));
+        return ApposeEnvLocation.isBuilt(getEnvironmentPath());
     }
 
     public static Path getEnvironmentPath() {
@@ -183,21 +200,22 @@ public class ApposeFiberService {
             return;
         }
 
+        long setupStart = System.nanoTime();
         try {
             report(statusCallback, "Loading environment configuration...");
             logger.info("Initializing Fiber Analysis Appose environment...");
 
-            String pixiToml = loadResource(PIXI_TOML_RESOURCE);
-            String pixiLock = loadResource(PIXI_LOCK_RESOURCE);
+            String pixiToml = ApposeSupport.loadResource(PIXI_TOML_RESOURCE);
+            String pixiLock = ApposeSupport.loadResource(PIXI_LOCK_RESOURCE);
 
             // ALL Appose operations require the extension classloader as TCCL.
             ClassLoader original = Thread.currentThread().getContextClassLoader();
-            Thread.currentThread().setContextClassLoader(ApposeFiberService.class.getClassLoader());
+            Thread.currentThread().setContextClassLoader(ApposeSupport.extensionClassLoader());
 
             try {
                 // Sync manifest + lock; the staged lock lets the build install
                 // --frozen (exact pinned versions, no re-resolution).
-                syncManifest(pixiToml, pixiLock);
+                ApposeSupport.syncManifest(getEnvironmentPath(), pixiToml, pixiLock, logger);
 
                 report(statusCallback, "Building pixi environment (this may take several minutes)...");
 
@@ -225,9 +243,12 @@ public class ApposeFiberService {
                     envBuilder.base(configuredDir.toFile());
                     logger.info("Building the environment at the configured location: {}", configuredDir);
                 }
+                long buildStart = System.nanoTime();
                 environment = envBuilder.build();
-
-                logger.info("Appose environment configured at: {}", environment.base());
+                logger.info(
+                        "Appose environment configured at {} ({} ms)",
+                        environment.base(),
+                        ApposeSupport.elapsedMs(buildStart));
 
                 // Resolve conda deps via explicit pixi install.
                 installFiberLibrary(statusCallback);
@@ -244,8 +265,12 @@ public class ApposeFiberService {
                 // subprocess (Appose starts it lazily on the first task), so
                 // isAvailable() reports true from here on.
                 report(statusCallback, "Verifying fiberlib...");
+                long workerStart = System.nanoTime();
                 String fiberlibVersion = verifyWorker();
-                logger.info("Fiber Analysis environment verified: fiberlib {}", fiberlibVersion);
+                logger.info(
+                        "Fiber Analysis environment verified: fiberlib {}; the Python worker started in {} ms",
+                        fiberlibVersion,
+                        ApposeSupport.elapsedMs(workerStart));
 
                 String extVersion = GeneralTools.getPackageVersion(ApposeFiberService.class);
                 logger.info("=== Fiber Analysis Environment ===");
@@ -254,6 +279,7 @@ public class ApposeFiberService {
                 logger.info("  Required fiberlib: {}", REQUIRED_FIBERLIB_VERSION);
                 logger.info("  Environment path: {}", getEnvironmentPath());
                 logger.info("  fiberlib path: {}", fiberlibDir);
+                logger.info("  Setup time: {} ms", ApposeSupport.elapsedMs(setupStart));
                 logger.info("==================================");
 
                 initialized = true;
@@ -272,18 +298,18 @@ public class ApposeFiberService {
             // Match failure signatures against the full cause chain -- pixi's
             // BuildException only says "pixi build failed" at the top; the
             // actionable Windows file-lock text lives in a nested cause.
-            String fullMsg = collectCauseMessages(e);
+            String fullMsg = ApposeSupport.collectCauseMessages(e);
             initError = e.getMessage();
             initialized = false;
             logger.error("Failed to initialize Fiber Analysis Appose: {}", e.getMessage(), e);
-            if (looksLikeWindowsFileLock(fullMsg)) {
+            if (ApposeSupport.looksLikeWindowsFileLock(fullMsg)) {
                 logger.warn(
                         "Pixi env install hit a Windows file lock; manual recovery required\n{}",
-                        windowsFileLockAdvice(ENV_NAME));
+                        ApposeSupport.windowsFileLockAdvice(getEnvironmentPath()));
                 report(statusCallback, "Pixi env install failed: Windows file lock. See recovery steps.");
                 try {
                     qupath.fx.dialogs.Dialogs.showWarningNotification(
-                            "Fiber Analysis",
+                            TITLE,
                             "Pixi env install failed: a file was locked by another process. Close QuPath,"
                                     + " delete the .pixi folder, and relaunch. See the log for full recovery steps.");
                 } catch (Exception fxEx) {
@@ -345,9 +371,11 @@ public class ApposeFiberService {
         });
         verifyTask.waitFor();
 
-        String fiberlibVersion = String.valueOf(verifyTask.outputs.get("fiberlib_version"));
-        String pythonInitError = String.valueOf(verifyTask.outputs.get("init_error"));
-        if (pythonInitError != null && !pythonInitError.isEmpty() && !"null".equals(pythonInitError)) {
+        Object version = verifyTask.outputs.get("fiberlib_version");
+        String fiberlibVersion = version == null ? "unknown" : String.valueOf(version);
+        Object initErr = verifyTask.outputs.get("init_error");
+        String pythonInitError = initErr == null ? "" : String.valueOf(initErr);
+        if (!pythonInitError.isEmpty()) {
             throw new IOException("Python init failed: " + pythonInitError);
         }
         installedFiberlibVersion = fiberlibVersion;
@@ -358,20 +386,14 @@ public class ApposeFiberService {
      * Recreates ONLY the Python worker subprocess -- not the pixi environment,
      * not the unpacked fiberlib.
      *
-     * <p>This is the recovery for an Appose "thread death". A worker that has
-     * gone stale emits a FAILURE on its next task <em>before any Python runs</em>;
-     * Appose's {@code Service} then drops that task from its routing map and
-     * relaunches it as an unobservable zombie inside the same worker (every
-     * later event for it hits "No such task"). Retrying against that same worker
-     * therefore risks a second copy of the analysis running concurrently against
-     * the same output directory. Killing and recreating the worker terminates
-     * the zombie, so the retry runs alone.
-     *
-     * <p>The pixi env is already built and fiberlib is already on disk, so this
-     * is a subprocess respawn plus a re-run of {@code init_fiber.py} -- seconds,
-     * not the minutes a full {@link #initialize} would cost. The verification
-     * task at the end both confirms the fresh worker imports fiberlib and spawns
-     * the subprocess, keeping the {@link #isAvailable()} contract intact.
+     * <p>This is the recovery for an Appose "thread death" (see
+     * {@link ApposeTaskRunner} for why the worker must be replaced rather than
+     * reused). The pixi env is already built and fiberlib is already on disk,
+     * so this is a subprocess respawn plus a re-run of {@code init_fiber.py} --
+     * seconds, not the minutes a full {@link #initialize} would cost. The
+     * verification task at the end both confirms the fresh worker imports
+     * fiberlib and spawns the subprocess, keeping the {@link #isAvailable()}
+     * contract intact.
      *
      * @throws IOException if the environment is not built or the worker cannot
      *                     be recreated
@@ -403,42 +425,19 @@ public class ApposeFiberService {
             return;
         }
         ClassLoader original = Thread.currentThread().getContextClassLoader();
-        Thread.currentThread().setContextClassLoader(ApposeFiberService.class.getClassLoader());
+        Thread.currentThread().setContextClassLoader(ApposeSupport.extensionClassLoader());
         try {
-            // Tear down the stale worker: close stdin for a clean exit, then kill.
+            long start = System.nanoTime();
             Service stale = pythonService;
             pythonService = null;
-            if (stale != null) {
-                try {
-                    stale.close();
-                    long deadline = System.currentTimeMillis() + 3000;
-                    while (stale.isAlive() && System.currentTimeMillis() < deadline) {
-                        Thread.sleep(50);
-                    }
-                    if (stale.isAlive()) {
-                        stale.kill();
-                    }
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    try {
-                        stale.kill();
-                    } catch (Exception ignored) {
-                        // best effort
-                    }
-                    throw new IOException("Interrupted while tearing down the stale Python worker", ie);
-                } catch (Exception e) {
-                    logger.warn("Error tearing down stale worker: {}", e.getMessage());
-                    try {
-                        stale.kill();
-                    } catch (Exception ignored) {
-                        // best effort
-                    }
-                }
-            }
+            ApposeSupport.stopWorker(stale, 3000, logger);
 
             spawnWorker();
             String version = verifyWorker();
-            logger.info("Fiber Analysis Appose worker restarted (fresh Python subprocess, fiberlib {})", version);
+            logger.info(
+                    "Fiber Analysis Appose worker restarted in {} ms (fresh Python subprocess, fiberlib {})",
+                    ApposeSupport.elapsedMs(start),
+                    version);
             // A restart after a hard worker death leaves initialized==false;
             // the env and fiberlib are intact, so mark the service usable again.
             initialized = true;
@@ -459,163 +458,32 @@ public class ApposeFiberService {
     /**
      * Runs a named task script with the given inputs.
      *
+     * <p>A stale worker is replaced and the task retried once, only when no
+     * Python ran; see {@link ApposeTaskRunner}.
+     *
      * @param scriptName script name without {@code .py} extension
      * @param inputs     map of input values passed to the script
      * @return the completed {@link Task} with outputs populated
      */
     public Task runTask(String scriptName, Map<String, Object> inputs) throws IOException {
-        ensureInitialized();
-
         String script;
         try {
             script = loadScript(scriptName + ".py");
         } catch (IOException e) {
             throw new IOException("Failed to load task script: " + scriptName, e);
         }
-
-        ClassLoader original = Thread.currentThread().getContextClassLoader();
-        Thread.currentThread().setContextClassLoader(ApposeFiberService.class.getClassLoader());
-        try {
-            // Appose "thread death" recovery. A worker that has gone stale
-            // emits FAILURE("thread death") on its next task BEFORE any Python
-            // runs; Appose then drops that task from its routing map and
-            // relaunches it inside the same worker as an unobservable zombie
-            // (every later event for it hits "No such task").
-            //
-            // Three things make the recovery correct, and all three are
-            // required:
-            //   1. RESTART THE WORKER FIRST. Resubmitting to the same worker
-            //      leaves the zombie running, so two copies of the analysis
-            //      would race on the same output directory. restartWorker()
-            //      kills the worker and takes the zombie with it.
-            //   2. RETRY ONLY WHEN NO PYTHON EVER RAN. The stale-worker race is
-            //      identifiable precisely because the FAILURE arrives before
-            //      the LAUNCH -- so if we saw a LAUNCH or an UPDATE for this
-            //      task, Python did start, the "thread death" is a real
-            //      mid-run death, and re-running would repeat side effects
-            //      (PNG/NPZ writes) rather than recover.
-            //   3. LOG THREAD-DEATH AT WARN, EVERYTHING ELSE AT ERROR. A
-            //      recovered thread-death is not an error; logging it as one
-            //      sends users chasing a non-problem.
-            int maxAttempts = 2;
-            TaskException last = null;
-            for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-                // Capture the exact Service this attempt runs on, so a
-                // concurrent thread's restart cannot be double-applied. Read
-                // once: restartWorker() nulls the field mid-swap, and this
-                // method deliberately does not hold the monitor for the whole
-                // (potentially minutes-long) task.
-                Service submittedOn = pythonService;
-                if (submittedOn == null) {
-                    throw new IOException("Fiber task '" + scriptName
-                            + "' cannot start: the Python worker is being replaced. Retry the operation.");
-                }
-                Task task = submittedOn.task(script, inputs);
-                final int attemptCapture = attempt;
-                // Set from the event pump thread, read from this one.
-                final java.util.concurrent.atomic.AtomicBoolean pythonStarted =
-                        new java.util.concurrent.atomic.AtomicBoolean(false);
-                task.listen(event -> {
-                    if (event.responseType == ResponseType.LAUNCH || event.responseType == ResponseType.UPDATE) {
-                        pythonStarted.set(true);
-                    } else if (event.responseType == ResponseType.CRASH) {
-                        logger.error("Fiber task '{}' CRASH (attempt {}): {}", scriptName, attemptCapture, task.error);
-                    } else if (event.responseType == ResponseType.FAILURE) {
-                        String err = task.error == null ? "" : task.error;
-                        if (err.toLowerCase().contains("thread death") && !pythonStarted.get()) {
-                            logger.warn(
-                                    "Fiber task '{}' FAILURE (attempt {}): stale-worker 'thread death' before Python"
-                                            + " started: {}",
-                                    scriptName,
-                                    attemptCapture,
-                                    err);
-                        } else {
-                            logger.error("Fiber task '{}' FAILURE (attempt {}): {}", scriptName, attemptCapture, err);
-                        }
-                    }
-                });
-                try {
-                    task.waitFor();
-                    if (attempt > 1) {
-                        logger.info("Fiber task '{}' succeeded on attempt {}", scriptName, attempt);
-                    }
-                    return task;
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Fiber task '" + scriptName + "' interrupted", e);
-                } catch (TaskException te) {
-                    last = te;
-                    String msg = te.getMessage() == null ? "" : te.getMessage();
-                    boolean isThreadDeath = msg.toLowerCase().contains("thread death");
-                    boolean retryable = isThreadDeath && !pythonStarted.get() && attempt < maxAttempts;
-                    if (!retryable) {
-                        if (isThreadDeath && pythonStarted.get()) {
-                            logger.error(
-                                    "Fiber task '{}' died mid-run ('thread death' AFTER Python started) -- not retried,"
-                                            + " because a rerun would repeat whatever the script had already written.",
-                                    scriptName);
-                        }
-                        throw new IOException("Fiber task '" + scriptName + "' failed: " + msg, te);
-                    }
-                    logger.warn(
-                            "Fiber task '{}' hit stale-worker 'thread death' before Python started (attempt {}/{});"
-                                    + " restarting the Python worker to kill the zombie relaunch, then retrying once.",
-                            scriptName,
-                            attempt,
-                            maxAttempts);
-                    try {
-                        restartWorker(submittedOn);
-                    } catch (IOException re) {
-                        logger.error("Worker restart after thread-death failed: {}", re.getMessage());
-                        throw new IOException(
-                                "Fiber task '" + scriptName + "' failed: " + msg + " (worker restart also failed: "
-                                        + re.getMessage() + ")",
-                                te);
-                    }
-                    // restartWorker() swaps the TCCL back to whatever it was on
-                    // entry; re-assert ours for the retry's JSON serialization.
-                    Thread.currentThread().setContextClassLoader(ApposeFiberService.class.getClassLoader());
-                }
-            }
-            // Unreachable: the loop either returns or throws.
-            throw new IOException("Fiber task '" + scriptName + "' failed after retries: "
-                    + (last == null ? "unknown" : last.getMessage()));
-        } finally {
-            Thread.currentThread().setContextClassLoader(original);
-        }
+        return ApposeTaskRunner.run(
+                TITLE, workerSource, scriptName, script, inputs, new ApposeTaskRunner.Options().maxAttempts(2));
     }
 
     /**
      * Gracefully shuts down the Python service.
      */
     public synchronized void shutdown() {
-        if (pythonService != null) {
-            try {
-                logger.info("Shutting down Fiber Analysis Python service...");
-                pythonService.close();
-                if (pythonService.isAlive()) {
-                    long deadline = System.currentTimeMillis() + 5000;
-                    while (pythonService.isAlive() && System.currentTimeMillis() < deadline) {
-                        try {
-                            Thread.sleep(200);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                            break;
-                        }
-                    }
-                }
-                if (pythonService.isAlive()) {
-                    logger.warn("Fiber Python service did not exit gracefully, force-killing");
-                    pythonService.kill();
-                }
-            } catch (Exception e) {
-                try {
-                    pythonService.kill();
-                } catch (Exception ignored) {
-                    // nothing more we can do
-                }
-                logger.warn("Error during Fiber Python shutdown: {}", e.getMessage());
-            }
+        Service service = pythonService;
+        if (service != null) {
+            logger.info("Shutting down Fiber Analysis Python service...");
+            ApposeSupport.stopWorker(service, 5000, logger);
             pythonService = null;
         }
         initialized = false;
@@ -644,7 +512,7 @@ public class ApposeFiberService {
         Path envPath = getEnvironmentPath();
         if (Files.exists(envPath)) {
             logger.info("Deleting environment directory: {}", envPath);
-            deleteDirectoryRecursively(envPath);
+            ApposeSupport.deleteDirectoryRecursively(envPath);
         }
     }
 
@@ -652,13 +520,7 @@ public class ApposeFiberService {
      * Executes a callable with the TCCL set to the extension's classloader.
      */
     public static <T> T withExtensionClassLoader(java.util.concurrent.Callable<T> callable) throws Exception {
-        ClassLoader original = Thread.currentThread().getContextClassLoader();
-        Thread.currentThread().setContextClassLoader(ApposeFiberService.class.getClassLoader());
-        try {
-            return callable.call();
-        } finally {
-            Thread.currentThread().setContextClassLoader(original);
-        }
+        return ApposeSupport.withExtensionClassLoader(callable);
     }
 
     // ==================== Internal helpers ====================
@@ -673,7 +535,7 @@ public class ApposeFiberService {
         Path envBase = Path.of(environment.base());
         Path manifestPath = envBase.resolve("pixi.toml");
 
-        Path pixi = findPixiBinary();
+        Path pixi = ApposeSupport.findPixiBinary();
         if (pixi == null) {
             throw new IOException("Cannot find pixi binary. The Appose environment may not have been set up correctly. "
                     + "Try Extensions > Fiber Analysis > Setup environment...");
@@ -683,65 +545,10 @@ public class ApposeFiberService {
         // exact pinned versions and never re-resolves.
         logger.info("Running pixi install --frozen from the bundled lock...");
         report(statusCallback, "Installing Python dependencies (this may take several minutes on first run)...");
-        runPixiCommand(pixi, envBase, manifestPath, "install", "--frozen");
-    }
-
-    private void runPixiCommand(Path pixi, Path workDir, Path manifestPath, String... args) throws IOException {
-        java.util.List<String> command = new java.util.ArrayList<>();
-        command.add(pixi.toString());
-        for (String arg : args) {
-            command.add(arg);
-        }
-        command.add("--manifest-path");
-        command.add(manifestPath.toString());
-
-        logger.info("Running: {}", command);
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.directory(workDir.toFile());
-        pb.redirectErrorStream(true);
-        Process process = pb.start();
-
-        StringBuilder output = new StringBuilder();
-        try (BufferedReader reader =
-                new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
-                logger.info("[pixi] {}", line);
-            }
-        }
-
-        int exitCode;
-        try {
-            exitCode = process.waitFor();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("pixi command interrupted", e);
-        }
-
-        if (exitCode != 0) {
-            throw new IOException("pixi " + args[0] + " failed (exit code " + exitCode + "):\n" + output);
-        }
-    }
-
-    private Path findPixiBinary() {
-        Path apposeDir = Path.of(System.getProperty("user.home"), ".local", "share", "appose");
-        String pixiName = GeneralTools.isWindows() ? "pixi.exe" : "pixi";
-        Path pixi = apposeDir.resolve(".pixi").resolve("bin").resolve(pixiName);
-        if (Files.isRegularFile(pixi)) {
-            return pixi;
-        }
-        try {
-            Process p = new ProcessBuilder(pixiName, "--version")
-                    .redirectErrorStream(true)
-                    .start();
-            if (p.waitFor() == 0) {
-                return Path.of(pixiName);
-            }
-        } catch (IOException | InterruptedException ignored) {
-            // Not on PATH
-        }
-        return null;
+        long start = System.nanoTime();
+        ApposeSupport.runPixiCommand(
+                pixi, envBase, manifestPath, line -> logger.info("[pixi] {}", line), "install", "--frozen");
+        logger.info("pixi install --frozen finished in {} ms", ApposeSupport.elapsedMs(start));
     }
 
     /**
@@ -764,7 +571,7 @@ public class ApposeFiberService {
                 return libParent;
             }
             logger.info("Bundled fiberlib changed ({} -> {}); re-extracting", onDisk, REQUIRED_FIBERLIB_VERSION);
-            deleteDirectoryRecursively(libDir);
+            ApposeSupport.deleteDirectoryRecursively(libDir);
         }
 
         Files.createDirectories(libDir);
@@ -887,129 +694,14 @@ public class ApposeFiberService {
             "wcontext.py",
             "intensity.py");
 
-    /**
-     * Sync the on-disk pixi.toml AND pixi.lock with the JAR-bundled versions.
-     * The lock pins the full dependency tree and the env installs with
-     * --frozen, so the lock is staged into the env dir before the build: first
-     * run stages the lock (Appose writes the manifest); a change to either file
-     * rewrites both and wipes .pixi/ for a clean reinstall; otherwise the lock
-     * is re-staged if a prior wipe removed it.
-     */
-    private void syncManifest(String expectedToml, String expectedLock) {
-        try {
-            Path envDir = getEnvironmentPath();
-            Path pixiTomlFile = envDir.resolve("pixi.toml");
-            Path lockFile = envDir.resolve("pixi.lock");
-
-            if (!Files.exists(pixiTomlFile)) {
-                Files.createDirectories(envDir);
-                Files.writeString(lockFile, expectedLock, StandardCharsets.UTF_8);
-                return;
-            }
-
-            String existing = Files.readString(pixiTomlFile, StandardCharsets.UTF_8)
-                    .replace("\r\n", "\n")
-                    .strip();
-            String normalizedExpected = expectedToml.replace("\r\n", "\n").strip();
-            String onLock = Files.exists(lockFile)
-                    ? Files.readString(lockFile, StandardCharsets.UTF_8)
-                            .replace("\r\n", "\n")
-                            .strip()
-                    : "";
-            String exLock = expectedLock.replace("\r\n", "\n").strip();
-
-            if (existing.equals(normalizedExpected) && onLock.equals(exLock)) {
-                if (!Files.exists(lockFile)) {
-                    Files.writeString(lockFile, expectedLock, StandardCharsets.UTF_8);
-                }
-                return;
-            }
-
-            logger.info("pixi manifest/lock changed - updating and forcing rebuild");
-            Files.writeString(pixiTomlFile, expectedToml, StandardCharsets.UTF_8);
-            Files.writeString(lockFile, expectedLock, StandardCharsets.UTF_8);
-            Path pixiDir = envDir.resolve(".pixi");
-            if (Files.isDirectory(pixiDir)) {
-                try {
-                    deleteDirectoryRecursively(pixiDir);
-                } catch (IOException e) {
-                    Path renamed = envDir.resolve(".pixi_old_" + System.currentTimeMillis());
-                    try {
-                        Files.move(pixiDir, renamed);
-                        logger.info("Could not delete .pixi/ (locked); renamed to {}", renamed.getFileName());
-                    } catch (IOException e2) {
-                        logger.warn(
-                                "Could not delete or rename .pixi/: {}. " + "Use Setup environment to force a rebuild.",
-                                e2.getMessage());
-                    }
-                }
-            }
-            logger.info("Environment sync complete - next build will install from the bundled lock");
-        } catch (IOException e) {
-            logger.warn("Failed to sync pixi manifest/lock (will attempt build anyway): {}", e.getMessage());
-        }
-    }
-
-    private static void deleteDirectoryRecursively(Path directory) throws IOException {
-        if (!Files.exists(directory)) {
-            return;
-        }
-        java.nio.file.FileVisitor<Path> visitor = new java.nio.file.SimpleFileVisitor<>() {
-            @Override
-            public java.nio.file.FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs)
-                    throws IOException {
-                Files.delete(file);
-                return java.nio.file.FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            public java.nio.file.FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
-                if (exc != null) throw exc;
-                Files.delete(dir);
-                return java.nio.file.FileVisitResult.CONTINUE;
-            }
-        };
-        Files.walkFileTree(directory, visitor);
-    }
-
     private void registerShutdownHook() {
         if (shutdownHook != null) return;
-        shutdownHook = new Thread(
-                () -> {
-                    logger.info("JVM shutdown hook: cleaning up Fiber Analysis Python subprocess");
-                    Service svc = pythonService;
-                    if (svc != null) {
-                        try {
-                            svc.close();
-                            if (svc.isAlive()) {
-                                Thread.sleep(2000);
-                            }
-                            if (svc.isAlive()) {
-                                svc.kill();
-                            }
-                        } catch (Exception e) {
-                            try {
-                                svc.kill();
-                            } catch (Exception ignored) {
-                                // best-effort
-                            }
-                        }
-                    }
-                },
-                "FiberAnalysis-ShutdownHook");
-        shutdownHook.setDaemon(false);
-        Runtime.getRuntime().addShutdownHook(shutdownHook);
+        shutdownHook = ApposeSupport.registerShutdownHook("FiberAnalysis-ShutdownHook", () -> pythonService, logger);
     }
 
     private void removeShutdownHook() {
-        if (shutdownHook != null) {
-            try {
-                Runtime.getRuntime().removeShutdownHook(shutdownHook);
-            } catch (IllegalStateException e) {
-                // JVM already shutting down
-            }
-            shutdownHook = null;
-        }
+        ApposeSupport.removeShutdownHook(shutdownHook);
+        shutdownHook = null;
     }
 
     /**
@@ -1035,62 +727,7 @@ public class ApposeFiberService {
     }
 
     String loadScript(String scriptFileName) throws IOException {
-        return loadResource(SCRIPTS_BASE + scriptFileName);
-    }
-
-    private static String loadResource(String resourcePath) throws IOException {
-        try (InputStream is = ApposeFiberService.class.getClassLoader().getResourceAsStream(resourcePath)) {
-            if (is == null) {
-                throw new IOException("Resource not found: " + resourcePath);
-            }
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-                return reader.lines().collect(Collectors.joining("\n"));
-            }
-        }
-    }
-
-    /** Concatenate the message of a throwable and its entire cause chain.
-     *  pixi's BuildException only says "pixi build failed" at the top; the
-     *  actionable "failed to link ... os error 32" text lives in a nested
-     *  cause, so failure-signature detection must see the whole chain. */
-    private static String collectCauseMessages(Throwable t) {
-        StringBuilder sb = new StringBuilder();
-        int guard = 0;
-        for (Throwable c = t; c != null && guard < 20; c = c.getCause(), guard++) {
-            if (c.getMessage() != null) {
-                sb.append(c.getMessage()).append('\n');
-            }
-        }
-        return sb.toString();
-    }
-
-    /** True when the Pixi build failed because Windows held an exclusive lock
-     *  on a file the conda link step needed to replace (canonical signature:
-     *  "failed to link" + "os error 32" / "being used by another process").
-     *  Do NOT auto-wipe -- the blocking process may still be writing. */
-    private static boolean looksLikeWindowsFileLock(String message) {
-        if (message == null) return false;
-        return message.contains("failed to link")
-                && (message.contains("os error 32") || message.contains("being used by another process"));
-    }
-
-    /** Recovery instructions for the Windows file-lock failure mode during the
-     *  Pixi env install. Surfaced to the log; a short notification points here. */
-    private static String windowsFileLockAdvice(String envName) {
-        return "The Python environment could not finish building because another"
-                + " process is holding a file open inside the env directory.\n\n"
-                + "RECOVERY STEPS (Windows):\n"
-                + "  1. Close QuPath completely (File -> Quit).\n"
-                + "  2. Open Task Manager -- end any leftover java.exe or python.exe"
-                + " running under your user.\n"
-                + "  3. In PowerShell:\n"
-                + "       Remove-Item -Recurse -Force \"$env:USERPROFILE\\.local\\share\\appose\\"
-                + envName + "\\.pixi\"\n"
-                + "  4. (If step 3 fails: reboot Windows -- guaranteed to release every file handle.)\n"
-                + "  5. (Optional) Add an antivirus exclusion for"
-                + " %USERPROFILE%\\.local\\share\\appose\\ to prevent repeat occurrences.\n"
-                + "  6. Relaunch QuPath. The env will rebuild from the bundled lock and the"
-                + " link step will succeed.";
+        return ApposeSupport.loadResource(SCRIPTS_BASE + scriptFileName);
     }
 
     private static void report(Consumer<String> callback, String message) {
@@ -1098,10 +735,6 @@ public class ApposeFiberService {
             callback.accept(message);
         }
     }
-
-    // Suppress unused-import warning for HashSet/Set if compilers complain.
-    @SuppressWarnings("unused")
-    private static final Set<String> _RESERVED = new HashSet<>();
 
     /**
      * The configured environment directory, or null to use the Appose default.

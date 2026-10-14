@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.3.10"
+__version__ = "0.3.11"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -444,3 +444,14 @@ __version__ = "0.3.10"
 #   Requires the Java side of the same change: the density map's tiles used
 #   to drop every window that straddled a seam and, unless the tile width was
 #   a whole number of strides, slot most windows one cell off.
+
+# 0.3.11 (2026-10-14):
+#   - render.py: matplotlib.cm.get_cmap was removed in matplotlib 3.9, and the
+#     bundled lock has pinned matplotlib-base 3.11.2 since the lock was
+#     introduced, so every run that reached the straightness or GLCM heatmap
+#     failed with "module 'matplotlib.cm' has no attribute 'get_cmap'". Found
+#     by the first live run of the bundled lock in QuPath (the Python tests
+#     run on the system matplotlib, which still has it). Now uses the
+#     matplotlib.colormaps registry, present since 3.5.
+#   Written on 2026-10-13 as 0.3.9 but never committed; 0.3.10 shipped first
+#   without it, so it needs its own bump for installed copies to re-extract.

@@ -16,7 +16,7 @@ Modelled on ppm_library's render_window_alignment_overlay layout
 (surface_analysis.py:1054+) with simplified per-cell upsampling.
 """
 import numpy as np
-from matplotlib import cm
+import matplotlib
 from PIL import Image
 
 
@@ -64,7 +64,8 @@ def render_window_heatmap(per_window, window_grid, path, image_h, image_w, cmap_
     else:
         normed = np.zeros_like(arr)
 
-    cmap = cm.get_cmap(cmap_name)
+    # matplotlib.cm.get_cmap was removed in matplotlib 3.9; the registry API exists since 3.5.
+    cmap = matplotlib.colormaps.get_cmap(cmap_name)
     rgba_grid = (cmap(normed) * 255.0).astype(np.uint8)
     rgba_grid[..., 3] = np.where(valid, 180, 0).astype(np.uint8)
 
