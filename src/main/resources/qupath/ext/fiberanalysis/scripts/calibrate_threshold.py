@@ -1,7 +1,7 @@
 """
 Appose task: compute a project-wide threshold by streaming N region PNGs and
-accumulating a single 256-bin intensity histogram, then running Otsu on the
-accumulated histogram.
+accumulating a single intensity histogram (HIST_BINS bins on [0, 1]), then
+running Otsu or Triangle on the accumulated histogram.
 
 Why this exists
 ---------------
@@ -27,19 +27,22 @@ Inputs (injected by Appose as Python variables)
   sigma_min, sigma_max, sigma_step : float (used when ridge_filter != 'none')
   invert_intensity    : bool       -- True for DAB / dark-fiber-on-bright-bg
   rolling_ball_radius : int        -- background-subtract radius in px (0=off)
+  method              : str        -- 'otsu' (default) | 'triangle'
 
 Outputs
 -------
   task.outputs['result_json'] -- JSON string:
     {
       "threshold_normalised": float,  # in [0,1] -- this is what the run uses
+      "method": "otsu" | "triangle",
       "n_regions_used": int,
       "n_pixels_total": int,
-      "histogram_bins": 256,
-      "histogram_counts": [int, ...],  # length 256, JSON-friendly
+      "histogram_bins": HIST_BINS,
+      "histogram_counts": [int, ...],  # length HIST_BINS, JSON-friendly
       "error": "..."  (only when something failed)
     }
 """
+
 import json
 import logging
 import os
@@ -54,6 +57,46 @@ logger = logging.getLogger("fiber.appose.calibrate")
 
 def _opt(name, default):
     return globals().get(name, default)
+
+
+# 256 bins on [0, 1] let the threshold land only on 1/256 steps of full scale:
+# on 16-bit data sitting in the low range (one liver birefringence image spans
+# 0.03-0.17) a half-bin is ~1.4% of the data range. 4096 bins resolve 16-bit
+# data to 16 gray levels for the same pooling.
+HIST_BINS = 4096
+
+
+def triangle_on_histogram(hist, centers):
+    """Zack's triangle threshold on a pre-binned histogram.
+
+    The line from the histogram peak to the far end of the longer tail; the
+    threshold is the bin farthest below that line. Works on the pooled
+    histogram directly, which skimage's threshold_triangle cannot take.
+    """
+    h = np.asarray(hist, dtype=np.float64)
+    nz = np.flatnonzero(h)
+    if nz.size == 0:
+        raise RuntimeError("empty histogram")
+    lo, hi = int(nz[0]), int(nz[-1])
+    peak = int(np.argmax(h))
+    # Use the longer side of the peak: the tail the threshold sits in.
+    flip = (peak - lo) > (hi - peak)
+    if flip:
+        h = h[::-1]
+        lo, hi, peak = len(h) - 1 - hi, len(h) - 1 - lo, len(h) - 1 - peak
+    if hi <= peak:
+        idx = peak
+    else:
+        x = np.arange(peak, hi + 1, dtype=np.float64)
+        y = h[peak : hi + 1]
+        # Distance below the line from (peak, h[peak]) to (hi, h[hi]).
+        nx = h[peak] - h[hi]
+        ny = hi - peak
+        d = nx * (x - peak) + ny * (y - h[peak])
+        idx = peak + int(np.argmin(d))
+    if flip:
+        idx = len(h) - 1 - idx
+    return float(centers[idx])
 
 
 try:
@@ -71,9 +114,9 @@ try:
     invert = bool(_opt("invert_intensity", False))
     rb_radius = int(_opt("rolling_ball_radius", 0))
 
-    # Accumulated 256-bin histogram across all sampled regions. uint64 to
+    # Accumulated histogram across all sampled regions. uint64 to
     # tolerate >4 billion pixels (50 MP * 1000 regions easily).
-    hist = np.zeros(256, dtype=np.uint64)
+    hist = np.zeros(HIST_BINS, dtype=np.uint64)
     n_pix_total = 0
     n_used = 0
 
@@ -98,9 +141,11 @@ try:
             response = rf in seg._RIDGE_FILTERS
             if response:
                 # Match the run-path polarity choice: invert -> black ridges.
-                scalar = seg.apply_ridge_filter(scalar, rf, smin, smax, sstep, black_ridges=invert)
+                scalar = seg.apply_ridge_filter(
+                    scalar, rf, smin, smax, sstep, black_ridges=invert
+                )
                 # A vesselness response has no image units, so the only stable
-                # 256-bin range is the region's own. Matches segment_internal.
+                # histogram range is the region's own. Matches segment_internal.
                 mn = float(scalar.min())
                 mx = float(scalar.max())
                 if mx - mn < 1e-12:
@@ -115,24 +160,10 @@ try:
                 # longer stretches.
                 normed = scalar
 
-            if invert:
-                normed = 1.0 - normed
+            # The same invert + rolling-ball step segmentation applies.
+            normed = seg.flatten_background(normed, invert, rb_radius, rescale=response)
 
-            if rb_radius > 0:
-                # Rolling-ball background subtraction. skimage's white_tophat is
-                # the morphological equivalent and is faster than the literal
-                # rolling-ball implementation.
-                try:
-                    from skimage.morphology import white_tophat, disk
-                    normed = white_tophat(normed, footprint=disk(rb_radius))
-                    if response:
-                        m = float(normed.max())
-                        if m > 1e-12:
-                            normed = normed / m
-                except Exception as exc:
-                    logger.warning("Rolling-ball failed on %s: %s -- using raw scalar", p, exc)
-
-            # Histogram the normalised scalar into 256 bins matching the
+            # Histogram the normalised scalar into HIST_BINS bins on the
             # [0, 1] range. uint64 increments keep us safe for very large
             # accumulations.
             # Restrict to the annotation. The region handed over is its
@@ -154,16 +185,25 @@ try:
                         if inside.any():
                             sel = normed[inside]
                         else:
-                            logger.warning("Mask %s selects no pixels -- using the whole region", mpath)
+                            logger.warning(
+                                "Mask %s selects no pixels -- using the whole region",
+                                mpath,
+                            )
                     else:
                         logger.warning(
                             "Mask %s shape %s != region %s -- using the whole region",
-                            mpath, marr.shape, normed.shape,
+                            mpath,
+                            marr.shape,
+                            normed.shape,
                         )
                 except Exception as exc:
-                    logger.warning("Could not read mask %s: %s -- using the whole region", mpath, exc)
+                    logger.warning(
+                        "Could not read mask %s: %s -- using the whole region",
+                        mpath,
+                        exc,
+                    )
 
-            counts, _edges = np.histogram(sel, bins=256, range=(0.0, 1.0))
+            counts, _edges = np.histogram(sel, bins=HIST_BINS, range=(0.0, 1.0))
             hist += counts.astype(np.uint64)
             n_pix_total += int(sel.size)
             n_used += 1
@@ -177,23 +217,32 @@ try:
             "PNGs exist and that the source channel produces non-flat data."
         )
 
-    # Run Otsu on the accumulated histogram. skimage.filters.threshold_otsu
-    # accepts a hist=(counts, bin_centers) tuple -- avoids re-binning.
+    # Threshold the accumulated histogram directly -- no re-binning.
     from skimage.filters import threshold_otsu
 
-    bin_centers = (np.arange(256, dtype=np.float64) + 0.5) / 256.0
-    threshold_norm = float(threshold_otsu(hist=(hist.astype(np.float64), bin_centers)))
+    method = str(_opt("method", "otsu")).lower()
+    bin_centers = (np.arange(HIST_BINS, dtype=np.float64) + 0.5) / HIST_BINS
+    if method == "triangle":
+        threshold_norm = triangle_on_histogram(hist, bin_centers)
+    elif method == "otsu":
+        threshold_norm = float(
+            threshold_otsu(hist=(hist.astype(np.float64), bin_centers))
+        )
+    else:
+        raise ValueError(f"method must be 'otsu' or 'triangle', got '{method}'")
 
     result = {
         "threshold_normalised": threshold_norm,
+        "method": method,
         "n_regions_used": int(n_used),
         "n_pixels_total": int(n_pix_total),
-        "histogram_bins": 256,
+        "histogram_bins": HIST_BINS,
         "histogram_counts": [int(c) for c in hist.tolist()],
     }
     task.outputs["result_json"] = json.dumps(result)
     logger.info(
-        "Calibration done: threshold=%.4f (normalised), regions=%d, pixels=%d",
+        "Calibration done: %s threshold=%.5f (normalised), regions=%d, pixels=%d",
+        method,
         threshold_norm,
         n_used,
         n_pix_total,

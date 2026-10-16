@@ -13,10 +13,7 @@ import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import loci.common.services.ServiceFactory;
 import loci.formats.ImageReader;
 import loci.formats.meta.IMetadata;
@@ -224,32 +221,8 @@ public final class DensitySidecar {
         return parseChannelInfos(desc);
     }
 
-    /** Visible for tests: extract channel rows from the OME-XML description block. */
     static List<ChannelInfo> parseChannelInfos(String desc) {
-        // Row shape (float32, current): [<idx>] name=<name>[; unit=<unit>]
-        // Row shape (uint16 legacy):    [<idx>] name=<name>; scale=<s>; offset=<o>[; unit=<unit>]
-        // scale/offset are optional -- new sidecars default to 1.0/0.0
-        // because the on-disk values are already physical.
-        Pattern p = Pattern.compile(
-                "\\[(\\d+)]\\s*name=(.+?)(?:;\\s*scale=([\\-+0-9.eE]+);\\s*offset=([\\-+0-9.eE]+))?(?:;\\s*unit=([^\\r\\n;]+))?",
-                Pattern.MULTILINE);
-        Matcher m = p.matcher(desc);
-        List<ChannelInfo> out = new ArrayList<>();
-        while (m.find()) {
-            try {
-                int idx = Integer.parseInt(m.group(1));
-                String name = m.group(2).trim();
-                double scale = m.group(3) == null ? 1.0 : Double.parseDouble(m.group(3));
-                double offset = m.group(4) == null ? 0.0 : Double.parseDouble(m.group(4));
-                String unit = m.group(5);
-                if (unit != null) unit = unit.trim();
-                out.add(new ChannelInfo(idx, name, scale, offset, unit));
-            } catch (NumberFormatException ex) {
-                logger.warn("Skipping malformed sidecar channel row: {}", m.group(0));
-            }
-        }
-        out.sort((a, b) -> Integer.compare(a.index, b.index));
-        return out;
+        return SidecarDescription.parse(desc);
     }
 
     /**

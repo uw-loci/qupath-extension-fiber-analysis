@@ -154,7 +154,7 @@ public final class FiberDensityMapWorkflow {
             }
 
             // The one statistic that must see the whole run: a per-tile Otsu
-            // cuts every tile differently, so coverage jumps at tile seams and
+            // or Triangle cuts every tile differently, so coverage jumps at tile seams and
             // is not comparable between slides.
             DensityMapJobSpec runSpec = spec;
             if (PooledThreshold.needsPooling(spec.thresholdMethod)) {
@@ -162,7 +162,8 @@ public final class FiberDensityMapWorkflow {
                 try {
                     Path poolDir = Files.createTempDirectory("fiber-density-pool-");
                     try {
-                        PooledThreshold.Result pooled = PooledThreshold.otsu(entries, spec, poolDir, progress::setSub);
+                        PooledThreshold.Result pooled =
+                                PooledThreshold.pool(entries, spec.settings(), poolDir, progress::setSub);
                         runSpec = spec.withPooledThreshold(pooled.thresholdNorm(), PooledThreshold.describe(pooled));
                     } finally {
                         deleteTree(poolDir);
@@ -176,8 +177,6 @@ public final class FiberDensityMapWorkflow {
                                     + " (thresholding each tile separately would leave seams): " + msg));
                     return;
                 }
-            } else if ("triangle".equalsIgnoreCase(spec.thresholdMethod)) {
-                logger.warn("Triangle threshold is computed per tile; expect seams. Otsu is pooled over the run.");
             }
 
             int total = entries.size();
@@ -841,6 +840,52 @@ public final class FiberDensityMapWorkflow {
             this.objectDensityClasses = o.objectDensityClasses;
             this.includePixelPositivity = o.includePixelPositivity;
             this.pixelPositivitySpecs = o.pixelPositivitySpecs;
+        }
+
+        /** @return these settings as the pooled-threshold step reads them */
+        public PooledThreshold.Settings settings() {
+            DensityMapJobSpec o = this;
+            return new PooledThreshold.Settings() {
+                @Override
+                public String thresholdMethod() {
+                    return o.thresholdMethod;
+                }
+
+                @Override
+                public String segChannel() {
+                    return o.segChannel;
+                }
+
+                @Override
+                public String ridgeFilter() {
+                    return o.ridgeFilter;
+                }
+
+                @Override
+                public double sigmaMinUm() {
+                    return o.sigmaMinUm;
+                }
+
+                @Override
+                public double sigmaMaxUm() {
+                    return o.sigmaMaxUm;
+                }
+
+                @Override
+                public double sigmaStepUm() {
+                    return o.sigmaStepUm;
+                }
+
+                @Override
+                public boolean invertIntensity() {
+                    return o.invertIntensity;
+                }
+
+                @Override
+                public double rollingBallRadiusUm() {
+                    return o.rollingBallRadiusUm;
+                }
+            };
         }
 
         /** Ordered echo of every spec field (for params.json / params.txt). */

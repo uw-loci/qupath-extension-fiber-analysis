@@ -235,13 +235,18 @@ public final class FiberWindowApplyDialog {
         if (model == null) return;
         modelInfoLabel.setText(String.format(
                 Locale.ROOT,
-                "%s, trained %s, %d feature(s). Classes: %s",
+                "%s, trained %s, %d feature(s). Classes: %s. Segmentation: %s",
                 model.directory(),
                 model.createdUtc(),
                 model.featureNames().size(),
-                String.join(", ", model.classNames())));
+                String.join(", ", model.classNames()),
+                model.geometry().get("segmentation") instanceof Map<?, ?>
+                        ? "as trained (" + model.geometry().getOrDefault("threshold_source", "stored in the model")
+                                + ")"
+                        : "current preferences (this model predates stored segmentation)"));
 
-        var problems = WindowClassifierModelManager.checkCompatibility(model, model.featureNames(), currentGeometry());
+        var problems =
+                WindowClassifierModelManager.checkCompatibility(model, model.featureNames(), currentGeometry(model));
         // Feature names are not known until the extraction runs, so the
         // pre-check compares the geometry only -- it is here to catch the
         // mismatch while the user can still change it, not to replace the
@@ -293,7 +298,26 @@ public final class FiberWindowApplyDialog {
         return cal != null && cal.hasPixelSizeMicrons() ? cal.getAveragedPixelSizeMicrons() : 1.0;
     }
 
-    private Map<String, Object> currentGeometry() {
+    /**
+     * The segmentation a model was trained with, when it stored one; older
+     * models fall back to the current preferences and the hash check.
+     */
+    static SegmentationSpec segmentationFor(WindowClassifierModelManager.ModelInfo model) {
+        Object stored = model.geometry().get("segmentation");
+        if (stored instanceof Map<?, ?> m) {
+            try {
+                return SegmentationSpec.fromMap(m);
+            } catch (IllegalArgumentException ex) {
+                logger.warn(
+                        "Model {} has an unreadable segmentation block ({}); using preferences",
+                        model.id(),
+                        ex.getMessage());
+            }
+        }
+        return SegmentationSpec.fromPreferences();
+    }
+
+    private Map<String, Object> currentGeometry(WindowClassifierModelManager.ModelInfo model) {
         double pxUm = pixelSizeUm();
         double windowUm = FiberAnalysisPreferences.windowSizeUmProperty().get();
         int overlap = FiberAnalysisPreferences.windowOverlapPercentProperty().get();
@@ -305,7 +329,7 @@ public final class FiberWindowApplyDialog {
         geometry.put("window_px", windowPx);
         geometry.put("stride_px", stridePx);
         geometry.put("core_px", stridePx);
-        geometry.put("segmentation_hash", SegmentationSpec.fromPreferences().hash());
+        geometry.put("segmentation_hash", segmentationFor(model).hash());
         return geometry;
     }
 
@@ -338,7 +362,7 @@ public final class FiberWindowApplyDialog {
         try {
             ImageData<BufferedImage> data = gui.getImageData();
             RegionRequest region = scopeRegion();
-            var seg = SegmentationSpec.fromPreferences();
+            var seg = segmentationFor(model);
             var request = new WindowClassifierWorkflow.Request(
                     WindowFeatureMatrix.Spec.defaults(
                             seg,
@@ -362,7 +386,7 @@ public final class FiberWindowApplyDialog {
 
             progress.status("Scoring...");
             var result = WindowClassifierWorkflow.apply(
-                    features, model.directory(), currentGeometry(), overrideCheck.isSelected(), request.workDir());
+                    features, model.directory(), currentGeometry(model), overrideCheck.isSelected(), request.workDir());
             for (String w : result.warnings()) log.append("WARNING: ").append(w).append('\n');
 
             String runId = UUID.randomUUID().toString();

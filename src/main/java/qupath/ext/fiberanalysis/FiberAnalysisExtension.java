@@ -24,6 +24,7 @@ import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
+import qupath.ext.fiberanalysis.analysis.DensityOverlayDialog;
 import qupath.ext.fiberanalysis.analysis.DensitySamplingCommand;
 import qupath.ext.fiberanalysis.analysis.DensitySidecar;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisBatchDialog;
@@ -334,6 +335,12 @@ public class FiberAnalysisExtension implements QuPathExtension {
             }
         });
 
+        // Show a map as a coloured overlay instead of attaching channels: the
+        // image server is untouched, so an RGB image keeps its native look.
+        MenuItem overlayItem = new MenuItem("Show density map as overlay...");
+        overlayItem.disableProperty().bind(qupath.imageDataProperty().isNull());
+        overlayItem.setOnAction(e -> new DensityOverlayDialog(qupath).show());
+
         // Opt-out for the cross-session auto-reattach hook. Deletes the
         // <sidecar>.attach marker so future image-opens get the original
         // server. The sidecar itself stays on disk for the sampling command
@@ -418,6 +425,7 @@ public class FiberAnalysisExtension implements QuPathExtension {
                         batchItem,
                         densityMapItem,
                         sampleDensityItem,
+                        overlayItem,
                         attachDensityItem,
                         stopAutoReattachItem,
                         new SeparatorMenuItem(),

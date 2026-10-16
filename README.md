@@ -353,6 +353,7 @@ yourself.
 |---|---|
 | `Project density map...` | Open the picker, pick images + mode, Run. Writes the sidecar OME-TIFFs (+ marker if opted in); auto-attaches to the currently-open image when Channels mode was picked. |
 | `Sample fiber density into measurements` | For the open image, locates its sidecar, samples per-channel mean of valid pixels within each target object's ROI, writes the per-channel real-units mean as a measurement named `Density: <channel>`. Targets selected objects when any are selected, otherwise all annotations. |
+| `Show density map as overlay...` | Draw one channel of the open image's density or classifier map over it in colour, on QuPath's pixel-classification layer. The image itself is not changed, so RGB images keep their look; opacity and visibility follow QuPath's pixel-classification controls. |
 | `Attach density channels` | Manually attach the sidecar for the currently-open image (one-off, session-only). Warns first on RGB sources. Use after switching to an image whose sidecar already exists. |
 | `Stop auto-reattaching density channels` | Delete the `.attach` marker for the currently-open image. Sidecar stays on disk. |
 

@@ -26,19 +26,23 @@ import javafx.scene.control.Spinner;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javax.imageio.ImageIO;
+import qupath.ext.fiberanalysis.analysis.DensityOverlayDialog;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow;
 import qupath.ext.fiberanalysis.analysis.PixelPositivitySpec;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.gui.viewer.overlays.BufferedImageOverlay;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServers;
 import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.classes.PathClass;
 import qupath.lib.regions.ImagePlane;
+import qupath.lib.regions.ImageRegion;
 import qupath.lib.roi.ROIs;
 import qupath.lib.projects.Project;
+import qupath.lib.projects.ProjectIO;
 import qupath.lib.projects.ProjectImageEntry;
 import qupath.lib.projects.Projects;
 import qupath.lib.regions.RegionRequest;
@@ -87,6 +91,22 @@ public final class DensityMapTilingScenario {
             return null;
         });
 
+        if (System.getenv("OVERLAY_ONLY") != null) {
+            // Re-check only the overlay against the maps a previous run left.
+            Project<BufferedImage> existing = ProjectIO.loadProject(
+                    projectDir.resolve("project.qpproj").toFile(), BufferedImage.class);
+            onFx(() -> {
+                qupath.setProject(existing);
+                return null;
+            });
+            note("OVERLAY_ONLY: reusing " + projectDir);
+            try {
+                overlayScenario(qupath, existing.getImageList().get(0), outDir);
+            } catch (Exception e) {
+                check(false, "the overlay scenario ran without an exception (" + e + ")");
+            }
+            finish();
+        }
         Files.createDirectories(projectDir);
         Project<BufferedImage> project = Projects.createProject(projectDir.toFile(), BufferedImage.class);
         ImageServer<BufferedImage> src = ImageServers.buildServer(image.toUri().toString());
@@ -113,13 +133,13 @@ public final class DensityMapTilingScenario {
 
         dialogScenario(qupath, outDir);
 
-        Path window = run(project, entry, "window", 0.0);
+        Path window = run(project, entry, "window", 0.0, "Otsu");
         if (!Files.isRegularFile(window)) finish();
-        Path win = Files.move(window, outDir.resolve("window_density.ome.tif"),
+        Path win = Files.copy(window, outDir.resolve("window_density.ome.tif"),
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        Path pixel = run(project, entry, "pixel", 0.0);
+        Path pixel = run(project, entry, "pixel", 0.0, "Triangle");
         if (!Files.isRegularFile(pixel)) finish();
-        Path pix = Files.move(pixel, outDir.resolve("pixel_density.ome.tif"),
+        Path pix = Files.copy(pixel, outDir.resolve("pixel_density.ome.tif"),
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 
         int windowPx = (int) Math.round(WINDOW_UM / px);
@@ -239,7 +259,124 @@ public final class DensityMapTilingScenario {
             check(errCentre < errOld, "the window map sits over the tissue that produced it");
         }
 
+        try {
+            overlayScenario(qupath, entry, outDir);
+        } catch (Exception e) {
+            check(false, "the overlay scenario ran without an exception (" + e + ")");
+        }
         finish();
+    }
+
+    /** The density map as a pixel-layer overlay, driven through its dialog. */
+    private static void overlayScenario(QuPathGUI qupath, ProjectImageEntry<BufferedImage> entry, Path outDir)
+            throws Exception {
+        onFx(() -> {
+            qupath.openImageEntry(entry);
+            return null;
+        });
+        for (int i = 0; i < 100 && onFx(qupath::getImageData) == null; i++) Thread.sleep(100);
+        var data = onFx(qupath::getImageData);
+        check(data != null, "the image is open in the hidden viewer");
+        if (data == null) return;
+        int channelsBefore = data.getServer().nChannels();
+
+        onFx(() -> {
+            new DensityOverlayDialog(qupath).show();
+            return null;
+        });
+        Thread.sleep(1500);
+        Stage stage = onFx(() -> {
+            for (Window win : Window.getWindows()) {
+                if (win instanceof Stage s && "Fiber Analysis -- Density overlay".equals(s.getTitle())) return s;
+            }
+            return null;
+        });
+        check(stage != null, "the overlay dialog opens");
+        if (stage == null) return;
+        @SuppressWarnings("unchecked")
+        var combos = onFx(() -> new ArrayList<>(stage.getScene().getRoot().lookupAll(".combo-box")));
+        @SuppressWarnings("unchecked")
+        var mapCombo = (javafx.scene.control.ComboBox<Path>) combos.get(0);
+        @SuppressWarnings("unchecked")
+        var channelCombo = (javafx.scene.control.ComboBox<String>) combos.get(1);
+        check(onFx(() -> mapCombo.getItems().size()) >= 1, "the dialog finds this image's density map");
+        onFx(() -> {
+            channelCombo.getSelectionModel().select("Signal density (no threshold)");
+            return null;
+        });
+        // Wait for the background read to fill the range fields.
+        var fields = onFx(() -> new ArrayList<>(stage.getScene().getRoot().lookupAll(".text-field")));
+        var minField = (javafx.scene.control.TextField) fields.get(0);
+        long t0 = System.nanoTime();
+        for (int i = 0; i < 1200 && onFx(() -> minField.getText().isBlank()); i++) Thread.sleep(100);
+        boolean read = !onFx(minField::getText).isBlank();
+        check(read, String.format("the channel is read and an automatic range is filled in (%.1f s)",
+                (System.nanoTime() - t0) / 1e9));
+        if (!read) {
+            note("selected channel: " + onFx(() -> channelCombo.getSelectionModel().getSelectedIndex() + " "
+                    + channelCombo.getValue() + " of " + channelCombo.getItems()));
+            for (var n : onFx(() -> new ArrayList<>(stage.getScene().getRoot().lookupAll(".label")))) {
+                String t = onFx(() -> ((javafx.scene.control.Label) n).getText());
+                if (t != null && !t.isBlank()) note("label: " + t);
+            }
+            for (var f : fields) note("field: '" + onFx(((javafx.scene.control.TextField) f)::getText) + "'");
+            return;
+        }
+        onFx(() -> {
+            for (Node n : stage.getScene().getRoot().lookupAll(".button")) {
+                if (n instanceof javafx.scene.control.Button b && "Show".equals(b.getText())) b.fire();
+            }
+            return null;
+        });
+        var viewer = onFx(qupath::getViewer);
+        var overlay = onFx(viewer::getCustomPixelLayerOverlay);
+        check(overlay instanceof BufferedImageOverlay,
+                "the map is on the viewer's pixel layer");
+        if (overlay == null) return;
+        check(onFx(() -> qupath.getImageData().getServer().nChannels()) == channelsBefore,
+                "the image server is unchanged (" + channelsBefore + " channel(s))");
+
+        // Composite for a human to look at: the image thumbnail with the
+        // overlay painted over it by its own paint method.
+        var server = data.getServer();
+        double ds = Math.max(server.getWidth(), server.getHeight()) / 1600.0;
+        BufferedImage base = server.readRegion(RegionRequest.createInstance(
+                server.getPath(), ds, 0, 0, server.getWidth(), server.getHeight()));
+        int bw = base.getWidth(), bh = base.getHeight();
+        BufferedImage comp = new BufferedImage(bw, bh, BufferedImage.TYPE_INT_RGB);
+        var raster = base.getRaster();
+        double[] range = {Double.MAX_VALUE, -Double.MAX_VALUE};
+        for (int y = 0; y < bh; y += 4)
+            for (int x = 0; x < bw; x += 4) {
+                double v = raster.getSampleDouble(x, y, 0);
+                range[0] = Math.min(range[0], v);
+                range[1] = Math.max(range[1], v);
+            }
+        for (int y = 0; y < bh; y++)
+            for (int x = 0; x < bw; x++) {
+                int g = (int) Math.max(0, Math.min(255,
+                        255 * (raster.getSampleDouble(x, y, 0) - range[0]) / (0.3 * (range[1] - range[0]) + 1e-9)));
+                comp.setRGB(x, y, (g << 16) | (g << 8) | g);
+            }
+        var g2 = comp.createGraphics();
+        g2.scale(1 / ds, 1 / ds);
+        g2.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.6f));
+        var region = ImageRegion.createInstance(0, 0, server.getWidth(), server.getHeight(), 0, 0);
+        onFx(() -> {
+            overlay.paintOverlay(g2, region, ds, data, true);
+            return null;
+        });
+        g2.dispose();
+        ImageIO.write(comp, "png", outDir.resolve("overlay_composite.png").toFile());
+        note("overlay composite: " + outDir.resolve("overlay_composite.png"));
+
+        onFx(() -> {
+            for (Node n : stage.getScene().getRoot().lookupAll(".button")) {
+                if (n instanceof javafx.scene.control.Button b && "Hide".equals(b.getText())) b.fire();
+            }
+            return null;
+        });
+        check(onFx(viewer::getCustomPixelLayerOverlay) == null, "Hide removes it");
     }
 
     private static void finish() {
@@ -255,9 +392,9 @@ public final class DensityMapTilingScenario {
     }
 
     private static Path run(Project<BufferedImage> project, ProjectImageEntry<BufferedImage> entry, String mode,
-            double stepUm) throws Exception {
+            double stepUm, String threshold) throws Exception {
         var spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
-                WINDOW_UM, OVERLAP, "Raw intensity", "Otsu", 2000, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0, null,
+                WINDOW_UM, OVERLAP, "Raw intensity", threshold, 2000, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0, null,
                 false, false, mode, stepUm, true, List.of(CLASS), true,
                 List.of(new PixelPositivitySpec(0, "Channel 1", PixelPositivitySpec.OP_GT, POS_THRESHOLD)));
         long t0 = System.nanoTime();
@@ -273,7 +410,10 @@ public final class DensityMapTilingScenario {
         Path params = out.getParent().resolve(base + "_params.json");
         String json = Files.isRegularFile(params) ? Files.readString(params) : "";
         check(json.contains("\"thresholdSource\"") && json.contains("project_otsu"),
-                mode + " mode: one pooled Otsu threshold for every tile, recorded in the provenance");
+                mode + " mode: one pooled " + threshold + " threshold for every tile, recorded in the provenance");
+        if (json.contains("\"thresholdSource\"")) {
+            check(json.contains(threshold + " pooled"), mode + " mode: the provenance names the method (" + threshold + ")");
+        }
         note(String.format("%s mode took %.1f s", mode, (System.nanoTime() - t0) / 1e9));
         return out;
     }

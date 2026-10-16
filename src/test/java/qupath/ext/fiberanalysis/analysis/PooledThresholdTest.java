@@ -46,9 +46,10 @@ class PooledThresholdTest {
     }
 
     @Test
-    void onlyAPerRegionOtsuIsPooled() {
+    void perRegionMethodsArePooledAndFixedOnesAreNot() {
         assertThat(PooledThreshold.needsPooling("Otsu")).isTrue();
         assertThat(PooledThreshold.needsPooling("otsu")).isTrue();
+        assertThat(PooledThreshold.needsPooling("Triangle")).isTrue();
         assertThat(PooledThreshold.needsPooling("manual")).isFalse();
         assertThat(PooledThreshold.needsPooling("project_otsu")).isFalse();
         assertThat(PooledThreshold.needsPooling(null)).isFalse();

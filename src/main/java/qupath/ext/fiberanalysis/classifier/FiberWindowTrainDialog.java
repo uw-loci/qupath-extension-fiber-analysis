@@ -41,6 +41,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.analysis.AnnotationClassFilter;
 import qupath.ext.fiberanalysis.analysis.HeadlessFx;
+import qupath.ext.fiberanalysis.analysis.PooledThreshold;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.ext.fiberanalysis.ui.SectionBuilder;
 import qupath.fx.dialogs.Dialogs;
@@ -226,11 +227,12 @@ public final class FiberWindowTrainDialog {
                 seg.thresholdDescription(),
                 seg.segChannel()));
         thresholdWarning.setText(
-                seg.hasGlobalThreshold()
+                seg.hasGlobalThreshold() || PooledThreshold.needsPooling(seg.thresholdMethod())
                         ? ""
                         : "This threshold is recomputed from each tile's own histogram, so neighbouring"
                                 + " tiles over the same tissue can segment it differently and the model can"
-                                + " learn the seams. Use a manual threshold or a project calibration.");
+                                + " learn the seams. Use Otsu, Triangle, a manual threshold or a project"
+                                + " calibration.");
     }
 
     private void refreshClasses() {
@@ -377,7 +379,20 @@ public final class FiberWindowTrainDialog {
             Path modelDir,
             ClassifierProgress progress) {
         try {
-            var request = buildRequest();
+            // One threshold for the whole training set, stored in the model so
+            // Apply cuts every slide at the same value. Thresholding each tile
+            // on its own histogram would let the model learn the seams.
+            SegmentationSpec seg = SegmentationSpec.fromPreferences();
+            String thresholdSource = null;
+            if (PooledThreshold.needsPooling(seg.thresholdMethod())) {
+                progress.status("Pooling one threshold over the training images...");
+                Path poolDir = WindowClassifierWorkflow.createWorkDir();
+                var pooled = PooledThreshold.pool(
+                        images.stream().map(r -> r.entry).toList(), seg, poolDir, progress::status);
+                seg = seg.withPooledThreshold(pooled.thresholdNorm());
+                thresholdSource = PooledThreshold.describe(pooled);
+            }
+            var request = buildRequest(seg);
             List<WindowClassifierWorkflow.TrainingContribution> contributions = new ArrayList<>();
             int group = 0;
             for (ImageRow row : images) {
@@ -403,7 +418,7 @@ public final class FiberWindowTrainDialog {
             }
 
             progress.status("Validating and fitting (the permutation null is the slow part)...");
-            Map<String, Object> geometry = buildGeometry(images.get(0).pixelSizeUm());
+            Map<String, Object> geometry = buildGeometry(images.get(0).pixelSizeUm(), seg, thresholdSource);
             Map<String, Object> options = new LinkedHashMap<>();
             options.put("model_kind", modelKindCombo.getValue());
             options.put("n_perm", permSpinner.getValue());
@@ -436,8 +451,7 @@ public final class FiberWindowTrainDialog {
         }
     }
 
-    private WindowClassifierWorkflow.Request buildRequest() throws java.io.IOException {
-        var seg = SegmentationSpec.fromPreferences();
+    private WindowClassifierWorkflow.Request buildRequest(SegmentationSpec seg) throws java.io.IOException {
         var featureSpec = WindowFeatureMatrix.Spec.defaults(
                 seg,
                 FiberAnalysisPreferences.windowSizeUmProperty().get(),
@@ -449,7 +463,7 @@ public final class FiberWindowTrainDialog {
                 WindowClassifierWorkflow.createWorkDir());
     }
 
-    private Map<String, Object> buildGeometry(double pixelSizeUm) {
+    private Map<String, Object> buildGeometry(double pixelSizeUm, SegmentationSpec seg, String thresholdSource) {
         double windowUm = FiberAnalysisPreferences.windowSizeUmProperty().get();
         int overlap = FiberAnalysisPreferences.windowOverlapPercentProperty().get();
         int windowPx = Math.max(2, (int) Math.round(windowUm / pixelSizeUm));
@@ -461,7 +475,11 @@ public final class FiberWindowTrainDialog {
         geometry.put("stride_px", stridePx);
         geometry.put("core_px", stridePx);
         geometry.put("context_radii", radiiField.getText());
-        geometry.put("segmentation_hash", SegmentationSpec.fromPreferences().hash());
+        geometry.put("segmentation_hash", seg.hash());
+        // The settings themselves, so Apply segments new slides exactly as
+        // the training slides were, pooled threshold included.
+        geometry.put("segmentation", seg.toMap());
+        if (thresholdSource != null) geometry.put("threshold_source", thresholdSource);
         return geometry;
     }
 

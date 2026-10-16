@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisWorkflow;
+import qupath.ext.fiberanalysis.analysis.PooledThreshold;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 
 /**
@@ -54,7 +55,8 @@ public record SegmentationSpec(
         double sigmaStepUm,
         double minFiberAreaUm2,
         boolean invertIntensity,
-        double rollingBallRadiusUm) {
+        double rollingBallRadiusUm)
+        implements PooledThreshold.Settings {
 
     /**
      * Read the segmentation settings the user last ran with.
@@ -107,7 +109,10 @@ public record SegmentationSpec(
         if ("manual".equalsIgnoreCase(thresholdMethod)) {
             return "manual (" + manualThreshold + ")";
         }
-        return thresholdMethod + ", recomputed per tile";
+        if (PooledThreshold.needsPooling(thresholdMethod)) {
+            return thresholdMethod + ", pooled once over the training images";
+        }
+        return thresholdMethod;
     }
 
     /**
@@ -117,6 +122,77 @@ public record SegmentationSpec(
     public boolean hasGlobalThreshold() {
         String m = thresholdMethod == null ? "" : thresholdMethod.toLowerCase(Locale.ROOT);
         return "manual".equals(m) || projectThresholdNorm != null;
+    }
+
+    /**
+     * @param thresholdNorm a run-wide cut on [0, 1]
+     * @return these settings with every tile cutting at that value
+     */
+    public SegmentationSpec withPooledThreshold(double thresholdNorm) {
+        return new SegmentationSpec(
+                segChannel,
+                "project_otsu",
+                manualThreshold,
+                thresholdNorm,
+                ridgeFilter,
+                sigmaMinUm,
+                sigmaMaxUm,
+                sigmaStepUm,
+                minFiberAreaUm2,
+                invertIntensity,
+                rollingBallRadiusUm);
+    }
+
+    /** @return every setting by name, for the model's metadata */
+    public Map<String, Object> toMap() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("seg_channel", segChannel);
+        m.put("threshold_method", thresholdMethod);
+        m.put("manual_threshold", manualThreshold);
+        m.put("project_threshold_norm", projectThresholdNorm);
+        m.put("ridge_filter", ridgeFilter);
+        m.put("sigma_min_um", sigmaMinUm);
+        m.put("sigma_max_um", sigmaMaxUm);
+        m.put("sigma_step_um", sigmaStepUm);
+        m.put("min_fiber_area_um2", minFiberAreaUm2);
+        m.put("invert_intensity", invertIntensity);
+        m.put("rolling_ball_radius_um", rollingBallRadiusUm);
+        return m;
+    }
+
+    /**
+     * @param m a map written by {@link #toMap()}, as read back from JSON
+     * @return the settings
+     * @throws IllegalArgumentException if a setting is missing
+     */
+    public static SegmentationSpec fromMap(Map<?, ?> m) {
+        Object norm = m.get("project_threshold_norm");
+        return new SegmentationSpec(
+                str(m, "seg_channel"),
+                str(m, "threshold_method"),
+                (int) num(m, "manual_threshold"),
+                norm instanceof Number n ? n.doubleValue() : null,
+                str(m, "ridge_filter"),
+                num(m, "sigma_min_um"),
+                num(m, "sigma_max_um"),
+                num(m, "sigma_step_um"),
+                num(m, "min_fiber_area_um2"),
+                Boolean.parseBoolean(String.valueOf(m.get("invert_intensity"))),
+                num(m, "rolling_ball_radius_um"));
+    }
+
+    private static String str(Map<?, ?> m, String k) {
+        Object v = m.get(k);
+        if (v == null) throw new IllegalArgumentException("stored segmentation is missing '" + k + "'");
+        return String.valueOf(v);
+    }
+
+    private static double num(Map<?, ?> m, String k) {
+        Object v = m.get(k);
+        if (!(v instanceof Number n)) {
+            throw new IllegalArgumentException("stored segmentation is missing '" + k + "'");
+        }
+        return n.doubleValue();
     }
 
     /**

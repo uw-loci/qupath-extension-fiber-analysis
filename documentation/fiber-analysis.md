@@ -176,6 +176,17 @@ NaN. Channel names match the QuPath measurement-table column names:
 `Branch points`, `Mean angle (deg)`, `Order parameter`,
 `Signal density (no threshold)`, `Intensity coherence (no threshold)`.
 
+### Showing a map as an overlay
+
+`Extensions > Fiber Analysis > Show density map as overlay...` draws one channel
+of a density map (or of a window-classifier probability map) over the open
+image in colour, without attaching anything to the image. Pick the map, the
+channel, one of QuPath's colour maps and a value range (**Auto** uses the 1st to
+99th percentile). No-data areas are transparent. The overlay sits on QuPath's
+pixel-classification layer, so the opacity slider and **Show pixel
+classification** (`C`) control it, and showing it replaces a pixel classifier
+overlay. Unlike **Attach as channels**, an RGB image keeps its normal look.
+
 ### Per-window or per-pixel
 
 - **Per-window** gives one value per window of the grid, so the map shows
@@ -222,17 +233,23 @@ No code was taken from it.
 
 ### One threshold for the whole run
 
-With **Otsu** selected, the density map does not let each tile pick its own
-threshold: a nearly empty tile would cut into background noise while its
-neighbour clipped faint fibers, so coverage would jump at tile edges and could
-not be compared between slides. Instead it samples a 4 x 4 grid of tiles (up to
-1024 px each) spread over every selected image, runs Otsu once on the pooled
-histogram, and every tile of every image uses that value. With one image
-selected that is a slide-level threshold; with several it is shared across
-them. The value and how it was obtained are written to `_density_params.json`
+With **Otsu** or **Triangle** selected, the density map does not let each tile
+pick its own threshold: a nearly empty tile would cut into background noise
+while its neighbour clipped faint fibers, so coverage would jump at tile edges
+and could not be compared between slides. Instead it samples a 4 x 4 grid of
+tiles (up to 1024 px each) spread over every selected image, runs the chosen
+method once on the pooled histogram (4096 bins on the channel's full scale),
+and every tile of every image uses that value. With one image selected that is
+a slide-level threshold; with several it is shared across them. The value and
+how it was obtained are written to `_density_params.json`
 (`projectThresholdNorm`, `thresholdSource`), and the re-run script replays that
-value rather than sampling again. **Triangle** is still computed per tile and
-logs a warning; **Manual** and **Project Otsu** are already one value.
+value rather than sampling again. **Manual** and **Project Otsu** are already
+one value.
+
+The window classifier does the same at training time, pooled over the training
+images, and stores the whole segmentation (threshold included) in the model.
+Applying the model segments new slides with those stored settings, not with
+whatever the preferences say at the time; the Apply dialog shows which.
 
 ### Tiling
 

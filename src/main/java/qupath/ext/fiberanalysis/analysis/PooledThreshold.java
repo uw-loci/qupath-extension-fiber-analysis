@@ -30,7 +30,7 @@ import qupath.lib.projects.ProjectImageEntry;
 import qupath.lib.regions.RegionRequest;
 
 /**
- * One Otsu threshold for a whole density-map run, from a grid of sample tiles
+ * One threshold (Otsu or Triangle) for a whole run, from a grid of sample tiles
  * spread over every selected image -- slide-level for one image,
  * project-level for several.
  *
@@ -41,7 +41,7 @@ import qupath.lib.regions.RegionRequest;
  * statistic that has to see the whole run, and it is gathered by sampling,
  * never by loading a slide.
  */
-final class PooledThreshold {
+public final class PooledThreshold {
 
     private static final Logger logger = LoggerFactory.getLogger(PooledThreshold.class);
 
@@ -55,11 +55,12 @@ final class PooledThreshold {
 
     /**
      * @param thresholdNorm the cut on [0, 1] every tile uses
+     * @param method        "otsu" or "triangle"
      * @param images        images sampled
      * @param regions       sample tiles used
      * @param pixels        pixels in the pooled histogram
      */
-    record Result(double thresholdNorm, int images, int regions, long pixels) {}
+    public record Result(double thresholdNorm, String method, int images, int regions, long pixels) {}
 
     /**
      * Sample boxes for one image: one per grid cell, centred in it.
@@ -88,17 +89,14 @@ final class PooledThreshold {
 
     /**
      * @param entries  images in the run
-     * @param spec     the run's settings (channel, ridge filter, inversion, rolling ball)
+     * @param spec     the segmentation settings to pool under
      * @param workDir  scratch directory for the sample PNGs
      * @param progress status sink; may be null
      * @return the pooled threshold
      * @throws IOException if no image could be sampled or the task failed
      */
-    static Result otsu(
-            List<ProjectImageEntry<BufferedImage>> entries,
-            FiberDensityMapWorkflow.DensityMapJobSpec spec,
-            Path workDir,
-            Consumer<String> progress)
+    public static Result pool(
+            List<ProjectImageEntry<BufferedImage>> entries, Settings spec, Path workDir, Consumer<String> progress)
             throws IOException {
         Files.createDirectories(workDir);
         List<String> pngs = new ArrayList<>();
@@ -115,7 +113,7 @@ final class PooledThreshold {
                 for (int[] b : sampleBoxes(server.getWidth(), server.getHeight(), GRID, SAMPLE_PX)) {
                     Path png = workDir.resolve(String.format("pool_%03d_%02d.png", images, k++));
                     RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, b[0], b[1], b[2], b[3]);
-                    SourceChannel.writeRegionPng(server, req, spec.segChannel, png);
+                    SourceChannel.writeRegionPng(server, req, spec.segChannel(), png);
                     pngs.add(png.toString());
                 }
                 images++;
@@ -132,13 +130,14 @@ final class PooledThreshold {
         Map<String, Object> in = new HashMap<>();
         in.put("region_paths", pngs);
         in.put("mask_paths", new ArrayList<String>());
-        in.put("seg_channel", spec.segChannel);
-        in.put("ridge_filter", spec.ridgeFilter.toLowerCase(java.util.Locale.ROOT));
-        in.put("sigma_min", spec.sigmaMinUm / pxUm);
-        in.put("sigma_max", spec.sigmaMaxUm / pxUm);
-        in.put("sigma_step", spec.sigmaStepUm / pxUm);
-        in.put("invert_intensity", spec.invertIntensity);
-        in.put("rolling_ball_radius", (int) Math.max(0, Math.round(spec.rollingBallRadiusUm / pxUm)));
+        in.put("seg_channel", spec.segChannel());
+        in.put("ridge_filter", spec.ridgeFilter().toLowerCase(java.util.Locale.ROOT));
+        in.put("sigma_min", spec.sigmaMinUm() / pxUm);
+        in.put("sigma_max", spec.sigmaMaxUm() / pxUm);
+        in.put("sigma_step", spec.sigmaStepUm() / pxUm);
+        in.put("invert_intensity", spec.invertIntensity());
+        in.put("rolling_ball_radius", (int) Math.max(0, Math.round(spec.rollingBallRadiusUm() / pxUm)));
+        in.put("method", method(spec.thresholdMethod()));
         Task task;
         try {
             task = ApposeFiberService.getInstance().runTask("calibrate_threshold", in);
@@ -152,11 +151,13 @@ final class PooledThreshold {
             throw new IOException("calibrate_threshold: " + r.get("error").getAsString());
         Result res = new Result(
                 r.get("threshold_normalised").getAsDouble(),
+                method(spec.thresholdMethod()),
                 images,
                 r.get("n_regions_used").getAsInt(),
                 r.get("n_pixels_total").getAsLong());
         logger.info(
-                "Run-wide Otsu threshold {} from {} sample tile(s) over {} image(s), {} px",
+                "Run-wide {} threshold {} from {} sample tile(s) over {} image(s), {} px",
+                res.method(),
                 String.format(java.util.Locale.ROOT, "%.5f", res.thresholdNorm()),
                 res.regions(),
                 res.images(),
@@ -164,15 +165,47 @@ final class PooledThreshold {
         return res;
     }
 
-    /** @return true when the method is resolved per region and must be pooled instead */
-    static boolean needsPooling(String thresholdMethod) {
-        return thresholdMethod != null && "otsu".equals(thresholdMethod.trim().toLowerCase(java.util.Locale.ROOT));
+    /**
+     * The segmentation settings the pooling needs. The density map and the
+     * window classifier each carry their own settings type; both adapt to this.
+     */
+    public interface Settings {
+        String thresholdMethod();
+
+        String segChannel();
+
+        String ridgeFilter();
+
+        double sigmaMinUm();
+
+        double sigmaMaxUm();
+
+        double sigmaStepUm();
+
+        boolean invertIntensity();
+
+        double rollingBallRadiusUm();
     }
 
-    static String describe(Result r) {
+    /** @return true when the method is resolved per region and must be pooled instead */
+    public static boolean needsPooling(String thresholdMethod) {
+        String m = thresholdMethod == null ? "" : thresholdMethod.trim().toLowerCase(java.util.Locale.ROOT);
+        return "otsu".equals(m) || "triangle".equals(m);
+    }
+
+    private static String method(String thresholdMethod) {
+        return thresholdMethod.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /**
+     * @param r a pooled result
+     * @return how it was obtained, for provenance records
+     */
+    public static String describe(Result r) {
         return String.format(
                 java.util.Locale.ROOT,
-                "Otsu pooled over %d image(s), %d sample tile(s) of up to %d px (%d px)",
+                "%s pooled over %d image(s), %d sample tile(s) of up to %d px (%d px)",
+                "triangle".equals(r.method()) ? "Triangle" : "Otsu",
                 r.images(),
                 r.regions(),
                 SAMPLE_PX,

@@ -236,6 +236,7 @@ public final class FiberCalibrationRunner {
             in.put("sigma_step", cfg.sigmaStepUm / medianPxUm);
             in.put("invert_intensity", cfg.invertIntensity);
             in.put("rolling_ball_radius", (int) Math.max(0, Math.round(cfg.rollingBallRadiusUm / medianPxUm)));
+            in.put("method", "otsu");
 
             Task task = ApposeFiberService.getInstance().runTask("calibrate_threshold", in);
             Object outJson = task.outputs.get("result_json");
@@ -280,9 +281,14 @@ public final class FiberCalibrationRunner {
             payload.put("calibration_params", params);
             // Keep the histogram so a downstream tool can plot/inspect it.
             if (result.has("histogram_counts")) {
-                payload.put("histogram_bins", 256);
-                List<Long> hist = new ArrayList<>(256);
-                for (var el : result.getAsJsonArray("histogram_counts")) {
+                var counts = result.getAsJsonArray("histogram_counts");
+                payload.put(
+                        "histogram_bins",
+                        result.has("histogram_bins")
+                                ? result.get("histogram_bins").getAsInt()
+                                : counts.size());
+                List<Long> hist = new ArrayList<>(counts.size());
+                for (var el : counts) {
                     hist.add(el.getAsLong());
                 }
                 payload.put("histogram_counts", hist);
