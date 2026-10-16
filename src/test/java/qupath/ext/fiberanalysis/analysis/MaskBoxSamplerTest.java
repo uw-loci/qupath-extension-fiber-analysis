@@ -16,7 +16,7 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
+import java.util.SplittableRandom;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -47,7 +47,7 @@ class MaskBoxSamplerTest {
     }
 
     private static byte[] blobs(int w, int h, long seed) {
-        Random r = new Random(seed);
+        SplittableRandom r = new SplittableRandom(seed);
         byte[] m = new byte[w * h];
         for (int k = 0; k < 40; k++) {
             int cx = r.nextInt(w), cy = r.nextInt(h), rad = 2 + r.nextInt(Math.max(3, w / 10));
