@@ -11,12 +11,14 @@ package qupath.ext.fiberanalysis.analysis;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.Shape;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferByte;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -32,29 +34,14 @@ import qupath.lib.roi.RoiTools;
 import qupath.lib.roi.interfaces.ROI;
 
 /**
- * Computes per-class object-presence density channels at the same grid
- * geometry as the fiber-density channels.
+ * Per-class object-presence density channels on the fiber channels' lattice:
+ * the fraction of each cell's box covered by the union of that class's
+ * annotations and detections.
  *
- * <p>For each selected class:
- * <ol>
- *   <li>Rasterise every PathObject of that class into a binary mask at
- *       source resolution (1 = pixel is inside any object of the class).
- *       Annotations and detections both count; mask is the union of all
- *       their ROIs.</li>
- *   <li>Box-filter the mask: at each output cell (window-grid in window
- *       mode, source pixel in pixel mode), report the fraction of mask=1
- *       pixels in the local {@code windowPx x windowPx} neighborhood.</li>
- * </ol>
- *
- * <p>Box filtering uses a summed-area table (integral image) so the cost
- * is O(srcW*srcH) regardless of window size. Memory cost is one byte per
- * source pixel for the binary mask + one int per source pixel for the
- * integral table = 5 bytes per pixel per class.
- *
- * <p>The returned grid is float[gridH*gridW] with NaN where the local
- * neighborhood is entirely outside the slide (corner partial windows).
- * Values are in [0.0, 1.0] -- fraction of the local box covered by the
- * class. Multiply by 100 for percent-coverage.
+ * <p>Tile by tile ({@link MaskBoxSampler}): each tile rasterises only the
+ * objects whose bounds reach its rectangle, so memory is one tile's mask
+ * whatever the slide size. Values are in [0, 1]; NaN where a window leaves
+ * the slide (window mode).
  */
 final class ObjectDensityComputer {
 
@@ -63,112 +50,92 @@ final class ObjectDensityComputer {
     private ObjectDensityComputer() {}
 
     /**
-     * Compute one density grid per class.
-     *
-     * @param imageData      source (used for its hierarchy + dimensions)
-     * @param classNames     ordered class names to compute; one output per class
-     * @param srcW           source image width in pixels
-     * @param srcH           source image height in pixels
-     * @param windowPx       neighborhood size in source pixels (box filter window)
-     * @param stridePx       window stride, or the sampling step in pixel mode
-     * @param gridW          output grid columns
-     * @param gridH          output grid rows
-     * @param centred        true in pixel mode: boxes centred on each step block
-     * @return map from class name to a float[gridW*gridH] (NaN = no-data)
+     * @param imageData  source of the hierarchy
+     * @param classNames class names, one channel each, in order
+     * @param geo        the density map's tiling and lattice
+     * @param srcW       image width
+     * @param srcH       image height
+     * @return class name to {@code float[gridW * gridH]}, NaN = no data
+     * @throws IOException if a tile cannot be rendered
      */
     static Map<String, float[]> compute(
-            ImageData<java.awt.image.BufferedImage> imageData,
+            ImageData<BufferedImage> imageData,
             List<String> classNames,
+            FiberDensityMapWorkflow.Geometry geo,
             int srcW,
-            int srcH,
-            int windowPx,
-            int stridePx,
-            int gridW,
-            int gridH,
-            boolean centred) {
+            int srcH)
+            throws IOException {
 
         Map<String, float[]> out = new LinkedHashMap<>();
         if (classNames == null || classNames.isEmpty()) return out;
-
         PathObjectHierarchy hierarchy = imageData.getHierarchy();
-        if (hierarchy == null) {
-            logger.warn("No hierarchy on imageData; object-density channels will be all-NaN");
-            for (String name : classNames) {
-                float[] empty = new float[gridW * gridH];
-                Arrays.fill(empty, Float.NaN);
-                out.put(name, empty);
-            }
-            return out;
-        }
 
-        // Snapshot all annotations + detections once; partition by requested
-        // class name. PathClass.toString() yields the user-visible class name
-        // including nested-class colons ("Tumor: Stroma"), matching what the
-        // class manager / measurement table show.
+        // PathClass.toString() is the user-visible name, nested colons
+        // included ("Tumor: Stroma"), as the class list shows it.
         Set<String> requested = new LinkedHashSet<>(classNames);
-        Map<String, List<PathObject>> byClass = new LinkedHashMap<>();
+        Map<String, List<Shaped>> byClass = new LinkedHashMap<>();
         for (String n : classNames) byClass.put(n, new ArrayList<>());
-
-        List<PathObject> all = new ArrayList<>();
-        all.addAll(hierarchy.getAnnotationObjects());
-        all.addAll(hierarchy.getDetectionObjects());
-        for (PathObject po : all) {
-            PathClass pc = po.getPathClass();
-            String name = pc == null ? null : pc.toString();
-            if (name != null && requested.contains(name)) {
-                byClass.get(name).add(po);
+        if (hierarchy != null) {
+            List<PathObject> all = new ArrayList<>(hierarchy.getAnnotationObjects());
+            all.addAll(hierarchy.getDetectionObjects());
+            for (PathObject po : all) {
+                PathClass pc = po.getPathClass();
+                String name = pc == null ? null : pc.toString();
+                if (name == null || !requested.contains(name)) continue;
+                Shaped s = Shaped.of(po);
+                if (s != null) byClass.get(name).add(s);
             }
         }
 
         for (String name : classNames) {
-            List<PathObject> members = byClass.get(name);
+            List<Shaped> members = byClass.get(name);
             if (members.isEmpty()) {
                 logger.info("Object density: class '{}' has no objects -- channel will be all-NaN", name);
-                float[] empty = new float[gridW * gridH];
+                float[] empty = new float[geo.gridW() * geo.gridH()];
                 Arrays.fill(empty, Float.NaN);
                 out.put(name, empty);
                 continue;
             }
-
-            byte[] mask = rasterizeMask(members, srcW, srcH);
-            long maskPx = countNonZero(mask);
-            logger.info(
-                    "Object density '{}': {} object(s) rasterized -> {} mask px ({}%)",
-                    name,
-                    members.size(),
-                    maskPx,
-                    String.format(java.util.Locale.ROOT, "%.2f", 100.0 * maskPx / Math.max(1L, (long) srcW * srcH)));
-
-            float[] grid = MaskBoxSampler.sample(mask, srcW, srcH, windowPx, stridePx, gridW, gridH, centred);
-            out.put(name, grid);
+            logger.info("Object density '{}': {} object(s), rasterised per tile", name, members.size());
+            out.put(name, MaskBoxSampler.sample((x, y, w, h) -> rasterize(members, x, y, w, h), geo, srcW, srcH));
         }
         return out;
     }
 
-    /**
-     * Rasterize each object's ROI into a binary mask via AWT Graphics2D.
-     * Returns row-major byte[] sized srcW*srcH; 1 = inside any ROI, 0 = outside.
-     */
-    private static byte[] rasterizeMask(Collection<PathObject> objects, int srcW, int srcH) {
-        // TYPE_BYTE_GRAY gives a directly-addressable byte[] backing array.
-        BufferedImage img = new BufferedImage(srcW, srcH, BufferedImage.TYPE_BYTE_GRAY);
+    /** An object's shape and bounds, converted once rather than once per tile. */
+    private record Shaped(Shape shape, Rectangle2D bounds) {
+        static Shaped of(PathObject po) {
+            ROI roi = po.getROI();
+            if (roi == null || roi.isEmpty()) return null;
+            try {
+                Shape shape = RoiTools.getShape(roi);
+                return new Shaped(shape, shape.getBounds2D());
+            } catch (IllegalArgumentException ex) {
+                logger.debug("Could not convert ROI to Shape for object {}: {}", po, ex.getMessage());
+                return null;
+            }
+        }
+    }
+
+    /** Hard-edged (no antialiasing) union of the shapes reaching one rectangle. */
+    static byte[] rasterize(List<Shaped> shapes, int x, int y, int w, int h) {
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_BYTE_GRAY);
         Graphics2D g = img.createGraphics();
         try {
-            // Render at 1:1 pixel; no antialiasing -- we want hard membership.
             g.setColor(Color.BLACK);
-            g.fillRect(0, 0, srcW, srcH);
+            g.fillRect(0, 0, w, h);
             g.setColor(Color.WHITE);
-            for (PathObject po : objects) {
-                ROI roi = po.getROI();
-                if (roi == null || roi.isEmpty()) continue;
-                Shape shape;
-                try {
-                    shape = RoiTools.getShape(roi);
-                } catch (IllegalArgumentException ex) {
-                    logger.debug("Could not convert ROI to Shape for object {}: {}", po, ex.getMessage());
-                    continue;
-                }
-                g.fill(shape);
+            // Java2D's default stroke control nudges coordinates for
+            // non-antialiased fills, and the nudge is not translation-
+            // invariant: a tile and the whole slide disagreed on edge pixels.
+            g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+            // An integer translation leaves Java2D's pixel-centre fill rule
+            // exactly where a whole-slide raster would put it.
+            g.translate(-x, -y);
+            Rectangle2D tile = new Rectangle2D.Double(x, y, w, h);
+            for (Shaped s : shapes) {
+                if (s.bounds().intersects(tile)) g.fill(s.shape());
             }
         } finally {
             g.dispose();
@@ -176,9 +143,10 @@ final class ObjectDensityComputer {
         return ((DataBufferByte) img.getRaster().getDataBuffer()).getData();
     }
 
-    private static long countNonZero(byte[] mask) {
-        long c = 0;
-        for (byte b : mask) if (b != 0) c++;
-        return c;
+    /** Test seam: rasterise plain shapes. */
+    static byte[] rasterizeShapes(List<Shape> shapes, int x, int y, int w, int h) {
+        List<Shaped> s = new ArrayList<>();
+        for (Shape sh : shapes) s.add(new Shaped(sh, sh.getBounds2D()));
+        return rasterize(s, x, y, w, h);
     }
 }

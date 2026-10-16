@@ -220,6 +220,20 @@ These channels were prompted by the local density and coherence maps of
 PyTextureAnalysis (Kulkarni 2023), whose density follows Qian et al. (2022).
 No code was taken from it.
 
+### One threshold for the whole run
+
+With **Otsu** selected, the density map does not let each tile pick its own
+threshold: a nearly empty tile would cut into background noise while its
+neighbour clipped faint fibers, so coverage would jump at tile edges and could
+not be compared between slides. Instead it samples a 4 x 4 grid of tiles (up to
+1024 px each) spread over every selected image, runs Otsu once on the pooled
+histogram, and every tile of every image uses that value. With one image
+selected that is a slide-level threshold; with several it is shared across
+them. The value and how it was obtained are written to `_density_params.json`
+(`projectThresholdNorm`, `thresholdSource`), and the re-run script replays that
+value rather than sampling again. **Triangle** is still computed per tile and
+logs a warning; **Manual** and **Project Otsu** are already one value.
+
 ### Tiling
 
 Whole slides are computed in tiles. Each tile is read with a margin of
@@ -230,6 +244,11 @@ threshold-free channels, coverage and orientation are exactly what a single
 whole-image run would give. Skeleton-based counts (ridge count, branch points,
 skeleton length) are not local, because a fiber can run any distance, so they
 can still differ slightly at tile seams.
+
+The optional object-density and pixel-positivity channels are computed on the
+same tiles and the same windows as the fiber channels. Each tile rasterises
+only the annotations and detections that reach it, or reads and thresholds
+only its own pixels, so memory stays at one tile whatever the slide size.
 
 See the project README's "Project density map (WSI scale)" section
 for the full menu / validation matrix / limitations.

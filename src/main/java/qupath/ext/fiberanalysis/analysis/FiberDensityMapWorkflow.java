@@ -153,6 +153,33 @@ public final class FiberDensityMapWorkflow {
                 logger.warn("Could not create density-maps output dir: {}", e.getMessage());
             }
 
+            // The one statistic that must see the whole run: a per-tile Otsu
+            // cuts every tile differently, so coverage jumps at tile seams and
+            // is not comparable between slides.
+            DensityMapJobSpec runSpec = spec;
+            if (PooledThreshold.needsPooling(spec.thresholdMethod)) {
+                progress.setMain("Pooling a run-wide threshold", 0, 0);
+                try {
+                    Path poolDir = Files.createTempDirectory("fiber-density-pool-");
+                    try {
+                        PooledThreshold.Result pooled = PooledThreshold.otsu(entries, spec, poolDir, progress::setSub);
+                        runSpec = spec.withPooledThreshold(pooled.thresholdNorm(), PooledThreshold.describe(pooled));
+                    } finally {
+                        deleteTree(poolDir);
+                    }
+                } catch (IOException e) {
+                    logger.error("Could not pool a run-wide threshold", e);
+                    final String msg = e.getMessage();
+                    HeadlessFx.runLater(() -> Dialogs.showErrorMessage(
+                            "Fiber density map",
+                            "Could not compute one threshold for the whole run, so no map was made"
+                                    + " (thresholding each tile separately would leave seams): " + msg));
+                    return;
+                }
+            } else if ("triangle".equalsIgnoreCase(spec.thresholdMethod)) {
+                logger.warn("Triangle threshold is computed per tile; expect seams. Otsu is pooled over the run.");
+            }
+
             int total = entries.size();
             int ok = 0;
             int failed = 0;
@@ -161,7 +188,7 @@ public final class FiberDensityMapWorkflow {
                 final int idx = i;
                 progress.setMain("Image " + (i + 1) + " of " + total + ": " + entry.getImageName(), i, total);
                 try {
-                    Path tiffPath = runForOneImage(spec, entry, project, outRoot, progress);
+                    Path tiffPath = runForOneImage(runSpec, entry, project, outRoot, progress);
                     if (tiffPath != null) {
                         ok++;
                         logger.info("Density map written: {}", tiffPath);
@@ -334,19 +361,7 @@ public final class FiberDensityMapWorkflow {
                 }
             }
         } finally {
-            // Best-effort cleanup of per-tile artefacts.
-            try {
-                Files.walk(workDir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
-                    try {
-                        Files.deleteIfExists(p);
-                    } catch (IOException ignored) {
-                        // workdir cleanup is best-effort; leaked tmp files are
-                        // not worth surfacing to the user.
-                    }
-                });
-            } catch (IOException ignored) {
-                // tmp tree walked off underneath us; nothing to do.
-            }
+            deleteTree(workDir);
         }
 
         // Object-density channels: compute one full grid per selected class
@@ -356,8 +371,8 @@ public final class FiberDensityMapWorkflow {
         // identical neighborhood scale.
         if (spec.includeObjectDensity && !spec.objectDensityClasses.isEmpty()) {
             progress.setSub("Computing object-density channels...");
-            Map<String, float[]> objDensities = ObjectDensityComputer.compute(
-                    data, spec.objectDensityClasses, srcW, srcH, windowPx, stridePx, gridW, gridH, pixelMode);
+            Map<String, float[]> objDensities =
+                    ObjectDensityComputer.compute(data, spec.objectDensityClasses, geo, srcW, srcH);
             int idx = nFiberChannels;
             for (String cls : spec.objectDensityClasses) {
                 float[] grid = objDensities.get(cls);
@@ -374,8 +389,8 @@ public final class FiberDensityMapWorkflow {
         // so QuPath's channel list stays consistent.
         if (spec.includePixelPositivity && !spec.pixelPositivitySpecs.isEmpty()) {
             progress.setSub("Computing pixel-positivity channels...");
-            List<float[]> posGrids = PixelPositivityComputer.compute(
-                    server, spec.pixelPositivitySpecs, srcW, srcH, windowPx, stridePx, gridW, gridH, pixelMode);
+            List<float[]> posGrids =
+                    PixelPositivityComputer.compute(server, spec.pixelPositivitySpecs, geo, srcW, srcH);
             for (int i = 0; i < posGrids.size(); i++) {
                 float[] grid = posGrids.get(i);
                 int dst = nAfterObject + i;
@@ -625,6 +640,21 @@ public final class FiberDensityMapWorkflow {
         }
     }
 
+    /** Best-effort recursive delete of a scratch directory. */
+    private static void deleteTree(Path dir) {
+        try (var walk = Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                    // leaked tmp files are not worth surfacing to the user
+                }
+            });
+        } catch (IOException ignored) {
+            // the tree went away underneath us; nothing to do
+        }
+    }
+
     private static Path resolveProjectDir(Project<BufferedImage> project) {
         if (project != null && project.getPath() != null) {
             Path p = project.getPath().getParent();
@@ -690,6 +720,12 @@ public final class FiberDensityMapWorkflow {
          * eighth of a window, coarsened until the map fits half the heap).
          */
         public final double pixelStepUm;
+
+        /**
+         * How a run-wide threshold was obtained, when the workflow pooled one
+         * (see {@link PooledThreshold}); null when the user's own method was used.
+         */
+        public final String thresholdSource;
 
         /**
          * When true, the sidecar grows additional channels: one per class
@@ -760,6 +796,7 @@ public final class FiberDensityMapWorkflow {
                 throw new IllegalArgumentException("pixelStepUm must be >= 0 (0 = automatic), got " + pixelStepUm);
             }
             this.pixelStepUm = pixelStepUm;
+            this.thresholdSource = null;
             this.includeObjectDensity = includeObjectDensity;
             this.objectDensityClasses = objectDensityClasses == null
                     ? java.util.Collections.emptyList()
@@ -768,6 +805,42 @@ public final class FiberDensityMapWorkflow {
             this.pixelPositivitySpecs = pixelPositivitySpecs == null
                     ? java.util.Collections.emptyList()
                     : List.copyOf(pixelPositivitySpecs);
+        }
+
+        /**
+         * This spec with a run-wide threshold every tile uses instead of its own.
+         *
+         * @param thresholdNorm the cut on [0, 1]
+         * @param source        how it was obtained, for the provenance record
+         * @return a copy using {@code project_otsu} at that value
+         */
+        public DensityMapJobSpec withPooledThreshold(double thresholdNorm, String source) {
+            return new DensityMapJobSpec(this, thresholdNorm, source);
+        }
+
+        private DensityMapJobSpec(DensityMapJobSpec o, double thresholdNorm, String source) {
+            this.windowSizeUm = o.windowSizeUm;
+            this.windowOverlapPercent = o.windowOverlapPercent;
+            this.segChannel = o.segChannel;
+            this.thresholdMethod = "project_otsu";
+            this.manualThreshold = o.manualThreshold;
+            this.ridgeFilter = o.ridgeFilter;
+            this.sigmaMinUm = o.sigmaMinUm;
+            this.sigmaMaxUm = o.sigmaMaxUm;
+            this.sigmaStepUm = o.sigmaStepUm;
+            this.minFiberAreaUm2 = o.minFiberAreaUm2;
+            this.invertIntensity = o.invertIntensity;
+            this.rollingBallRadiusUm = o.rollingBallRadiusUm;
+            this.projectThresholdNorm = thresholdNorm;
+            this.writeAutoReattachMarker = o.writeAutoReattachMarker;
+            this.smoothInterpolation = o.smoothInterpolation;
+            this.densityMode = o.densityMode;
+            this.pixelStepUm = o.pixelStepUm;
+            this.thresholdSource = source;
+            this.includeObjectDensity = o.includeObjectDensity;
+            this.objectDensityClasses = o.objectDensityClasses;
+            this.includePixelPositivity = o.includePixelPositivity;
+            this.pixelPositivitySpecs = o.pixelPositivitySpecs;
         }
 
         /** Ordered echo of every spec field (for params.json / params.txt). */
@@ -790,6 +863,7 @@ public final class FiberDensityMapWorkflow {
             m.put("smoothInterpolation", smoothInterpolation);
             m.put("densityMode", densityMode);
             m.put("pixelStepUm", pixelStepUm);
+            if (thresholdSource != null) m.put("thresholdSource", thresholdSource);
             m.put("includeObjectDensity", includeObjectDensity);
             m.put("objectDensityClasses", objectDensityClasses);
             m.put("includePixelPositivity", includePixelPositivity);
@@ -831,7 +905,7 @@ public final class FiberDensityMapWorkflow {
             com.google.gson.JsonObject root =
                     new com.google.gson.Gson().fromJson(body, com.google.gson.JsonObject.class);
             com.google.gson.JsonObject p = root.has("parameters") ? root.getAsJsonObject("parameters") : root;
-            return new DensityMapJobSpec(
+            DensityMapJobSpec spec = new DensityMapJobSpec(
                     jdouble(p, "windowSizeUm", 15.0),
                     jdouble(p, "windowOverlapPercent", 0.0),
                     jstring(p, "segChannel", "Raw intensity"),
@@ -856,6 +930,13 @@ public final class FiberDensityMapWorkflow {
                     jstringList(p, "objectDensityClasses"),
                     jbool(p, "includePixelPositivity", false),
                     jpositivityList(p, "pixelPositivitySpecs"));
+            // A pooled run-wide threshold is replayed at the value it had, not
+            // re-pooled, so a re-run reproduces the original map.
+            String source = jstring(p, "thresholdSource", null);
+            if (source != null && spec.projectThresholdNorm != null) {
+                return spec.withPooledThreshold(spec.projectThresholdNorm, source);
+            }
+            return spec;
         }
 
         private static List<PixelPositivitySpec> jpositivityList(com.google.gson.JsonObject o, String key) {

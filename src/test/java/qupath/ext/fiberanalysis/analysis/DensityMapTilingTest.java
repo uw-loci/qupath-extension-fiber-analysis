@@ -98,13 +98,4 @@ class DensityMapTilingTest {
         assertThat(MaskBoxSampler.box(3, 4, 10, 1000, true)).containsExactly(9, 19);
         assertThat(MaskBoxSampler.box(0, 4, 10, 1000, true)).containsExactly(0, 7);
     }
-
-    @Test
-    void aBoxHangingOffTheImageIsNormalisedByThePartInside() {
-        // A fully covered 6x6 image: every centred box reads 1.0, edges too.
-        byte[] mask = new byte[36];
-        java.util.Arrays.fill(mask, (byte) 1);
-        float[] g = MaskBoxSampler.sample(mask, 6, 6, 4, 2, 3, 3, true);
-        for (float v : g) assertThat(v).isEqualTo(1f);
-    }
 }

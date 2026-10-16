@@ -28,11 +28,16 @@ import javafx.stage.Window;
 import javax.imageio.ImageIO;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow;
+import qupath.ext.fiberanalysis.analysis.PixelPositivitySpec;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServers;
+import qupath.lib.objects.PathObjects;
+import qupath.lib.objects.classes.PathClass;
+import qupath.lib.regions.ImagePlane;
+import qupath.lib.roi.ROIs;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
 import qupath.lib.projects.Projects;
@@ -60,6 +65,9 @@ public final class DensityMapTilingScenario {
 
     static final double WINDOW_UM = 25.0;
     static final double OVERLAP = 75.0;
+    static final String CLASS = "Dense";
+    static final int[] RECT = {2000, 2000, 2000, 1500};
+    static final double POS_THRESHOLD = 2000;
 
     public static void main(String[] args) throws Exception {
         Path image = Path.of(args[0]);
@@ -86,6 +94,11 @@ public final class DensityMapTilingScenario {
         entry.setImageName(image.getFileName().toString());
         ImageData<BufferedImage> data = entry.readImageData();
         data.setImageType(ImageData.ImageType.FLUORESCENCE);
+        PathClass dense = PathClass.fromString(CLASS);
+        data.getHierarchy().addObject(PathObjects.createAnnotationObject(
+                ROIs.createRectangleROI(RECT[0], RECT[1], RECT[2], RECT[3], ImagePlane.getDefaultPlane()), dense));
+        data.getHierarchy().addObject(PathObjects.createAnnotationObject(
+                ROIs.createEllipseROI(6000, 1000, 2500, 1800, ImagePlane.getDefaultPlane()), dense));
         entry.saveImageData(data);
         project.syncChanges();
         onFx(() -> {
@@ -95,7 +108,8 @@ public final class DensityMapTilingScenario {
         int w = src.getWidth();
         int h = src.getHeight();
         double px = src.getPixelCalibration().getAveragedPixelSizeMicrons();
-        note("image " + w + "x" + h + " at " + px + " um/px, " + src.nChannels() + " channel(s)");
+        note("image " + w + "x" + h + " at " + px + " um/px, " + src.nChannels() + " channel(s), max heap "
+                + Runtime.getRuntime().maxMemory() / (1024 * 1024) + " MB");
 
         dialogScenario(qupath, outDir);
 
@@ -163,6 +177,41 @@ public final class DensityMapTilingScenario {
                 for (int x = 0; x < pr.getWidth(); x++) if (Double.isNaN(pr.getSampleDouble(x, y, sig))) pnan++;
             check(pnan == 0, "pixel mode: a value everywhere, edges included (" + pnan + " NaN)");
 
+            int objCh = names.indexOf("Object density: " + CLASS);
+            int posCh = -1;
+            for (int c = 0; c < names.size(); c++) if (names.get(c).contains(">")) posCh = c;
+            check(objCh >= 0 && posCh >= 0, "both optional channels are in the sidecar (" + objCh + ", " + posCh + ")");
+            // Object density: a window wholly inside the rectangle reads 1, one
+            // far from both annotations reads 0, in both modes.
+            int gIn = (RECT[0] + 300) / stride;
+            int gInY = (RECT[1] + 300) / stride;
+            int cxIn = gIn * stride + windowPx / 2;
+            int cyIn = gInY * stride + windowPx / 2;
+            check(sample(ws, cxIn, cyIn, objCh) == 1.0 && sample(ps, cxIn, cyIn, objCh) == 1.0,
+                    "object density is 1 inside the annotation (window and per-pixel)");
+            check(sample(ws, 500, 7000, objCh) == 0.0 && sample(ps, 500, 7000, objCh) == 0.0,
+                    "object density is 0 far from any annotation (window and per-pixel)");
+            // Pixel positivity against a direct count from the image itself.
+            double worst = 0;
+            int nPos = 0;
+            for (int gy = 3; gy < gridH - 3; gy += Math.max(1, gridH / 6)) {
+                for (int gx = 3; gx < gridW - 3; gx += Math.max(1, gridW / 6)) {
+                    Raster r = src.readRegion(RegionRequest.createInstance(
+                                    src.getPath(), 1.0, gx * stride, gy * stride, windowPx, windowPx))
+                            .getRaster();
+                    long n = 0;
+                    for (int y = 0; y < windowPx; y++)
+                        for (int x = 0; x < windowPx; x++) if (r.getSampleDouble(x, y, 0) > POS_THRESHOLD) n++;
+                    double expect = (double) n / ((double) windowPx * windowPx);
+                    double got = sample(ws, gx * stride + windowPx / 2, gy * stride + windowPx / 2, posCh);
+                    worst = Math.max(worst, Math.abs(expect - got));
+                    nPos++;
+                }
+            }
+            check(worst < 1e-6, String.format(
+                    "pixel positivity matches a direct count from the image (worst %.2e over %d windows)",
+                    worst, nPos));
+
             // Alignment, live: at each window's CENTRE the window map must
             // agree with the independently computed centred (pixel-mode) map,
             // and agree better there than where the old writer drew it.
@@ -208,8 +257,9 @@ public final class DensityMapTilingScenario {
     private static Path run(Project<BufferedImage> project, ProjectImageEntry<BufferedImage> entry, String mode,
             double stepUm) throws Exception {
         var spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
-                WINDOW_UM, OVERLAP, "Raw intensity", "manual", 2000, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0, null,
-                false, false, mode, stepUm, false, List.of(), false, List.of());
+                WINDOW_UM, OVERLAP, "Raw intensity", "Otsu", 2000, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0, null,
+                false, false, mode, stepUm, true, List.of(CLASS), true,
+                List.of(new PixelPositivitySpec(0, "Channel 1", PixelPositivitySpec.OP_GT, POS_THRESHOLD)));
         long t0 = System.nanoTime();
         Thread t = new FiberDensityMapWorkflow().runForEntries(spec, List.of(entry), project, null);
         t.join();
@@ -217,6 +267,13 @@ public final class DensityMapTilingScenario {
                 .resolve(qupath.ext.fiberanalysis.analysis.DensitySidecar.sanitize(entry.getImageName())
                         + "_density.ome.tif");
         check(Files.isRegularFile(out), mode + " mode wrote a sidecar");
+        // Only the suffix: an image name can itself contain ".ome.tif".
+        String base = out.getFileName().toString();
+        base = base.substring(0, base.length() - ".ome.tif".length());
+        Path params = out.getParent().resolve(base + "_params.json");
+        String json = Files.isRegularFile(params) ? Files.readString(params) : "";
+        check(json.contains("\"thresholdSource\"") && json.contains("project_otsu"),
+                mode + " mode: one pooled Otsu threshold for every tile, recorded in the provenance");
         note(String.format("%s mode took %.1f s", mode, (System.nanoTime() - t0) / 1e9));
         return out;
     }
