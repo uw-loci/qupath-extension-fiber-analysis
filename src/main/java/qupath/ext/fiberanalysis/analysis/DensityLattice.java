@@ -14,9 +14,11 @@ package qupath.ext.fiberanalysis.analysis;
  *
  * <p>Cell {@code (gx, gy)} is the window whose top-left corner is
  * {@code (originX + gx * cellPx, originY + gy * cellPx)} and whose side is
- * {@code windowPx}. Its value is drawn over the cell-sized block CENTRED on
- * that window, so a map always sits over the tissue that produced it. Pixels
- * outside every window are no-data.
+ * {@code windowPx}. Its value covers the cell-sized block CENTRED on that
+ * window, {@code x0() + gx * cellPx} to {@code x0() + (gx + 1) * cellPx}, so a
+ * map always sits over the tissue that produced it. The blocks tile the
+ * rectangle {@link #x0()}, {@link #y0()}, {@code gridW * cellPx},
+ * {@code gridH * cellPx}; pixels outside it are no-data.
  *
  * @param gridW    cells across
  * @param gridH    cells down
@@ -67,11 +69,19 @@ public record DensityLattice(int gridW, int gridH, int cellPx, int windowPx, dou
         return new DensityLattice(gridW, gridH, stepPx, stepPx, 0, 0);
     }
 
-    /** @return true when source point {@code (u, v)} lies inside some window */
+    /** @return source x of the left edge of cell column 0 */
+    public double x0() {
+        return originX + inset();
+    }
+
+    /** @return source y of the top edge of cell row 0 */
+    public double y0() {
+        return originY + inset();
+    }
+
+    /** @return true when source point {@code (u, v)} lies inside some cell */
     public boolean covers(double u, double v) {
-        double spanX = (gridW - 1) * (double) cellPx + windowPx;
-        double spanY = (gridH - 1) * (double) cellPx + windowPx;
-        return u >= originX && u < originX + spanX && v >= originY && v < originY + spanY;
+        return u >= x0() && u < x0() + gridW * (double) cellPx && v >= y0() && v < y0() + gridH * (double) cellPx;
     }
 
     /**
@@ -80,13 +90,26 @@ public record DensityLattice(int gridW, int gridH, int cellPx, int windowPx, dou
      * @param grid row-major values, {@code gridW * gridH}
      * @param u    source x (continuous; a pixel's centre is {@code x + 0.5})
      * @param v    source y
-     * @return the value, or NaN outside every window
+     * @return the value, or NaN outside every cell
      */
     public float nearest(float[] grid, double u, double v) {
         if (!covers(u, v)) return Float.NaN;
-        int gx = clamp((int) Math.floor((u - originX - inset()) / cellPx), gridW);
-        int gy = clamp((int) Math.floor((v - originY - inset()) / cellPx), gridH);
+        int gx = clamp((int) Math.floor((u - x0()) / cellPx), gridW);
+        int gy = clamp((int) Math.floor((v - y0()) / cellPx), gridH);
         return grid[gy * gridW + gx];
+    }
+
+    /**
+     * {@link #bilinear} when {@code smooth}, else {@link #nearest}.
+     *
+     * @param grid   row-major values, {@code gridW * gridH}
+     * @param u      source x
+     * @param v      source y
+     * @param smooth interpolate between cell centres
+     * @return the value, or NaN
+     */
+    public float sample(float[] grid, double u, double v, boolean smooth) {
+        return smooth ? bilinear(grid, u, v) : nearest(grid, u, v);
     }
 
     /**
@@ -96,12 +119,12 @@ public record DensityLattice(int gridW, int gridH, int cellPx, int windowPx, dou
      * @param grid row-major values, {@code gridW * gridH}
      * @param u    source x (continuous)
      * @param v    source y
-     * @return the value, or NaN outside every window or where all four are NaN
+     * @return the value, or NaN outside every cell or where all four are NaN
      */
     public float bilinear(float[] grid, double u, double v) {
         if (!covers(u, v)) return Float.NaN;
-        double fx = (u - originX - windowPx / 2.0) / cellPx;
-        double fy = (v - originY - windowPx / 2.0) / cellPx;
+        double fx = (u - x0()) / cellPx - 0.5;
+        double fy = (v - y0()) / cellPx - 0.5;
         int x0 = (int) Math.floor(fx);
         int y0 = (int) Math.floor(fy);
         double wx = fx - x0;

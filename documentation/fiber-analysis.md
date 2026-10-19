@@ -135,57 +135,78 @@ place.
 For density-of-fiber maps across an entire slide, use the separate
 **Project density map** workflow rather than the per-annotation Run
 dialog. It tile-streams each selected image, runs the same per-window
-computations, and writes a float32 pyramidal OME-TIFF "sidecar" per
-image at
+computations, and writes one small map file per image at
 `<project>/fiber-analysis/density-maps/<image>_density.ome.tif`.
 
-Two output modes, picked in the dialog:
+**The map file holds one value per window, not per image pixel.** A 25 µm
+window moved 6.25 µm at a time on a 16952 x 18225 slide at 0.1732 µm/px is a
+467 x 503 grid, a few megabytes. That grid is all the information the map has:
+each value averages one window, and drawing it at full image resolution only
+repeats or interpolates those values. (Until 2026-10-19 the file was written at
+full image resolution, 9 GB for that slide with **Smooth** on. Maps from before
+then cannot be read; re-run them.)
 
-- **Sidecar + sampling commands** (default; safer for RGB images).
-  The sidecar lives on disk; pull per-object density values into
-  the measurement table via `Sample fiber density into
-  measurements`. The base image's native display is untouched.
-- **Attach as channels**. After the sidecar lands, its channels are
-  concatenated onto the source server in the open viewer. Use this
-  if you want QuPath's `Analyze > Calculate Features > Add
-  intensity features` or any density-aware classifier to see the
-  density as channels. On RGB base images the wrapper forces
-  multi-channel uint16 and the native RGB display path is lost;
-  the attacher auto-configures the first three channels as red /
-  green / blue LUT colours so you get the RGB look back, but the
-  result is not pixel-identical to the original.
+The file is a float32 OME-TIFF, so values are physical (`Fiber coverage (%)`
+reads 0-100, `Order parameter` 0-1); NaN means no data. Its description says
+where the grid sits on the image:
 
-The dialog blocks runs on uncalibrated images and on mixed-pixel-type
-selections when Channels mode is picked; warns (but allows) on
-Channels mode with RGB base images. An optional
-**"Auto-reattach channels on image open"** checkbox writes a small
-marker file beside the sidecar; the extension installs an image-open
-listener that re-attaches automatically on every future open in this
-project. To stop: `Stop auto-reattaching density channels` (deletes
-the marker; sidecar stays).
+```
+Placement: source_width=16952; source_height=18225; source_pixel_um=0.1732; cell_px=36; window_px=144; x0=54; y0=54; grid=467x503; render=bilinear
+Source image: <the image the map was computed on>
+```
 
-Sidecar format: float32, so the values on disk are the physical values
-(`Fiber coverage (%)` reads 0-100, `Order parameter` 0-1); NaN means
-no data. The sidecar has the source image's pixel dimensions and pixel
-size, so it lines up with the image with no scaling. Each window's value
-is drawn over the block centred on that window, so the map sits over the
-tissue that produced it. Pixels outside every window (a strip less than
-one window wide at the right and bottom edges in per-window mode) are
-NaN. Channel names match the QuPath measurement-table column names:
-`Fiber coverage (%)`, `HDM`, `Ridge count`, `Skeleton length (um)`,
-`Branch points`, `Mean angle (deg)`, `Order parameter`,
+Grid pixel (i, j) covers image pixels `x0 + i*cell_px` to `x0 + (i+1)*cell_px`
+across (and the same with `y0` down): the block centred on the window that
+produced it, so the map sits over the tissue it describes. `render` says how to
+draw between cells (below, **Smooth**). Image pixels outside the grid have no
+value: in per-window mode, a strip half a window wide around the windows and,
+at the right and bottom, up to one more stride. Channel names match the QuPath
+measurement-table column names: `Fiber coverage (%)`, `HDM`, `Ridge count`,
+`Skeleton length (um)`, `Branch points`, `Mean angle (deg)`, `Order parameter`,
 `Signal density (no threshold)`, `Intensity coherence (no threshold)`.
+
+Three ways to use a map:
+
+- **Show it as an overlay** (next section). The image is not changed.
+- **Sample it into measurements**: `Sample fiber density into measurements`
+  adds a `Density: <channel>` measurement per channel to each selected object
+  (or every annotation): the mean of the map inside the object, read every
+  quarter cell. An object smaller than that takes the value at its centre.
+- **Add it as channels in a new image**: `Add density channels as a new image`,
+  or the first output option in the dialog for every image in the run. This
+  adds a new project entry named `<image> [fiber density]`: the image, converted
+  to 32-bit float, followed by the map's channels at the image's size, for
+  QuPath's `Add intensity features`, thresholders or classifiers. The original
+  entry is not changed. The new entry copies the original's metadata (and its
+  objects as last saved) and adds three keys, `Fiber analysis` (`Density
+  channels` or `Classifier channels`), `Fiber source image` and `Fiber map`, so
+  it can be sorted or filtered in the project list and the metadata browser.
+  On an RGB image the first three channels are shown red, green and blue over
+  0-255, so it looks like the original; the map channels start hidden. Adding
+  the same map again refreshes that entry instead of making another, and
+  re-running the map refreshes it too. The entry reads the map file when it
+  opens, so it needs this extension installed and the map file kept.
+
+  Before 2026-10-19 this attached the channels to the open image instead, and
+  values were stored in the image's own pixel type: on an 8-bit or 16-bit image
+  every map value was cut to a whole number (a signal density of 0.12 read 0).
+  Measurements taken that way are wrong.
 
 ### Showing a map as an overlay
 
 `Extensions > Fiber Analysis > Show density map as overlay...` draws one channel
 of a density map (or of a window-classifier probability map) over the open
-image in colour, without attaching anything to the image. Pick the map, the
-channel, one of QuPath's colour maps and a value range (**Auto** uses the 1st to
-99th percentile). No-data areas are transparent. The overlay sits on QuPath's
-pixel-classification layer, so the opacity slider and **Show pixel
-classification** (`C`) control it, and showing it replaces a pixel classifier
-overlay. Unlike **Attach as channels**, an RGB image keeps its normal look.
+image in colour, without changing the image. Pick the map, the channel, one of
+QuPath's colour maps and a value range (**Auto** uses the 1st to 99th
+percentile). The list holds the open image's own maps first, then maps made on
+any other project image of the same size, marked `(from <image>)`: other images
+of the same slide, such as a map computed on the birefringence image shown over
+the brightfield one. No-data areas are transparent. The overlay is coloured from
+the grid at screen resolution each time the view changes, so it is exact at any
+zoom, and the viewer's location bar shows the map value under the cursor. It
+sits on QuPath's pixel-classification layer, so the opacity slider and **Show
+pixel classification** (`C`) control it, and showing it replaces a pixel
+classifier overlay. An RGB image keeps its normal look.
 
 ### Per-window or per-pixel
 
@@ -200,8 +221,9 @@ overlay. Unlike **Attach as channels**, an RGB image keeps its normal look.
   pass of box filters over each tile whatever the step. `Ridge count` is not
   available per pixel. Near the slide edge, a window that hangs off the image
   is averaged over the part inside it.
-- **Smooth** (render style) interpolates between sample centres in either
-  mode.
+- **Smooth** is recorded in the map rather than baked into it: the overlay,
+  the channels entry and sampling interpolate between cell centres when it is
+  on and fill each cell when it is off. The file is the same size either way.
 
 ### Collagen presence without a threshold
 

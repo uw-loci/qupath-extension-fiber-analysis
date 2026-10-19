@@ -10,8 +10,8 @@
 package qupath.ext.fiberanalysis.analysis;
 
 import java.awt.image.BufferedImage;
+import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -61,39 +61,18 @@ import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
 
 /**
- * Project-wide density-map output dialog. Whole-slide tile-stream of the
- * per-window fiber metrics into a uint16 quantized pyramid OME-TIFF sidecar,
- * with the user choosing whether to attach it back to the source image as
- * channels (changes RGB display) or keep it as a sampling-only sidecar
- * (preserves RGB display).
- *
- * <p>UX shape (per design discussion):
- *
- * <ul>
- *   <li><b>Split pane</b>: image picker on the left, settings on the right.
- *       Live validation banner at the top of the settings pane updates as
- *       images are checked / output mode is toggled.</li>
- *   <li><b>Image-select-first</b>: the user must pick images before settings
- *       can be validated; the picker lists each entry's pixel type,
- *       dimensions, and pixel-calibration status so the legality rules below
- *       are obvious.</li>
- *   <li><b>Mode validation</b>: <i>uint8 RGB</i> picking Channels triggers a
- *       warning (forces RGB display to multi-channel); mixed-type selection
- *       + Channels mode is blocked; any image missing pixel calibration
- *       blocks the run entirely.</li>
- * </ul>
- *
- * <p>This class is the UX scaffold; the compute pipeline + sidecar writer +
- * reattach hook + sampling command live in their own classes, dispatched
- * from {@link #onRun()}. Skeleton step writes "not yet implemented" so the
- * UX can be reviewed before the compute side lands.
+ * Project-wide density-map dialog: images on the left (pixel type, size,
+ * calibration), settings on the right, a validation banner that blocks a run
+ * on any uncalibrated image. Every run writes a grid-resolution map file per
+ * image; the channels option also adds a new project entry per image holding
+ * the image plus its map's channels ({@link DensityChannelAttacher}).
  */
 public final class FiberDensityMapDialog {
 
     private static final Logger logger = LoggerFactory.getLogger(FiberDensityMapDialog.class);
 
-    private static final String MODE_CHANNELS = "Attach as channels";
-    private static final String MODE_SIDECAR = "Sidecar + sampling commands";
+    private static final String MODE_CHANNELS = "Also add each image with its density channels as a new entry";
+    private static final String MODE_SIDECAR = "Map file only (overlay and sampling commands)";
 
     private final QuPathGUI gui;
 
@@ -103,7 +82,6 @@ public final class FiberDensityMapDialog {
     private ToggleGroup outputModeGroup;
     private RadioButton modeChannelsRadio;
     private RadioButton modeSidecarRadio;
-    private CheckBox autoReattachCheck;
     private CheckBox smoothCheck;
 
     private ToggleGroup densityModeGroup;
@@ -178,7 +156,7 @@ public final class FiberDensityMapDialog {
 
         Label hdr = new Label("Images");
         hdr.setFont(Font.font("System", FontWeight.BOLD, 13));
-        Label sub = new Label("Select the project images to compute a density-map sidecar for. "
+        Label sub = new Label("Select the project images to compute a density map for. "
                 + "Type / dimensions / calibration populate in the background.");
         sub.setStyle("-fx-text-fill: #555; -fx-font-size: 11px;");
         sub.setWrapText(true);
@@ -276,28 +254,13 @@ public final class FiberDensityMapDialog {
         modeSidecarRadio.setSelected(true); // default: safer for RGB base images
         outputModeGroup.selectedToggleProperty().addListener((obs, o, n) -> revalidate());
 
-        Label modeHelp =
-                new Label("Channels:  density appears as extra channels on the source image and is sampleable\n"
-                        + "via Analyze > Calculate Features > Add intensity features. For RGB base\n"
-                        + "images this changes how the image renders (R/G/B become separate display\n"
-                        + "channels; we auto-configure to recreate the RGB look on attach).\n\n"
-                        + "Sidecar:  density is written to a pyramid OME-TIFF beside the project\n"
-                        + "and exposed via the \"Sample density into measurements\" command in\n"
-                        + "this extension. RGB display stays native; works for every image type.");
+        Label modeHelp = new Label("Every run writes a small map file per image (one value per window). Show it with\n"
+                + "\"Show density map as overlay...\" or turn it into measurements with \"Sample fiber density\n"
+                + "into measurements\". The first option also adds a new project entry per image -- the image\n"
+                + "with the map's channels after its own, tagged \"Fiber analysis\" in the project metadata --\n"
+                + "for tools that need the map as channels. The original entries are not changed.");
         modeHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         modeHelp.setWrapText(true);
-
-        // --- Cross-session opt-in (only meaningful in Channels mode) ---
-        autoReattachCheck = new CheckBox("Auto-reattach channels on image open");
-        autoReattachCheck.setTooltip(
-                new Tooltip(
-                        "Re-attach these channels every time this image is opened in this project. To stop: Extensions > Fiber Analysis > Stop auto-reattaching density channels."));
-        autoReattachCheck.disableProperty().bind(modeSidecarRadio.selectedProperty());
-        Label autoReattachHelp = new Label("Marker file: <sidecar>.attach (a few hundred bytes). Sidecar mode ignores\n"
-                + "this checkbox -- the sampling command does not need an attach.");
-        autoReattachHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
-        autoReattachHelp.setWrapText(true);
-        autoReattachHelp.disableProperty().bind(modeSidecarRadio.selectedProperty());
 
         // --- Window grid (placeholder; will read from defaults later) ---
         Label windowLabel = new Label("Window grid (microns)");
@@ -356,14 +319,13 @@ public final class FiberDensityMapDialog {
         renderHelp.setWrapText(true);
 
         // --- Sidecar location ---
-        Label sidecarLabel = new Label("Sidecar location");
+        Label sidecarLabel = new Label("Map file");
         sidecarLabel.setStyle("-fx-font-weight: bold;");
-        Label sidecarBody = new Label("Per image, a tiled float32 pyramid OME-TIFF is written to\n"
+        Label sidecarBody = new Label("Per image, a float32 OME-TIFF with one value per window step is written to\n"
                 + "    <project>/fiber-analysis/density-maps/<image>_density.ome.tif\n"
-                + "LZW-compressed; NaN is the no-data sentinel; channel values are the\n"
-                + "physical values directly (Fiber coverage (%) reads 0..100, etc.) so they\n"
-                + "show up as data in QuPath's channel histograms.\n"
-                + "Expected size for a 100k x 100k slide with 8 channels: ~20-80 MB per image.");
+                + "NaN means no data; values are physical (Fiber coverage (%) reads 0..100).\n"
+                + "Size: 4 bytes x channels x (width / step) x (height / step) before compression,\n"
+                + "e.g. about 8 MB for a 17,000 x 18,000 px slide with a 36 px step and 9 channels.");
         sidecarBody.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         sidecarBody.setWrapText(true);
 
@@ -392,8 +354,7 @@ public final class FiberDensityMapDialog {
         // --- Pixel-positivity channels (optional) ---
         VBox pixPosBox = buildPixelPositivitySection();
 
-        VBox modeBox = new VBox(
-                4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp, autoReattachCheck, autoReattachHelp);
+        VBox modeBox = new VBox(4, modeLabel, modeChannelsRadio, modeSidecarRadio, modeHelp);
         VBox winBox = new VBox(4, windowLabel, windowHelp);
         VBox densityModeBox =
                 new VBox(4, densityModeLabel, windowModeRadio, pixelModeRadio, pixelStepRow, densityModeHelp);
@@ -435,9 +396,8 @@ public final class FiberDensityMapDialog {
 
         runBtn = new Button("Compute density maps");
         runBtn.setDefaultButton(true);
-        runBtn.setTooltip(new Tooltip("Tile-stream each selected image, write a float32 pyramid OME-TIFF\n"
-                + "sidecar per image, and either attach as channels (Channels mode) or\n"
-                + "expose via the sampling command (Sidecar mode)."));
+        runBtn.setTooltip(new Tooltip("Tile-stream each selected image and write its map file; with the\n"
+                + "channels option, also add each image with its density channels as a new project entry."));
         runBtn.setOnAction(e -> onRun());
         runBtn.setDisable(true);
 
@@ -482,7 +442,6 @@ public final class FiberDensityMapDialog {
         }
 
         boolean channelsMode = modeChannelsRadio != null && modeChannelsRadio.isSelected();
-        boolean autoReattach = channelsMode && autoReattachCheck != null && autoReattachCheck.isSelected();
 
         materializePositivityRows();
 
@@ -500,7 +459,6 @@ public final class FiberDensityMapDialog {
                 FiberAnalysisPreferences.invertIntensityProperty().get(),
                 FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
                 projectThresholdNorm,
-                autoReattach,
                 smoothCheck != null && smoothCheck.isSelected(),
                 pixelModeRadio != null && pixelModeRadio.isSelected() ? "pixel" : "window",
                 pixelStepSpinner != null ? pixelStepSpinner.getValue() : 0.0,
@@ -520,29 +478,46 @@ public final class FiberDensityMapDialog {
 
         Runnable onComplete = null;
         if (channelsMode) {
-            // After the whole batch completes, auto-attach the density
-            // channels onto whatever image is currently open in QuPath, if
-            // that image was part of this run. Other images in the batch
-            // are left as sidecars-on-disk; the user can switch to them
-            // and run "Attach density channels" manually. Session-only --
-            // the project entry's stored server builder is untouched.
+            // After the batch, add a channels entry per image (or refresh the
+            // one already there), then open the current image's if it ran.
             final List<ProjectImageEntry<BufferedImage>> ranEntries = new ArrayList<>(entries);
             final QuPathGUI guiRef = gui;
-            onComplete = () -> {
-                if (guiRef == null) return;
-                ImageData<BufferedImage> currentData = guiRef.getImageData();
-                if (currentData == null) return;
-                ProjectImageEntry<BufferedImage> currentEntry =
-                        guiRef.getProject() != null ? guiRef.getProject().getEntry(currentData) : null;
-                if (currentEntry == null || !ranEntries.contains(currentEntry)) {
-                    logger.info("Channels mode: current image was not part of the run; manual attach via menu");
-                    return;
-                }
-                DensityChannelAttacher.attachForCurrentImage(guiRef);
-            };
+            final Project<BufferedImage> projectRef = project;
+            onComplete = () -> addChannelEntries(guiRef, projectRef, ranEntries);
         }
 
         new FiberDensityMapWorkflow().runForEntries(spec, entries, project, gui, onComplete);
+    }
+
+    private static void addChannelEntries(
+            QuPathGUI gui, Project<BufferedImage> project, List<ProjectImageEntry<BufferedImage>> ran) {
+        Thread t = new Thread(
+                () -> {
+                    ProjectImageEntry<BufferedImage> open = null;
+                    ImageData<BufferedImage> current = gui == null ? null : gui.getImageData();
+                    ProjectImageEntry<BufferedImage> currentEntry = current == null ? null : project.getEntry(current);
+                    for (var entry : ran) {
+                        Path map = DensitySidecar.sidecarPathFor(project, entry);
+                        if (!DensitySidecar.exists(map)) continue;
+                        try {
+                            var added = DensityChannelAttacher.addChannelsEntry(
+                                    project, entry, map, DensityChannelAttacher.KIND_DENSITY, null);
+                            if (entry == currentEntry) open = added;
+                        } catch (Exception e) {
+                            logger.error("Could not add density channels for {}", entry.getImageName(), e);
+                        }
+                    }
+                    final ProjectImageEntry<BufferedImage> toOpen = open;
+                    if (gui != null) {
+                        HeadlessFx.runLater(() -> {
+                            gui.refreshProject();
+                            if (toOpen != null) gui.openImageEntry(toOpen);
+                        });
+                    }
+                },
+                "fiber-density-channel-entries");
+        t.setDaemon(true);
+        t.start();
     }
 
     // ---------- validation ----------
@@ -590,50 +565,11 @@ public final class FiberDensityMapDialog {
                     + summariseNames(uncalibrated));
         }
 
-        // Pixel-type set across the selection drives mode-legality.
-        Set<PixelType> types = new HashSet<>();
-        int rgbCount = 0;
-        for (ImageRow r : picked) {
-            ImageMeta m = r.getMeta();
-            types.add(m.pixelType);
-            if (m.isRGB) rgbCount++;
-        }
-
-        if (channelsMode) {
-            if (types.size() > 1) {
-                return ValidationResult.error(
-                        "Cannot run in Channels mode: selected images have different pixel types ("
-                                + describeTypes(types)
-                                + "). "
-                                + "Either switch to Sidecar mode, or run them in separate batches.");
-            }
-            if (rgbCount > 0) {
-                return ValidationResult.warn(
-                        "Channels mode on an RGB base will change how the image renders. R/G/B will "
-                                + "become separate display channels; we'll auto-configure them to recreate "
-                                + "the RGB look on attach. Sidecar mode preserves the native RGB display if "
-                                + "that matters to you.\n"
-                                + "Ready to run on "
-                                + picked.size()
-                                + " image"
-                                + (picked.size() == 1 ? "" : "s")
-                                + ".");
-            }
-            return ValidationResult.ok("Ready to run in Channels mode on "
-                    + picked.size()
-                    + " image"
-                    + (picked.size() == 1 ? "" : "s")
-                    + " ("
-                    + describeTypes(types)
-                    + ").");
-        } else {
-            // Sidecar mode works for everything.
-            return ValidationResult.ok("Ready to run in Sidecar mode on "
-                    + picked.size()
-                    + " image"
-                    + (picked.size() == 1 ? "" : "s")
-                    + ". Native display is preserved for every selected image.");
-        }
+        String n = picked.size() + " image" + (picked.size() == 1 ? "" : "s");
+        return ValidationResult.ok(
+                channelsMode
+                        ? "Ready to run on " + n + ". Each also gets a new project entry with its density channels."
+                        : "Ready to run on " + n + ". The images are not changed.");
     }
 
     private void applyValidation(ValidationResult v) {
@@ -666,13 +602,6 @@ public final class FiberDensityMapDialog {
             sb.append(", and ").append(rows.size() - show).append(" more");
         }
         return sb.toString();
-    }
-
-    private static String describeTypes(Set<PixelType> types) {
-        if (types.isEmpty()) return "unknown";
-        List<String> parts = new ArrayList<>();
-        for (PixelType t : types) parts.add(t == null ? "unknown" : t.toString());
-        return String.join(", ", parts);
     }
 
     // ---------- object-density class enumeration ----------

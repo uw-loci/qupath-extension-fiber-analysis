@@ -72,7 +72,6 @@ class PooledThresholdTest {
                 0,
                 null,
                 false,
-                false,
                 "pixel",
                 2.0,
                 true,

@@ -26,13 +26,17 @@ import javafx.scene.control.Spinner;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javax.imageio.ImageIO;
+import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
+import qupath.ext.fiberanalysis.analysis.DensityMapInfo;
+import qupath.ext.fiberanalysis.analysis.DensityMapOverlay;
+import qupath.ext.fiberanalysis.analysis.DensityMapReader;
 import qupath.ext.fiberanalysis.analysis.DensityOverlayDialog;
+import qupath.ext.fiberanalysis.analysis.DensitySidecar;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow;
 import qupath.ext.fiberanalysis.analysis.PixelPositivitySpec;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.lib.gui.QuPathGUI;
-import qupath.lib.gui.viewer.overlays.BufferedImageOverlay;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServers;
@@ -144,74 +148,74 @@ public final class DensityMapTilingScenario {
 
         int windowPx = (int) Math.round(WINDOW_UM / px);
         int stride = (int) Math.round(windowPx * (1.0 - OVERLAP / 100.0));
-        int gridW = (w - windowPx) / stride + 1;
-        int gridH = (h - windowPx) / stride + 1;
-        int spanW = (gridW - 1) * stride + windowPx;
-        int spanH = (gridH - 1) * stride + windowPx;
-        note("window " + windowPx + " px, stride " + stride + " px, " + gridW + "x" + gridH + " windows");
+        note("window " + windowPx + " px, stride " + stride + " px");
+        note(String.format("map files: window %.1f MB, pixel %.1f MB (the image is %d x %d)",
+                Files.size(win) / 1e6, Files.size(pix) / 1e6, w, h));
+        check(Files.size(win) < 50_000_000L && Files.size(pix) < 50_000_000L,
+                "the map files are stored at grid resolution, not image resolution");
 
-        try (ImageServer<BufferedImage> ws = ImageServers.buildServer(win.toUri().toString());
-                ImageServer<BufferedImage> ps = ImageServers.buildServer(pix.toUri().toString())) {
+        try (DensityMapReader wr = DensityMapReader.open(win);
+                DensityMapReader pr = DensityMapReader.open(pix)) {
+            DensityMapInfo wi = wr.info();
+            DensityMapInfo pi = pr.info();
             List<String> names = new ArrayList<>();
-            for (int c = 0; c < ws.nChannels(); c++) names.add(ws.getChannel(c).getName());
+            for (var ch : wi.channels()) names.add(ch.name);
             note("channels: " + names);
-            int sig = names.indexOf("Signal density (no threshold)");
-            int coh = names.indexOf("Intensity coherence (no threshold)");
-            check(sig >= 0 && coh >= 0, "the sidecar carries both threshold-free channels");
-            check(ws.getWidth() == w && ws.getHeight() == h, "the sidecar matches the source dimensions");
+            note("window grid " + wi.lattice() + "; pixel grid " + pi.lattice());
+            int sig = wi.channelIndex("Signal density (no threshold)");
+            int coh = wi.channelIndex("Intensity coherence (no threshold)");
+            check(sig >= 0 && coh >= 0, "the map carries both threshold-free channels");
+            check(wi.fits(w, h) && pi.fits(w, h), "both maps say they belong to this image's size");
+            check(wi.lattice().cellPx() == stride && wi.lattice().windowPx() == windowPx,
+                    "the window map's cells are the stride and its windows the window size");
+            check(wi.lattice().x0() == (windowPx - stride) / 2.0, "the window map's cells are centred on their windows");
 
-            // Every pixel inside the window union must have a signal value: a
-            // window the tiling skipped shows up as a NaN stripe at a seam.
-            int ds = 4;
-            Raster wr = ws.readRegion(RegionRequest.createInstance(ws.getPath(), ds, 0, 0, spanW, spanH)).getRaster();
+            // A window the tiling skipped would be a NaN cell.
+            float[] ws = wr.readChannel(sig);
+            float[] wc = wr.readChannel(coh);
             long nan = 0;
-            long total = 0;
-            double sMin = Double.MAX_VALUE;
-            double sMax = -Double.MAX_VALUE;
-            double cMin = Double.MAX_VALUE;
-            double cMax = -Double.MAX_VALUE;
-            for (int y = 0; y < wr.getHeight(); y++) {
-                for (int x = 0; x < wr.getWidth(); x++) {
-                    double s = wr.getSampleDouble(x, y, sig);
-                    double c = wr.getSampleDouble(x, y, coh);
-                    total++;
-                    if (Double.isNaN(s)) {
-                        nan++;
-                        continue;
-                    }
-                    sMin = Math.min(sMin, s);
-                    sMax = Math.max(sMax, s);
-                    if (!Double.isNaN(c)) {
-                        cMin = Math.min(cMin, c);
-                        cMax = Math.max(cMax, c);
-                    }
+            double sMin = Double.MAX_VALUE, sMax = -Double.MAX_VALUE, cMin = Double.MAX_VALUE, cMax = -Double.MAX_VALUE;
+            for (int i = 0; i < ws.length; i++) {
+                if (Float.isNaN(ws[i])) {
+                    nan++;
+                    continue;
+                }
+                sMin = Math.min(sMin, ws[i]);
+                sMax = Math.max(sMax, ws[i]);
+                if (!Float.isNaN(wc[i])) {
+                    cMin = Math.min(cMin, wc[i]);
+                    cMax = Math.max(cMax, wc[i]);
                 }
             }
-            check(nan == 0, "window mode: no gaps inside the windows (" + nan + " NaN of " + total + " px)");
+            check(nan == 0, "window mode: no gaps (" + nan + " NaN of " + ws.length + " cells)");
             check(sMin >= 0 && sMax <= 1, String.format("signal density within [0, 1] (%.4f .. %.4f)", sMin, sMax));
             check(cMin >= 0 && cMax <= 1, String.format("coherence within [0, 1] (%.4f .. %.4f)", cMin, cMax));
 
-            Raster pr = ps.readRegion(RegionRequest.createInstance(ps.getPath(), ds, 0, 0, w, h)).getRaster();
+            float[] ps = pr.readChannel(sig);
             long pnan = 0;
-            for (int y = 0; y < pr.getHeight(); y++)
-                for (int x = 0; x < pr.getWidth(); x++) if (Double.isNaN(pr.getSampleDouble(x, y, sig))) pnan++;
-            check(pnan == 0, "pixel mode: a value everywhere, edges included (" + pnan + " NaN)");
+            for (float v : ps) if (Float.isNaN(v)) pnan++;
+            check(pnan == 0, "pixel mode: a value in every cell (" + pnan + " NaN)");
+            check(pi.lattice().covers(0.5, 0.5) && pi.lattice().covers(w - 0.5, h - 0.5),
+                    "pixel mode: the grid reaches every corner of the image");
 
-            int objCh = names.indexOf("Object density: " + CLASS);
+            int objCh = wi.channelIndex("Object density: " + CLASS);
             int posCh = -1;
             for (int c = 0; c < names.size(); c++) if (names.get(c).contains(">")) posCh = c;
-            check(objCh >= 0 && posCh >= 0, "both optional channels are in the sidecar (" + objCh + ", " + posCh + ")");
+            check(objCh >= 0 && posCh >= 0, "both optional channels are in the map (" + objCh + ", " + posCh + ")");
+            float[] wObj = wr.readChannel(objCh);
+            float[] pObj = pr.readChannel(objCh);
+            float[] wPos = wr.readChannel(posCh);
             // Object density: a window wholly inside the rectangle reads 1, one
             // far from both annotations reads 0, in both modes.
-            int gIn = (RECT[0] + 300) / stride;
-            int gInY = (RECT[1] + 300) / stride;
-            int cxIn = gIn * stride + windowPx / 2;
-            int cyIn = gInY * stride + windowPx / 2;
-            check(sample(ws, cxIn, cyIn, objCh) == 1.0 && sample(ps, cxIn, cyIn, objCh) == 1.0,
+            int cxIn = RECT[0] + 300 + windowPx / 2;
+            int cyIn = RECT[1] + 300 + windowPx / 2;
+            check(wi.sample(wObj, cxIn, cyIn) == 1.0f && pi.sample(pObj, cxIn, cyIn) == 1.0f,
                     "object density is 1 inside the annotation (window and per-pixel)");
-            check(sample(ws, 500, 7000, objCh) == 0.0 && sample(ps, 500, 7000, objCh) == 0.0,
+            check(wi.sample(wObj, 500, 7000) == 0.0f && pi.sample(pObj, 500, 7000) == 0.0f,
                     "object density is 0 far from any annotation (window and per-pixel)");
             // Pixel positivity against a direct count from the image itself.
+            int gridW = wi.lattice().gridW();
+            int gridH = wi.lattice().gridH();
             double worst = 0;
             int nPos = 0;
             for (int gy = 3; gy < gridH - 3; gy += Math.max(1, gridH / 6)) {
@@ -223,7 +227,7 @@ public final class DensityMapTilingScenario {
                     for (int y = 0; y < windowPx; y++)
                         for (int x = 0; x < windowPx; x++) if (r.getSampleDouble(x, y, 0) > POS_THRESHOLD) n++;
                     double expect = (double) n / ((double) windowPx * windowPx);
-                    double got = sample(ws, gx * stride + windowPx / 2, gy * stride + windowPx / 2, posCh);
+                    double got = wPos[gy * gridW + gx];
                     worst = Math.max(worst, Math.abs(expect - got));
                     nPos++;
                 }
@@ -232,9 +236,9 @@ public final class DensityMapTilingScenario {
                     "pixel positivity matches a direct count from the image (worst %.2e over %d windows)",
                     worst, nPos));
 
-            // Alignment, live: at each window's CENTRE the window map must
-            // agree with the independently computed centred (pixel-mode) map,
-            // and agree better there than where the old writer drew it.
+            // Alignment: at each window's centre the window map must agree
+            // with the independently computed centred (pixel-mode) map, and
+            // agree better there than half a window up and to the left.
             int inset = (windowPx - stride) / 2;
             double errCentre = 0;
             double errOld = 0;
@@ -243,20 +247,25 @@ public final class DensityMapTilingScenario {
                 for (int gx = 2; gx < gridW - 2; gx += Math.max(1, gridW / 25)) {
                     int cx = gx * stride + windowPx / 2;
                     int cy = gy * stride + windowPx / 2;
-                    double wv = sample(ws, cx, cy, sig);
-                    double pc = sample(ps, cx, cy, sig);
-                    double po = sample(ps, cx - inset, cy - inset, sig);
-                    errCentre += Math.abs(wv - pc);
-                    errOld += Math.abs(wv - po);
+                    double wv = wi.sample(ws, cx, cy);
+                    errCentre += Math.abs(wv - pi.sample(ps, cx, cy));
+                    errOld += Math.abs(wv - pi.sample(ps, cx - inset, cy - inset));
                     n++;
                 }
             }
             errCentre /= n;
             errOld /= n;
             note(String.format(
-                    "|window - centred| at the window centre %.5f; at the old drawn position %.5f (%d windows)",
+                    "|window - centred| at the window centre %.5f; half a window up-left %.5f (%d windows)",
                     errCentre, errOld, n));
             check(errCentre < errOld, "the window map sits over the tissue that produced it");
+        }
+
+        try {
+            channelsEntryScenario(project, entry, w, h);
+        } catch (Exception e) {
+            e.printStackTrace();
+            check(false, "the channels-entry scenario ran without an exception (" + e + ")");
         }
 
         try {
@@ -300,6 +309,8 @@ public final class DensityMapTilingScenario {
         @SuppressWarnings("unchecked")
         var channelCombo = (javafx.scene.control.ComboBox<String>) combos.get(1);
         check(onFx(() -> mapCombo.getItems().size()) >= 1, "the dialog finds this image's density map");
+        // Maps are listed in the background; wait for the channel list first.
+        for (int i = 0; i < 300 && onFx(() -> channelCombo.getItems().isEmpty()); i++) Thread.sleep(100);
         onFx(() -> {
             channelCombo.getSelectionModel().select("Signal density (no threshold)");
             return null;
@@ -307,8 +318,18 @@ public final class DensityMapTilingScenario {
         // Wait for the background read to fill the range fields.
         var fields = onFx(() -> new ArrayList<>(stage.getScene().getRoot().lookupAll(".text-field")));
         var minField = (javafx.scene.control.TextField) fields.get(0);
+        // The status names the channel once that channel (not an earlier one) is read.
+        var statusLabel = onFx(() -> stage.getScene().getRoot().lookupAll(".label").stream()
+                .map(n -> (javafx.scene.control.Label) n)
+                .filter(l -> l.getMaxWidth() == 420 && l.isWrapText() && !l.getText().startsWith("Drawn on"))
+                .findFirst()
+                .orElse(null));
         long t0 = System.nanoTime();
-        for (int i = 0; i < 1200 && onFx(() -> minField.getText().isBlank()); i++) Thread.sleep(100);
+        for (int i = 0; i < 1200; i++) {
+            String st = statusLabel == null ? "" : onFx(statusLabel::getText);
+            if (st.startsWith("Signal density (no threshold):") && !onFx(minField::getText).isBlank()) break;
+            Thread.sleep(100);
+        }
         boolean read = !onFx(minField::getText).isBlank();
         check(read, String.format("the channel is read and an automatic range is filled in (%.1f s)",
                 (System.nanoTime() - t0) / 1e9));
@@ -329,9 +350,10 @@ public final class DensityMapTilingScenario {
             return null;
         });
         var viewer = onFx(qupath::getViewer);
+        for (int i = 0; i < 200 && !(onFx(viewer::getCustomPixelLayerOverlay) instanceof DensityMapOverlay); i++)
+            Thread.sleep(50);
         var overlay = onFx(viewer::getCustomPixelLayerOverlay);
-        check(overlay instanceof BufferedImageOverlay,
-                "the map is on the viewer's pixel layer");
+        check(overlay instanceof DensityMapOverlay, "the map is on the viewer's pixel layer");
         if (overlay == null) return;
         check(onFx(() -> qupath.getImageData().getServer().nChannels()) == channelsBefore,
                 "the image server is unchanged (" + channelsBefore + " channel(s))");
@@ -377,6 +399,91 @@ public final class DensityMapTilingScenario {
             return null;
         });
         check(onFx(viewer::getCustomPixelLayerOverlay) == null, "Hide removes it");
+
+        // Another image of the same slide (same size, different entry) can
+        // show this image's map; here a second entry for the same file.
+        var project = onFx(qupath::getProject);
+        var twin = project.addImage(entry.getServerBuilder());
+        twin.setImageName(entry.getImageName() + " (second view)");
+        project.syncChanges();
+        var listed = new java.util.HashMap<Path, String>();
+        var maps = DensityOverlayDialog.mapsForImage(
+                project, twin, server.getWidth(), server.getHeight(), listed);
+        String label = maps.isEmpty() ? "" : listed.get(maps.get(0));
+        note("maps offered for the second view: " + listed.values());
+        check(!maps.isEmpty() && label.contains("(from " + entry.getImageName() + ")"),
+                "a map made on another image of the same size is offered, labelled with its source");
+        project.removeImage(twin, true);
+        project.syncChanges();
+    }
+
+    /** "Add density channels as a new image": a new entry, saved, tagged, reopened as after a restart. */
+    private static void channelsEntryScenario(
+            Project<BufferedImage> project, ProjectImageEntry<BufferedImage> entry, int w, int h) throws Exception {
+        var builderBefore = entry.getServerBuilder();
+        int imagesBefore = project.getImageList().size();
+        Path map = DensitySidecar.sidecarPathFor(project, entry);
+        var added = DensityChannelAttacher.addChannelsEntry(
+                project, entry, map, DensityChannelAttacher.KIND_DENSITY, null);
+        check(added != entry && project.getImageList().size() == imagesBefore + 1,
+                "a new project entry holds the channels (" + added.getImageName() + ")");
+        check(entry.getServerBuilder().equals(builderBefore), "the source entry's image is unchanged");
+        var md = added.getMetadata();
+        note("new entry metadata: " + md);
+        check(DensityChannelAttacher.KIND_DENSITY.equals(md.get(DensityChannelAttacher.META_KIND))
+                        && entry.getImageName().equals(md.get(DensityChannelAttacher.META_SOURCE))
+                        && map.getFileName().toString().equals(md.get(DensityChannelAttacher.META_MAP)),
+                "the new entry is tagged in the project metadata (kind, source image, map file)");
+        var again = DensityChannelAttacher.addChannelsEntry(
+                project, entry, map, DensityChannelAttacher.KIND_DENSITY, null);
+        check(again.getID().equals(added.getID()) && project.getImageList().size() == imagesBefore + 1,
+                "adding the same map again refreshes that entry instead of making another");
+
+        // Reopen from disk, as QuPath would after a restart.
+        Project<BufferedImage> reloaded = ProjectIO.loadProject(project.getPath().toFile(), BufferedImage.class);
+        var reopened = reloaded.getImageList().stream()
+                .filter(e -> e.getID().equals(added.getID()))
+                .findFirst()
+                .orElse(null);
+        check(reopened != null, "the channels entry is in the saved project");
+        if (reopened == null) return;
+        ImageData<BufferedImage> data = reopened.readImageData();
+        ImageServer<BufferedImage> server = data.getServer();
+        ImageServer<BufferedImage> source = entry.getServerBuilder().build();
+        try (DensityMapReader reader = DensityMapReader.open(map)) {
+            DensityMapInfo info = reader.info();
+            int sig = info.channelIndex("Signal density (no threshold)");
+            float[] grid = reader.readChannel(sig);
+            int srcCh = source.nChannels();
+            check(server.nChannels() == srcCh + info.channels().size() && server.getWidth() == w && server.getHeight() == h,
+                    "the reopened entry has the image's channels then the map's, at the image's size ("
+                            + server.nChannels() + ")");
+            check(server.getPixelType() == qupath.lib.images.servers.PixelType.FLOAT32,
+                    "it is float32, so map values are not cut to integers");
+            double worst = 0;
+            int fractional = 0;
+            int n = 0;
+            for (int k = 1; k <= 9; k++) {
+                int x = w * k / 10;
+                int y = h * ((k * 7) % 10 + 1) / 12;
+                float expect = info.sample(grid, x + 0.5, y + 0.5);
+                if (!Float.isFinite(expect)) continue;
+                Raster r = server.readRegion(RegionRequest.createInstance(server.getPath(), 1.0, x, y, 1, 1))
+                        .getRaster();
+                Raster s0 = source.readRegion(RegionRequest.createInstance(source.getPath(), 1.0, x, y, 1, 1))
+                        .getRaster();
+                worst = Math.max(worst, Math.abs(r.getSampleDouble(0, 0, srcCh + sig) - expect));
+                worst = Math.max(worst, Math.abs(r.getSampleDouble(0, 0, 0) - s0.getSampleDouble(0, 0, 0)));
+                if (expect != Math.rint(expect)) fractional++;
+                n++;
+            }
+            check(n > 0 && worst < 1e-6 && fractional > 0, String.format(
+                    "map and image values read back exactly through the channels entry (worst %.2e over %d points,"
+                            + " %d fractional)", worst, n, fractional));
+        } finally {
+            server.close();
+            source.close();
+        }
     }
 
     private static void finish() {
@@ -386,22 +493,18 @@ public final class DensityMapTilingScenario {
         System.exit(failures == 0 ? 0 : 1);
     }
 
-    private static double sample(ImageServer<BufferedImage> s, int x, int y, int band) throws Exception {
-        BufferedImage img = s.readRegion(RegionRequest.createInstance(s.getPath(), 1.0, x, y, 1, 1));
-        return img.getRaster().getSampleDouble(0, 0, band);
-    }
 
     private static Path run(Project<BufferedImage> project, ProjectImageEntry<BufferedImage> entry, String mode,
             double stepUm, String threshold) throws Exception {
         var spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
                 WINDOW_UM, OVERLAP, "Raw intensity", threshold, 2000, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0, null,
-                false, false, mode, stepUm, true, List.of(CLASS), true,
+                false, mode, stepUm, true, List.of(CLASS), true,
                 List.of(new PixelPositivitySpec(0, "Channel 1", PixelPositivitySpec.OP_GT, POS_THRESHOLD)));
         long t0 = System.nanoTime();
         Thread t = new FiberDensityMapWorkflow().runForEntries(spec, List.of(entry), project, null);
         t.join();
         Path out = project.getPath().getParent().resolve("fiber-analysis/density-maps")
-                .resolve(qupath.ext.fiberanalysis.analysis.DensitySidecar.sanitize(entry.getImageName())
+                .resolve(DensitySidecar.sanitize(entry.getImageName())
                         + "_density.ome.tif");
         check(Files.isRegularFile(out), mode + " mode wrote a sidecar");
         // Only the suffix: an image name can itself contain ".ome.tif".

@@ -43,8 +43,11 @@ import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
 
 /**
- * Pick a density or classifier map for the open image and show one channel as
- * a coloured overlay ({@link DensityOverlay}). Non-modal; follows the open image.
+ * Pick a density or classifier map and show one channel as a coloured overlay
+ * ({@link DensityOverlay}). Lists the open image's own maps first, then maps
+ * computed on other project images of the same size -- other images of the
+ * same slide, such as a birefringence map over the brightfield image.
+ * Non-modal; follows the open image.
  */
 public final class DensityOverlayDialog {
 
@@ -60,7 +63,10 @@ public final class DensityOverlayDialog {
     private TextField maxField;
     private Label status;
 
-    private DensityOverlay.Channel loaded;
+    private DensityOverlay.Loaded loaded;
+
+    /** Display text for each listed map. */
+    private final java.util.Map<Path, String> labels = new java.util.HashMap<>();
 
     /**
      * Reads run one at a time: two servers on the same OME-TIFF can share a
@@ -74,6 +80,8 @@ public final class DensityOverlayDialog {
             });
 
     private PathOverlay shown;
+    private boolean loading;
+    private boolean showWhenLoaded;
     private ChangeListener<ImageData<BufferedImage>> imageListener;
 
     /** @param qupath the QuPath window */
@@ -90,8 +98,8 @@ public final class DensityOverlayDialog {
 
         mapCombo = new ComboBox<>();
         mapCombo.setMaxWidth(Double.MAX_VALUE);
-        mapCombo.setCellFactory(l -> new NameCell());
-        mapCombo.setButtonCell(new NameCell());
+        mapCombo.setCellFactory(l -> new NameCell(labels));
+        mapCombo.setButtonCell(new NameCell(labels));
         channelCombo = new ComboBox<>();
         channelCombo.setMaxWidth(Double.MAX_VALUE);
         colourCombo = new ComboBox<>(
@@ -188,22 +196,74 @@ public final class DensityOverlayDialog {
         return out;
     }
 
+    /**
+     * Every map in the project: the image's own first, then any other image's
+     * whose source size matches, labelled with the image it came from.
+     *
+     * @param project   the project
+     * @param entry     the image the maps would be shown on
+     * @param width     its width
+     * @param height    its height
+     * @param labelsOut filled with a display label per map
+     * @return the maps
+     */
+    public static List<Path> mapsForImage(
+            Project<BufferedImage> project,
+            ProjectImageEntry<BufferedImage> entry,
+            int width,
+            int height,
+            java.util.Map<Path, String> labelsOut) {
+        List<Path> own = mapsFor(project, entry);
+        for (Path p : own) labelsOut.put(p, p.getFileName().toString());
+        List<Path> out = new ArrayList<>(own);
+        for (ProjectImageEntry<BufferedImage> other : project.getImageList()) {
+            if (other == entry) continue;
+            for (Path p : mapsFor(project, other)) {
+                if (own.contains(p) || out.contains(p)) continue;
+                try {
+                    DensityMapInfo info = DensitySidecar.readInfo(p);
+                    if (!info.fits(width, height)) continue;
+                    String from = info.sourceImage() != null ? info.sourceImage() : other.getImageName();
+                    labelsOut.put(p, p.getFileName() + "  (from " + from + ")");
+                    out.add(p);
+                } catch (IOException e) {
+                    logger.debug("Skipping map {}: {}", p.getFileName(), e.getMessage());
+                }
+            }
+        }
+        return out;
+    }
+
     private void refreshMaps() {
         ImageData<BufferedImage> data = qupath.getImageData();
         Project<BufferedImage> project = qupath.getProject();
         ProjectImageEntry<BufferedImage> entry = project == null || data == null ? null : project.getEntry(data);
-        List<Path> maps = mapsFor(project, entry);
-        mapCombo.getItems().setAll(maps);
-        if (maps.isEmpty()) {
-            status.setText(
-                    entry == null
-                            ? "Open a project image first."
-                            : "No density or classifier map for this image yet. Run 'Project density map...'"
-                                    + " or 'Apply window classifier...' first.");
-            channelCombo.getItems().clear();
-        } else {
-            mapCombo.getSelectionModel().select(0);
+        mapCombo.getItems().clear();
+        channelCombo.getItems().clear();
+        if (entry == null) {
+            status.setText("Open a project image first.");
+            return;
         }
+        int w = data.getServer().getWidth();
+        int h = data.getServer().getHeight();
+        status.setText("Looking for maps...");
+        reader.submit(() -> {
+            java.util.Map<Path, String> found = new java.util.HashMap<>();
+            List<Path> maps = mapsForImage(project, entry, w, h, found);
+            HeadlessFx.runLater(() -> {
+                if (qupath.getImageData() != data) return;
+                labels.clear();
+                labels.putAll(found);
+                mapCombo.getItems().setAll(maps);
+                if (maps.isEmpty()) {
+                    status.setText("No density or classifier map for this image, or for another image of the"
+                            + " same size. Run 'Project density map...' or 'Apply window classifier...' first.");
+                } else {
+                    status.setText("");
+                    mapCombo.getSelectionModel().select(0);
+                }
+            });
+        });
     }
 
     private void refreshChannels() {
@@ -226,10 +286,11 @@ public final class DensityOverlayDialog {
         int ch = channelCombo.getSelectionModel().getSelectedIndex();
         loaded = null;
         if (map == null || ch < 0) return;
+        loading = true;
         status.setText("Reading " + channelCombo.getValue() + "...");
         reader.submit(() -> {
             try {
-                DensityOverlay.Channel c = DensityOverlay.read(map, ch);
+                DensityOverlay.Loaded c = DensityOverlay.load(map, ch);
                 HeadlessFx.runLater(() -> {
                     // The selection may have moved on while this was reading.
                     if (!map.equals(mapCombo.getValue())
@@ -237,27 +298,35 @@ public final class DensityOverlayDialog {
                         return;
                     }
                     loaded = c;
+                    loading = false;
+                    var lat = c.info().lattice();
                     status.setText(String.format(
                             Locale.ROOT,
-                            "%s: %d x %d for a %d x %d image.",
+                            "%s: %d x %d cells of %d px (%s) for a %d x %d image.",
                             channelCombo.getValue(),
-                            c.width(),
-                            c.height(),
-                            c.fullWidth(),
-                            c.fullHeight()));
+                            lat.gridW(),
+                            lat.gridH(),
+                            lat.cellPx(),
+                            c.info().smooth() ? "smooth" : "one value per cell",
+                            c.info().sourceWidth(),
+                            c.info().sourceHeight()));
                     if (autoRangeAfter) autoRange();
-                    if (shown != null) render();
+                    if (shown != null || showWhenLoaded) render();
                 });
             } catch (Exception e) {
                 logger.warn("Could not read channel {} of {}", ch, map.getFileName(), e);
-                HeadlessFx.runLater(() -> status.setText("Could not read the map: " + e.getMessage()));
+                HeadlessFx.runLater(() -> {
+                    loading = false;
+                    showWhenLoaded = false;
+                    status.setText("Could not read the map: " + e.getMessage());
+                });
             }
         });
     }
 
     private void autoRange() {
         if (loaded == null) return;
-        double[] r = DensityOverlay.percentileRange(loaded.values(), 1, 99);
+        double[] r = DensityOverlay.percentileRange(loaded.grid(), 1, 99);
         minField.setText(String.format(Locale.ROOT, "%.4g", r[0]));
         maxField.setText(String.format(Locale.ROOT, "%.4g", r[1]));
         if (shown != null) render();
@@ -265,9 +334,16 @@ public final class DensityOverlayDialog {
 
     private void render() {
         if (loaded == null) {
-            status.setText("Choose a map and channel first.");
+            if (loading) {
+                // Show was pressed while the channel was still being read.
+                showWhenLoaded = true;
+                status.setText("Reading " + channelCombo.getValue() + "; it will be shown when ready.");
+            } else {
+                status.setText("Choose a map and channel first.");
+            }
             return;
         }
+        showWhenLoaded = false;
         double min;
         double max;
         try {
@@ -288,8 +364,14 @@ public final class DensityOverlayDialog {
             Dialogs.showErrorMessage(TITLE, "Open the image the map belongs to first.");
             return;
         }
-        BufferedImage img = DensityOverlay.colour(loaded, cmap, min, max);
-        shown = DensityOverlay.show(viewer, qupath.getOverlayOptions(), loaded, img);
+        var server = viewer.getImageData().getServer();
+        if (!loaded.info().fits(server.getWidth(), server.getHeight())) {
+            status.setText("This map was made for a " + loaded.info().sourceWidth() + " x "
+                    + loaded.info().sourceHeight() + " image; the open image is " + server.getWidth() + " x "
+                    + server.getHeight() + ".");
+            return;
+        }
+        shown = DensityOverlay.show(viewer, qupath.getOverlayOptions(), loaded, cmap, min, max);
         logger.info("Density overlay: {} [{}..{}] {}", channelCombo.getValue(), min, max, colourCombo.getValue());
     }
 
@@ -299,12 +381,21 @@ public final class DensityOverlayDialog {
         shown = null;
     }
 
-    /** Shows a map's file name rather than its full path. */
+    /** Shows a map's label rather than its full path. */
     private static final class NameCell extends ListCell<Path> {
+        private final java.util.Map<Path, String> labels;
+
+        NameCell(java.util.Map<Path, String> labels) {
+            this.labels = labels;
+        }
+
         @Override
         protected void updateItem(Path p, boolean empty) {
             super.updateItem(p, empty);
-            setText(empty || p == null ? null : p.getFileName().toString());
+            setText(
+                    empty || p == null
+                            ? null
+                            : labels.getOrDefault(p, p.getFileName().toString()));
         }
     }
 }

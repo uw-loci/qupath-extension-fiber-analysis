@@ -9,7 +9,6 @@
  */
 package qupath.ext.fiberanalysis.analysis;
 
-import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,37 +27,23 @@ import qupath.lib.projects.ProjectImageEntry;
  * {@link FiberDensityMapWorkflow} writes per image.
  *
  * <p>The sidecar is an OME-TIFF at
- * {@code <project>/fiber-analysis/density-maps/<sanitized-name>_density.ome.tif}.
- * Pixel type is float32; NaN is the no-data sentinel; channel values are
- * already in physical units. The OME-XML description block lists channels
- * (one row per channel, {@code [N] name=...; unit=...}) which are parsed
- * back for the sampling command. Legacy uint16 sidecars also carried
- * {@code scale=...; offset=...} per channel; the parser still accepts those
- * rows for back-compat reads but new writes do not emit them.
+ * {@code <project>/fiber-analysis/density-maps/<sanitized-name>_density.ome.tif},
+ * one pixel per grid cell. Its description says where the grid sits on the
+ * source image and lists the channels ({@link SidecarDescription}).
  */
 public final class DensitySidecar {
 
     private static final Logger logger = LoggerFactory.getLogger(DensitySidecar.class);
 
-    /**
-     * Per-channel descriptor read back from the sidecar's OME-XML description.
-     *
-     * <p>{@code scale}/{@code offset} are kept for legacy uint16 sidecars that
-     * encoded {@code real = raw * scale + offset}; new float32 sidecars
-     * default to {@code scale=1.0, offset=0.0} (values already physical).
-     */
+    /** A channel's name and unit as the map file lists them. */
     public static final class ChannelInfo {
         public final int index;
         public final String name;
-        public final double scale;
-        public final double offset;
         public final String unit; // may be null
 
-        public ChannelInfo(int index, String name, double scale, double offset, String unit) {
+        public ChannelInfo(int index, String name, String unit) {
             this.index = index;
             this.name = name;
-            this.scale = scale;
-            this.offset = offset;
             this.unit = unit;
         }
     }
@@ -132,67 +117,23 @@ public final class DensitySidecar {
     }
 
     /**
-     * Companion path to the sidecar carrying the auto-reattach opt-in. A
-     * tiny ASCII file -- presence is the signal; the body holds a few
-     * provenance fields so the user can grep the project tree to see
-     * which images have auto-reattach enabled.
-     */
-    public static Path markerPathFor(Path sidecar) {
-        if (sidecar == null) return null;
-        return sidecar.resolveSibling(sidecar.getFileName().toString() + ".attach");
-    }
-
-    /** Companion path for the project entry's sidecar; null if the project has no path. */
-    public static Path markerPathFor(Project<?> project, ProjectImageEntry<?> entry) {
-        Path sidecar = sidecarPathFor(project, entry);
-        return sidecar == null ? null : markerPathFor(sidecar);
-    }
-
-    /** True iff the auto-reattach marker is present beside the sidecar. */
-    public static boolean autoReattachEnabled(Path sidecar) {
-        Path marker = markerPathFor(sidecar);
-        return marker != null && Files.isRegularFile(marker);
-    }
-
-    /**
-     * Write (or refresh) the auto-reattach marker file beside the sidecar.
-     * Body is a small ASCII block so a user grepping the project tree can
-     * see which images have auto-reattach enabled and with what window size.
-     */
-    public static void writeAutoReattachMarker(Path sidecar, double windowSizeUm) throws IOException {
-        Path marker = markerPathFor(sidecar);
-        if (marker == null) return;
-        String body = "fiber_density_auto_reattach=true\n"
-                + String.format(java.util.Locale.ROOT, "window_size_um=%.6g%n", windowSizeUm)
-                + "sidecar=" + sidecar.getFileName() + "\n";
-        Files.writeString(marker, body, java.nio.charset.StandardCharsets.US_ASCII);
-        logger.info("Wrote auto-reattach marker: {}", marker);
-    }
-
-    /** Remove the auto-reattach marker. Returns true if a marker was deleted. */
-    public static boolean clearAutoReattachMarker(Path sidecar) {
-        Path marker = markerPathFor(sidecar);
-        if (marker == null) return false;
-        try {
-            return Files.deleteIfExists(marker);
-        } catch (IOException ex) {
-            logger.warn("Could not delete auto-reattach marker {}: {}", marker, ex.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * Parse the per-channel quantization block from the sidecar's OME-XML
-     * image description. Matches rows like
-     * {@code  [3] name=Skeleton length (um); scale=1.23e-5; offset=0.0; unit=um}.
-     * Returns the list in channel-index order; missing or malformed rows are
-     * skipped (logged at warn).
+     * @param sidecar a map file
+     * @return its channel names and units
+     * @throws IOException if it cannot be read or predates grid-resolution maps
      */
     public static List<ChannelInfo> readChannelInfos(Path sidecar) throws IOException {
-        if (sidecar == null || !Files.exists(sidecar)) {
-            throw new IOException("Density sidecar not found: " + sidecar);
-        }
+        return readInfo(sidecar).channels();
+    }
 
+    /**
+     * @param sidecar a density or classifier map file
+     * @return where its grid sits on the source image, how to draw it, and its channels
+     * @throws IOException if it cannot be read or predates grid-resolution maps
+     */
+    public static DensityMapInfo readInfo(Path sidecar) throws IOException {
+        if (sidecar == null || !Files.exists(sidecar)) {
+            throw new IOException("Map file not found: " + sidecar);
+        }
         IMetadata meta;
         try {
             ServiceFactory factory = new ServiceFactory();
@@ -201,48 +142,25 @@ public final class DensitySidecar {
         } catch (Exception ex) {
             throw new IOException("Could not create OMEXML metadata service", ex);
         }
-
         try (ImageReader reader = new ImageReader()) {
             reader.setMetadataStore(meta);
             reader.setId(sidecar.toString());
         } catch (Exception ex) {
-            throw new IOException("Bio-Formats could not open sidecar: " + sidecar, ex);
+            throw new IOException("Bio-Formats could not open map file: " + sidecar, ex);
         }
-
         String desc;
         try {
             desc = meta.getImageDescription(0);
         } catch (Exception ex) {
-            throw new IOException("Sidecar has no Image:0 description", ex);
+            throw new IOException("Map file has no image description: " + sidecar, ex);
         }
         if (desc == null || desc.isBlank()) {
-            throw new IOException("Sidecar image description is empty -- cannot recover quantization");
+            throw new IOException("Map file image description is empty: " + sidecar);
         }
-        return parseChannelInfos(desc);
-    }
-
-    static List<ChannelInfo> parseChannelInfos(String desc) {
-        return SidecarDescription.parse(desc);
-    }
-
-    /**
-     * Average the valid pixels of one channel across an entire BufferedImage
-     * tile. {@code NaN} is treated as no-data (sentinel) and skipped. Returns
-     * NaN when every pixel in the tile is no-data for this channel.
-     */
-    public static double meanValidChannel(BufferedImage tile, int channelIndex) {
-        if (tile == null) return Double.NaN;
-        int w = tile.getWidth();
-        int h = tile.getHeight();
-        float[] samples = tile.getRaster().getSamples(0, 0, w, h, channelIndex, (float[]) null);
-        double sum = 0.0;
-        long count = 0L;
-        for (float v : samples) {
-            if (Float.isNaN(v)) continue;
-            sum += v;
-            count++;
+        try {
+            return SidecarDescription.parseInfo(desc);
+        } catch (IllegalArgumentException e) {
+            throw new IOException(sidecar.getFileName() + ": " + e.getMessage(), e);
         }
-        if (count == 0) return Double.NaN;
-        return sum / (double) count;
     }
 }

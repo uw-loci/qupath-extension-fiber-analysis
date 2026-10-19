@@ -399,21 +399,17 @@ public final class FiberDensityMapWorkflow {
             }
         }
 
-        // Sidecar is written at SOURCE pixel dimensions, each value drawn over
-        // the block centred on the window that produced it, so Attach /
-        // Sample / standalone-open all work in identity source-pixel coords.
-        // Channels are float32, so the values on disk ARE the physical values.
+        // One pixel per grid cell; the description places the grid on the
+        // source image, so readers draw it at any zoom.
         String safeName = sanitize(entry.getImageName());
         Path outPath = outRoot.resolve(safeName + "_density.ome.tif");
         DensityTiffWriter.write(
-                outPath.toString(), srcW, srcH, pxUm, geo.lattice(), channels, accum, spec.smoothInterpolation);
-        // Drop / refresh the auto-reattach marker. We intentionally do not
-        // delete an existing marker when the user runs without the checkbox
-        // checked -- removing the marker is an explicit user action via the
-        // "Stop auto-reattaching density channels" menu command.
-        if (spec.writeAutoReattachMarker) {
-            DensitySidecar.writeAutoReattachMarker(outPath, spec.windowSizeUm);
-        }
+                outPath.toString(),
+                new DensityMapInfo(
+                        geo.lattice(), srcW, srcH, pxUm, spec.smoothInterpolation, entry.getImageName(), List.of()),
+                channels,
+                accum);
+        DensityChannelAttacher.refreshIfPresent(project, entry, outPath, DensityChannelAttacher.KIND_DENSITY, null);
 
         // Provenance triple: <image>_density_params.json + _params.txt + _rerun.groovy
         // next to the sidecar so the run can be audited / re-executed from disk.
@@ -690,20 +686,9 @@ public final class FiberDensityMapWorkflow {
         public final double rollingBallRadiusUm;
         public final Double projectThresholdNorm; // null = not used
         /**
-         * When true (and Channels mode was picked), the workflow writes a
-         * companion {@code <sidecar>.attach} marker file alongside the
-         * sidecar. The extension's image-open hook reads this marker to
-         * auto-attach the channels on future opens. The dialog's pre-run
-         * warning for RGB base images was the consent moment; the auto-hook
-         * does not re-prompt.
-         */
-        public final boolean writeAutoReattachMarker;
-        /**
-         * When true, the sidecar is bilinear-interpolated from the compact
-         * grid into source-pixel space (smooth heatmap). When false, each
-         * grid cell is nearest-neighbour replicated across its window
-         * footprint (visible tile boundaries). Both modes are sentinel-aware:
-         * raw=0 / no-data corners stay transparent.
+         * Recorded in the map: readers interpolate between cell centres
+         * (smooth heatmap) when true, and fill each cell when false. The
+         * stored grid is the same either way.
          */
         public final boolean smoothInterpolation;
 
@@ -762,7 +747,6 @@ public final class FiberDensityMapWorkflow {
                 boolean invertIntensity,
                 double rollingBallRadiusUm,
                 Double projectThresholdNorm,
-                boolean writeAutoReattachMarker,
                 boolean smoothInterpolation,
                 String densityMode,
                 double pixelStepUm,
@@ -783,7 +767,6 @@ public final class FiberDensityMapWorkflow {
             this.invertIntensity = invertIntensity;
             this.rollingBallRadiusUm = rollingBallRadiusUm;
             this.projectThresholdNorm = projectThresholdNorm;
-            this.writeAutoReattachMarker = writeAutoReattachMarker;
             this.smoothInterpolation = smoothInterpolation;
             String mode = densityMode == null ? "window" : densityMode.trim().toLowerCase();
             if (!"window".equals(mode) && !"pixel".equals(mode)) {
@@ -831,7 +814,6 @@ public final class FiberDensityMapWorkflow {
             this.invertIntensity = o.invertIntensity;
             this.rollingBallRadiusUm = o.rollingBallRadiusUm;
             this.projectThresholdNorm = thresholdNorm;
-            this.writeAutoReattachMarker = o.writeAutoReattachMarker;
             this.smoothInterpolation = o.smoothInterpolation;
             this.densityMode = o.densityMode;
             this.pixelStepUm = o.pixelStepUm;
@@ -904,7 +886,6 @@ public final class FiberDensityMapWorkflow {
             m.put("invertIntensity", invertIntensity);
             m.put("rollingBallRadiusUm", rollingBallRadiusUm);
             m.put("projectThresholdNorm", projectThresholdNorm);
-            m.put("writeAutoReattachMarker", writeAutoReattachMarker);
             m.put("smoothInterpolation", smoothInterpolation);
             m.put("densityMode", densityMode);
             m.put("pixelStepUm", pixelStepUm);
@@ -967,7 +948,6 @@ public final class FiberDensityMapWorkflow {
                                     && !p.get("projectThresholdNorm").isJsonNull()
                             ? p.get("projectThresholdNorm").getAsDouble()
                             : null,
-                    jbool(p, "writeAutoReattachMarker", false),
                     jbool(p, "smoothInterpolation", false),
                     jstring(p, "densityMode", "window"),
                     jdouble(p, "pixelStepUm", 0.0),

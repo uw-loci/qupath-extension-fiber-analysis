@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.analysis.AnnotationClassFilter;
 import qupath.ext.fiberanalysis.analysis.DensityChannelSpec;
 import qupath.ext.fiberanalysis.analysis.DensityLattice;
+import qupath.ext.fiberanalysis.analysis.DensityMapInfo;
 import qupath.ext.fiberanalysis.analysis.DensityTiffWriter;
 import qupath.ext.fiberanalysis.analysis.NpzReader;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
@@ -473,16 +474,13 @@ public final class WindowClassifierWorkflow {
     // ======================= outputs =======================
 
     /**
-     * Write the probability map as a float32 OME-TIFF sidecar.
-     *
-     * <p>The fourth producer of a contract {@code ObjectDensityComputer},
-     * {@code PixelPositivityComputer} and the density window mode already
-     * serve: a {@code float[gridW * gridH]} per channel, NaN for no data,
-     * upsampled to source dimensions by the writer. Nothing new is plumbed.
+     * Write the probability map: one float32 pixel per window, placed on the
+     * source image by its description, the same format as a density map.
      *
      * @param result       the per-window outputs
      * @param outputPath   where to write; see
      *                     {@code DensitySidecar.classifierSidecarPathFor}
+     * @param sourceImage  name of the image the windows were laid on
      * @param srcW         source image width
      * @param srcH         source image height
      * @param srcPxUm      source pixel size
@@ -492,7 +490,14 @@ public final class WindowClassifierWorkflow {
      * @throws IOException if the sidecar cannot be written
      */
     public static List<DensityChannelSpec> writeProbabilityMap(
-            ApplyResult result, Path outputPath, int srcW, int srcH, double srcPxUm, int regionX, int regionY)
+            ApplyResult result,
+            Path outputPath,
+            String sourceImage,
+            int srcW,
+            int srcH,
+            double srcPxUm,
+            int regionX,
+            int regionY)
             throws IOException {
 
         int n = result.features().windowCount();
@@ -524,21 +529,18 @@ public final class WindowClassifierWorkflow {
         grids.add(predicted);
 
         Files.createDirectories(outputPath.getParent());
+        DensityLattice lattice = DensityLattice.windows(
+                result.features().gridW(),
+                result.features().gridH(),
+                result.features().stridePx(),
+                result.features().windowPx(),
+                regionX,
+                regionY);
         DensityTiffWriter.write(
                 outputPath.toString(),
-                srcW,
-                srcH,
-                srcPxUm,
-                DensityLattice.windows(
-                        result.features().gridW(),
-                        result.features().gridH(),
-                        result.features().stridePx(),
-                        result.features().windowPx(),
-                        regionX,
-                        regionY),
+                new DensityMapInfo(lattice, srcW, srcH, srcPxUm, false, sourceImage, List.of()),
                 channels,
-                grids.toArray(new float[0][]),
-                false);
+                grids.toArray(new float[0][]));
         logger.info(
                 "Classifier map: {} ({} channels over a {}x{} grid)",
                 outputPath,

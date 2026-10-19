@@ -35,7 +35,7 @@ import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.viewer.QuPathViewer;
-import qupath.lib.gui.viewer.overlays.BufferedImageOverlay;
+import qupath.ext.fiberanalysis.analysis.DensityMapOverlay;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.ImageServers;
@@ -127,7 +127,7 @@ public final class RgbOverlayScenario {
             // background without inverting.
             var spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
                     WINDOW_UM, OVERLAP, "Saturation (HSV)", "Otsu", 0, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0,
-                    null, false, true, "window", 0.0, false, List.of(), false, List.of());
+                    null, true, "window", 0.0, false, List.of(), false, List.of());
             long t0 = System.nanoTime();
             Thread t = new FiberDensityMapWorkflow().runForEntries(spec, List.of(entry), project, null);
             t.join();
@@ -211,6 +211,8 @@ public final class RgbOverlayScenario {
         var combos = onFx(() -> new ArrayList<>(stage.getScene().getRoot().lookupAll(".combo-box")));
         @SuppressWarnings("unchecked")
         var channelCombo = (ComboBox<String>) combos.get(1);
+        // Maps are listed in the background; wait for the channel list first.
+        for (int i = 0; i < 300 && onFx(() -> channelCombo.getItems().isEmpty()); i++) Thread.sleep(100);
         onFx(() -> {
             channelCombo.getSelectionModel().select(CHANNEL);
             return null;
@@ -221,7 +223,9 @@ public final class RgbOverlayScenario {
         check(!onFx(minField::getText).isBlank(), String.format(
                 "the channel is read and a range filled in (%.1f s)", (System.nanoTime() - t0) / 1e9));
         clickButton(stage, "Show");
-        check(onFx(viewer::getCustomPixelLayerOverlay) instanceof BufferedImageOverlay, "the map is on the pixel layer");
+        for (int i = 0; i < 200 && !(onFx(viewer::getCustomPixelLayerOverlay) instanceof DensityMapOverlay); i++)
+            Thread.sleep(50);
+        check(onFx(viewer::getCustomPixelLayerOverlay) instanceof DensityMapOverlay, "the map is on the pixel layer");
         check(onFx(() -> qupath.getImageData().getServer().isRGB()), "the slide is still an RGB image with the overlay on");
 
         BufferedImage full = render(viewer, outDir.resolve("rgb_1_opacity_100.png"));

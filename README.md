@@ -267,34 +267,27 @@ top of the file.
 
 A separate workflow for **whole-slide density-map output**: tile-streams
 each selected image, runs the same per-window analysis the regular
-"Run analysis..." dialog does, and writes the result as a tiled
-pyramidal uint16 OME-TIFF sidecar per image. The sidecar can be
-**sampled** into object measurements (preserves the native RGB
-display) or **attached as extra channels** on the source image
-(works for fluorescence WSIs without UX impact; on RGB it changes
-how the image renders, see warnings below).
+"Run analysis..." dialog does, and writes a small map file per image
+(one float32 value per channel per window step) at
+`<project>/fiber-analysis/density-maps/<image>_density.ome.tif`.
+Show it as an overlay, sample it into object measurements, or add it as
+channels in a new project entry; the original image is never changed.
 
 Menu: `Extensions > Fiber Analysis > Project density map...`
 
-### Output mode (you pick at dialog time)
+### Output (you pick at dialog time)
 
-- **Sidecar + sampling commands** (default; safer for RGB). The
-  density TIFF lives at
-  `<project>/fiber-analysis/density-maps/<image>_density.ome.tif`
-  and is consumed via the new "Sample fiber density into
-  measurements" menu command. The base image's native display is
-  untouched.
-- **Attach as channels**. Same compute, but after the sidecar lands
-  the workflow concatenates its channels onto the source server in
-  the open viewer. The user can then use QuPath's built-in
-  `Analyze > Calculate Features > Add intensity features`, the
-  object classifier, density-aware cell classifiers, etc. -- the
-  density channels behave like any other channel. **On RGB base
-  images** the wrapper forces multi-channel uint16 and QuPath's
-  native RGB-display path is lost; the attacher auto-configures
-  channels 0-2 with red / green / blue LUT colours so the user
-  gets something resembling the RGB look back, but the result is
-  not pixel-identical to the original viewer state.
+- **Map file only** (default). Use `Show density map as overlay...`
+  and `Sample fiber density into measurements`.
+- **Also add each image with its density channels as a new entry**.
+  After the run, each image gets a new project entry
+  `<image> [fiber density]`: the image converted to 32-bit float,
+  followed by the map's channels at the image's size, for QuPath's
+  `Add intensity features`, thresholders or classifiers. RGB images
+  are shown red / green / blue over 0-255 so they look like the
+  original. The entry is tagged `Fiber analysis`, `Fiber source image`
+  and `Fiber map` in the project metadata for sorting. It reads the map
+  file when opened, so keep the file and the extension installed.
 
 ### Validation rules in the dialog
 
@@ -305,57 +298,35 @@ gates the Run button:
 
 - Any selected image **without pixel calibration** -- **blocked**
   in either mode (the um window size can't be translated).
-- **Channels mode + mixed pixel types** in the selection --
-  **blocked** (concat requires a single pixel type). Switch to
-  Sidecar or split into separate batches.
-- **Channels mode + RGB base** image(s) -- **warned but allowed**;
-  the user sees the display-impact note before they hit Run.
-- Sidecar mode always allowed (after the calibration gate).
+- Otherwise ready; the banner says whether each image will also get a
+  channels entry.
 
-### Sidecar OME-TIFF format
+### Map file format
 
-- uint16 multi-channel, planar (one IFD per channel).
-- 256x256 tiles, pyramid halving levels down to ~256 px max-dim,
-  LZW compression.
-- Channel names match the QuPath measurement-table column names
-  (`Fiber coverage (%)`, `HDM`, `Ridge count`, `Skeleton length
-  (um)`, `Branch points`, `Mean angle (deg)`, `Order parameter`),
-  so a user reading the channel list sees the same labels they
-  see in the measurement table.
-- Pixel value `raw=0` is the **no-data sentinel** (every metric is
-  non-negative by construction, so 0 is unambiguous).
-- Per-channel **scale + offset** are encoded in the OME-XML image
-  description (one row per channel); recover real units via
-  `real = raw * scale + offset`.
-- Pixel size in the OME-XML = `window_stride_px * source_pixel_size_um`
-  so the sidecar aligns to the source physically.
-
-### Auto-reattach across sessions (opt-in)
-
-Channels mode also exposes an **"Auto-reattach channels on image
-open"** checkbox in the dialog. When checked, the workflow writes
-a small ASCII marker file `<sidecar>.attach` (a few hundred bytes,
-carrying `window_size_um` and the sidecar filename) beside the
-OME-TIFF. The extension installs a listener on QuPath's
-`imageDataProperty` that, on every future open of an image with
-both a sidecar and the marker, calls the attacher without
-re-prompting. Off by default; explicit per-run opt-in.
-
-To **stop** auto-reattaching: `Extensions > Fiber Analysis > Stop
-auto-reattaching density channels` deletes the marker for the
-currently-open image. The OME-TIFF stays on disk for sampling and
-manual reattach. Equivalent if you delete the `.attach` file
-yourself.
+- One float32 value per channel per window step (not per image
+  pixel), planar, 256x256 tiles, LZW; halving pyramid levels (each the
+  NaN-aware mean of the level below) only when the grid is larger than
+  256 px.
+- Values are physical; NaN means no data. Channel names match the
+  QuPath measurement-table column names.
+- The image description places the grid on the source image with a
+  `Placement:` line (`source_width`, `source_height`,
+  `source_pixel_um`, `cell_px`, `window_px`, `x0`, `y0`, `grid`,
+  `render`) and names the source image. Grid pixel (i, j) covers source
+  pixels `x0 + i*cell_px` to `x0 + (i+1)*cell_px`; `render` is
+  `bilinear` (interpolate between cell centres) or `nearest`.
+- The OME physical pixel size is `cell_px * source_pixel_um`.
+- Files written before 2026-10-19 were full image resolution (9 GB
+  for a 0.3-gigapixel slide with Smooth on) and are refused; re-run.
 
 ### Menu items at a glance
 
 | Item | What it does |
 |---|---|
-| `Project density map...` | Open the picker, pick images + mode, Run. Writes the sidecar OME-TIFFs (+ marker if opted in); auto-attaches to the currently-open image when Channels mode was picked. |
-| `Sample fiber density into measurements` | For the open image, locates its sidecar, samples per-channel mean of valid pixels within each target object's ROI, writes the per-channel real-units mean as a measurement named `Density: <channel>`. Targets selected objects when any are selected, otherwise all annotations. |
-| `Show density map as overlay...` | Draw one channel of the open image's density or classifier map over it in colour, on QuPath's pixel-classification layer. The image itself is not changed, so RGB images keep their look; opacity and visibility follow QuPath's pixel-classification controls. |
-| `Attach density channels` | Manually attach the sidecar for the currently-open image (one-off, session-only). Warns first on RGB sources. Use after switching to an image whose sidecar already exists. |
-| `Stop auto-reattaching density channels` | Delete the `.attach` marker for the currently-open image. Sidecar stays on disk. |
+| `Project density map...` | Open the picker, pick images, Run. Writes one map file per image; with the channels option, also adds each image with its density channels as a new project entry and opens the current image's. |
+| `Sample fiber density into measurements` | For the open image, reads its map and writes the mean of each channel inside each target object (read every quarter cell; a smaller object takes its centre's value) as `Density: <channel>`. Targets selected objects when any are selected, otherwise all annotations. |
+| `Show density map as overlay...` | Draw one channel of a density or classifier map over the open image in colour, on QuPath's pixel-classification layer: the image's own maps, or a map from another project image of the same size (another image of the same slide). Exact at any zoom; the location bar shows the value under the cursor. The image is not changed. |
+| `Add density channels as a new image` | Add a new project entry: the open image (as float32) followed by its density map's channels, tagged `Fiber analysis` / `Fiber source image` / `Fiber map` in the project metadata. The original entry is not changed; adding again refreshes the same entry. |
 
 ### Limitations carried in v1
 
@@ -470,26 +441,19 @@ fell back to the wrong scale -- the project-density dialog blocks
 uncalibrated images, but if you manually constructed the spec, set
 the pixel size in QuPath first (`Image > Set image type / properties`).
 
-### Density-map: Channels attach changed how my RGB image renders
+### Density-map: measurements from attached channels look wrong
 
-Expected. The wrapper forces multi-channel uint16 and drops QuPath's
-native RGB display path. The attacher auto-configures channels 0-2 as
-red / green / blue so you get the RGB look back, but the result is
-not pixel-identical to the original (auto min/max, channel-mixing
-math). To get back the original display, switch to a different image
-in the project and back, or run `Stop auto-reattaching density
-channels` and re-open the image. **Use Sidecar mode** (the default)
-plus `Sample fiber density into measurements` if you need the
-original RGB display preserved exactly.
+Before 2026-10-19, `Attach density channels` stored the map in the
+image's own pixel type, so on an 8-bit or 16-bit image every map value
+was cut to a whole number (a signal density of 0.12 read 0). Re-run the
+density map, then use `Add density channels as a new image` (32-bit
+float) or `Sample fiber density into measurements`.
 
-### Density-map: auto-reattach is firing for an image I no longer want it on
+### Density-map: "This map file has no placement line"
 
-Run `Extensions > Fiber Analysis > Stop auto-reattaching density
-channels` with that image open. This deletes the `.attach` marker
-file beside the sidecar. The sidecar OME-TIFF itself stays on disk so
-the sampling command and manual reattach still work. To stop on all
-images at once, delete every `<project>/fiber-analysis/density-maps/*.attach`
-in your file manager.
+The map was written before maps were stored at grid resolution.
+Re-run `Project density map...` (or the window classifier) for that
+image.
 
 ### Density-map: "Sample fiber density into measurements" doesn't add any columns
 

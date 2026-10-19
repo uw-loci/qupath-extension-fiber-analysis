@@ -30,29 +30,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Writes the in-memory density grid to a tiled, pyramidal OME-TIFF sidecar
- * via Bio-Formats directly. Pixel type is {@code FLOAT32} so the values on
- * disk ARE the physical values -- a "Fiber coverage (%)" channel reads as
- * 0..100, "Order parameter" as 0..1, etc. No quantization step, no
- * scale/offset reapplication. {@code NaN} is the no-data sentinel.
+ * Writes a density or classifier grid to a tiled OME-TIFF via Bio-Formats:
+ * one float32 pixel per grid cell, one plane per channel, NaN for no data,
+ * values in physical units. The description ({@link SidecarDescription}) says
+ * where the grid sits on the source image, so readers draw it over the image
+ * at any zoom without a full-resolution copy on disk.
  *
- * <p>Output layout:
- *
- * <ul>
- *   <li>float32 multi-channel, planar (one IFD per channel)</li>
- *   <li>Tile size 256x256</li>
- *   <li>Pyramid: native + halving levels while max-dim {@code >= 256}</li>
- *   <li>LZW compression (universally readable)</li>
- *   <li>Per-channel name = QuPath measurement-column name so the user sees
- *       the same string in the channel list and the measurement table</li>
- * </ul>
- *
- * <p>History: this used to be uint16 with a per-channel {@code scale +
- * offset} encoded in the OME-XML description. That made the on-disk file
- * compact but turned the channels into uninterpretable 0..65535 pictures
- * in QuPath's display path -- only our sampling command knew to reapply
- * the affine transform. Switching to float32 doubles the on-disk size but
- * makes the channels read as data everywhere downstream.
+ * <p>Large grids get halving pyramid levels, each the NaN-aware mean of the
+ * cells below it. LZW compression; channel names are the measurement names.
  */
 public final class DensityTiffWriter {
 
@@ -64,71 +49,58 @@ public final class DensityTiffWriter {
     private DensityTiffWriter() {}
 
     /**
-     * Write a density-map sidecar.
+     * Write a map file.
      *
-     * <p>The compact grid is drawn into a sidecar with the SAME pixel
-     * dimensions as the source image, each value placed over the block
-     * centred on the window that produced it ({@link DensityLattice}).
-     * Matching source dimensions lets {@code TransformedServerBuilder.concatChannels}
-     * attach directly without scale plumbing.
-     *
-     * @param outputPath  absolute path ending in {@code .ome.tif}
-     * @param srcW        sidecar pixel width = source image width
-     * @param srcH        sidecar pixel height = source image height
-     * @param srcPxUm     source pixel size in microns
-     * @param lattice     where the grid sits on the source
-     * @param channels    channel descriptors in canonical order; must match
-     *                    {@code grids.length}
-     * @param grids       per-channel float buffers, {@code gridW * gridH}.
-     *                    {@code NaN} = no data; everything else is the physical
-     *                    value.
-     * @param smoothInterpolation bilinear between window centres instead of
-     *                    one flat block per window
+     * @param outputPath absolute path ending in {@code .ome.tif}
+     * @param info       placement on the source image, render mode and source image name
+     *                   (its channel list is ignored)
+     * @param channels   channel descriptors in file order; must match {@code grids.length}
+     * @param grids      per-channel values, {@code gridW * gridH}, NaN = no data
      * @throws IOException if the write fails
      */
-    public static void write(
-            String outputPath,
-            int srcW,
-            int srcH,
-            double srcPxUm,
-            DensityLattice lattice,
-            List<DensityChannelSpec> channels,
-            float[][] grids,
-            boolean smoothInterpolation)
+    public static void write(String outputPath, DensityMapInfo info, List<DensityChannelSpec> channels, float[][] grids)
             throws IOException {
 
         if (channels.size() != grids.length) {
             throw new IllegalArgumentException(
                     "channels/grids size mismatch: " + channels.size() + " / " + grids.length);
         }
-        int cells = lattice.gridW() * lattice.gridH();
+        DensityLattice lattice = info.lattice();
+        int gridW = lattice.gridW();
+        int gridH = lattice.gridH();
         for (float[] g : grids) {
-            if (g.length != cells) {
-                throw new IllegalArgumentException("grid length " + g.length + " != gridW*gridH " + cells);
+            if (g.length != gridW * gridH) {
+                throw new IllegalArgumentException("grid length " + g.length + " != gridW*gridH " + gridW * gridH);
             }
         }
 
         int nChannels = channels.size();
-        double[] downsamples = computePyramidDownsamples(srcW, srcH);
+        double[] downsamples = computePyramidDownsamples(gridW, gridH);
         int numLevels = downsamples.length;
-
-        long estimatedBytes = estimatePixelBytes(srcW, srcH, nChannels, downsamples);
+        long estimatedBytes = estimatePixelBytes(gridW, gridH, nChannels, downsamples);
         boolean bigTiff = estimatedBytes >= (Integer.MAX_VALUE - 1024L * 1024L * 100L);
 
         IMetadata meta = MetadataTools.createOMEXMLMetadata();
-        initializeMetadata(meta, srcW, srcH, nChannels, srcPxUm, channels, downsamples);
+        initializeMetadata(
+                meta,
+                gridW,
+                gridH,
+                nChannels,
+                info.sourcePixelUm() * lattice.cellPx(),
+                SidecarDescription.format(info, channels),
+                channels,
+                downsamples);
 
         logger.info(
-                "Density OME-TIFF (float32): {}x{} (from {}, smooth={}), {} channels, {} levels, tile={}, compression={}, bigTiff={}",
-                srcW,
-                srcH,
-                lattice,
-                smoothInterpolation,
+                "Map OME-TIFF (float32): {}x{} cells of {} px on a {}x{} image (smooth={}), {} channels, {} levels",
+                gridW,
+                gridH,
+                lattice.cellPx(),
+                info.sourceWidth(),
+                info.sourceHeight(),
+                info.smooth(),
                 nChannels,
-                numLevels,
-                TILE_SIZE,
-                COMPRESSION_LZW,
-                bigTiff);
+                numLevels);
 
         // Delete any pre-existing file at the target path before opening the
         // writer. Bio-Formats' OME-TIFF writers, when handed an existing
@@ -141,7 +113,7 @@ public final class DensityTiffWriter {
         try {
             Files.deleteIfExists(java.nio.file.Path.of(outputPath));
         } catch (IOException delEx) {
-            logger.warn("Could not delete existing sidecar at {}: {}", outputPath, delEx.getMessage());
+            logger.warn("Could not delete existing map at {}: {}", outputPath, delEx.getMessage());
         }
 
         try (ImageWriter imageWriter = new ImageWriter()) {
@@ -159,26 +131,25 @@ public final class DensityTiffWriter {
             tiffWriter.setInterleaved(false);
 
             for (int level = 0; level < numLevels; level++) {
-                double d = downsamples[level];
-                int levelW = Math.max(1, (int) (srcW / d));
-                int levelH = Math.max(1, (int) (srcH / d));
+                int d = (int) downsamples[level];
+                int levelW = Math.max(1, gridW / d);
+                int levelH = Math.max(1, gridH / d);
                 try {
                     tiffWriter.setSeries(0);
                     tiffWriter.setResolution(level);
                 } catch (FormatException e) {
                     throw new IOException("Failed to set resolution level " + level, e);
                 }
-
                 for (int c = 0; c < nChannels; c++) {
+                    float[] plane = d == 1 ? grids[c] : blockMean(grids[c], gridW, gridH, d, levelW, levelH);
                     IFD ifd = new IFD();
                     ifd.put(IFD.TILE_WIDTH, TILE_SIZE);
                     ifd.put(IFD.TILE_LENGTH, TILE_SIZE);
-
                     for (int yy = 0; yy < levelH; yy += TILE_SIZE) {
                         int hh = Math.min(TILE_SIZE, levelH - yy);
                         for (int xx = 0; xx < levelW; xx += TILE_SIZE) {
                             int ww = Math.min(TILE_SIZE, levelW - xx);
-                            byte[] buf = packTile(lattice, grids[c], smoothInterpolation, xx, yy, ww, hh, d);
+                            byte[] buf = packTile(plane, levelW, xx, yy, ww, hh);
                             try {
                                 tiffWriter.saveBytes(c, buf, ifd, xx, yy, ww, hh);
                             } catch (FormatException e) {
@@ -190,34 +161,47 @@ public final class DensityTiffWriter {
                         }
                     }
                 }
-                logger.debug("Wrote density level {}/{} ({}x{})", level + 1, numLevels, levelW, levelH);
             }
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {
-            throw new IOException("Density OME-TIFF write failed for " + outputPath, e);
+            throw new IOException("Map OME-TIFF write failed for " + outputPath, e);
         }
     }
 
     // ---- internals ----
 
-    /**
-     * Pack one output tile into big-endian float32 bytes. Each output pixel
-     * is sampled at its centre in source coordinates, so every pyramid level
-     * is drawn from the same geometry.
-     */
-    static byte[] packTile(
-            DensityLattice lattice, float[] grid, boolean smooth, int xx, int yy, int ww, int hh, double downsample) {
+    /** Big-endian float32 bytes of one tile of a row-major plane. */
+    static byte[] packTile(float[] plane, int planeW, int xx, int yy, int ww, int hh) {
         byte[] buf = new byte[ww * hh * 4];
         ByteBuffer bb = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN);
         for (int ty = 0; ty < hh; ty++) {
-            double v = (yy + ty + 0.5) * downsample;
-            for (int tx = 0; tx < ww; tx++) {
-                double u = (xx + tx + 0.5) * downsample;
-                bb.putFloat(smooth ? lattice.bilinear(grid, u, v) : lattice.nearest(grid, u, v));
-            }
+            int row = (yy + ty) * planeW + xx;
+            for (int tx = 0; tx < ww; tx++) bb.putFloat(plane[row + tx]);
         }
         return buf;
+    }
+
+    /** Mean of the finite values in each {@code d x d} block; NaN where a block has none. */
+    static float[] blockMean(float[] grid, int gridW, int gridH, int d, int outW, int outH) {
+        float[] out = new float[outW * outH];
+        for (int oy = 0; oy < outH; oy++) {
+            for (int ox = 0; ox < outW; ox++) {
+                double sum = 0;
+                int n = 0;
+                for (int y = oy * d; y < Math.min(gridH, (oy + 1) * d); y++) {
+                    for (int x = ox * d; x < Math.min(gridW, (ox + 1) * d); x++) {
+                        float v = grid[y * gridW + x];
+                        if (Float.isFinite(v)) {
+                            sum += v;
+                            n++;
+                        }
+                    }
+                }
+                out[oy * outW + ox] = n == 0 ? Float.NaN : (float) (sum / n);
+            }
+        }
+        return out;
     }
 
     private static double[] computePyramidDownsamples(int width, int height) {
@@ -249,6 +233,7 @@ public final class DensityTiffWriter {
             int height,
             int nChannels,
             double pixelSizeUm,
+            String description,
             List<DensityChannelSpec> channels,
             double[] downsamples) {
         int series = 0;
@@ -261,7 +246,7 @@ public final class DensityTiffWriter {
         MetadataTools.populateMetadata(
                 meta,
                 series,
-                "Fiber density map",
+                "Fiber analysis map",
                 false, // littleEndian -> big-endian; we override below for clarity
                 DimensionOrder.XYCZT.getValue(),
                 PixelType.FLOAT.getValue(),
@@ -275,26 +260,12 @@ public final class DensityTiffWriter {
         meta.setPixelsBigEndian(Boolean.TRUE, series);
         meta.setPixelsInterleaved(Boolean.FALSE, series);
 
-        // Image-level description: float32 + NaN no-data. No quantization
-        // block -- the on-disk values are already the physical values, so
-        // there is nothing to round-trip.
-        StringBuilder desc = new StringBuilder();
-        desc.append("FiberAnalysis density-map sidecar. Pixel type: float32; NaN = no data.\n");
-        desc.append("Channel values are physical (e.g. Fiber coverage (%) reads 0..100).\n");
-        desc.append("Channels:\n");
         for (int c = 0; c < nChannels; c++) {
-            DensityChannelSpec spec = channels.get(c);
             meta.setChannelID("Channel:0:" + c, series, c);
             meta.setChannelSamplesPerPixel(new PositiveInteger(1), series, c);
-            meta.setChannelName(spec.channelName, series, c);
-            desc.append(String.format(
-                    java.util.Locale.ROOT,
-                    "  [%d] name=%s%s%n",
-                    c,
-                    spec.channelName,
-                    spec.unit != null ? "; unit=" + spec.unit : ""));
+            meta.setChannelName(channels.get(c).channelName, series, c);
         }
-        meta.setImageDescription(desc.toString(), series);
+        meta.setImageDescription(description, series);
 
         if (pixelSizeUm > 0 && !Double.isNaN(pixelSizeUm)) {
             meta.setPixelsPhysicalSizeX(new Length(pixelSizeUm, UNITS.MICROMETER), series);

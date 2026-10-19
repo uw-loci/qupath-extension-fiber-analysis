@@ -29,17 +29,20 @@ class DensityLatticeTest {
         assertThat(lat.nearest(ROW, 62.5 + 0.5, 50)).isEqualTo(1f);
         assertThat(lat.nearest(ROW, 87.0, 50)).isEqualTo(1f);
         assertThat(lat.nearest(ROW, 88.0, 50)).isEqualTo(2f);
-        assertThat(lat.nearest(ROW, 30.5, 50)).isEqualTo(0f);
+        assertThat(lat.nearest(ROW, 40.5, 50)).isEqualTo(0f);
     }
 
     @Test
-    void pixelsOutsideEveryWindowAreNoData() {
+    void pixelsOutsideEveryCellAreNoData() {
         DensityLattice lat = DensityLattice.windows(3, 1, 25, 100, 0, 0);
-        // The windows span [0, 150) across and [0, 100) down.
-        assertThat(lat.nearest(ROW, 149.5, 50)).isEqualTo(2f);
-        assertThat(lat.nearest(ROW, 150.5, 50)).isNaN();
-        assertThat(lat.nearest(ROW, 50, 100.5)).isNaN();
-        assertThat(lat.bilinear(ROW, 150.5, 50)).isNaN();
+        // The cells are centred on the windows: they tile [37.5, 112.5) across
+        // and [37.5, 62.5) down.
+        assertThat(lat.x0()).isEqualTo(37.5);
+        assertThat(lat.nearest(ROW, 112.0, 50)).isEqualTo(2f);
+        assertThat(lat.nearest(ROW, 112.5, 50)).isNaN();
+        assertThat(lat.nearest(ROW, 37.0, 50)).isNaN();
+        assertThat(lat.nearest(ROW, 50, 62.5)).isNaN();
+        assertThat(lat.bilinear(ROW, 112.5, 50)).isNaN();
     }
 
     @Test

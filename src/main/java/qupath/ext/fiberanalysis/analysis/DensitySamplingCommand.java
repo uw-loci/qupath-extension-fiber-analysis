@@ -9,7 +9,6 @@
  */
 package qupath.ext.fiberanalysis.analysis;
 
-import java.awt.Shape;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -22,14 +21,11 @@ import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
-import qupath.lib.images.servers.ImageServers;
-import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjectTools;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
-import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.interfaces.ROI;
 
 /**
@@ -51,11 +47,10 @@ import qupath.lib.roi.interfaces.ROI;
  *   <li>Otherwise, every annotation in the hierarchy.</li>
  * </ol>
  *
- * <p>Per-channel averaging: arithmetic mean of valid pixels (raw &gt; 0)
- * within the object's ROI, then promoted to real units via the per-channel
- * {@code scale + offset} recovered from the sidecar OME-XML description.
- * Mean-angle is treated as a regular scalar in v1; an axial-circular
- * averaging refinement is a follow-up.
+ * <p>Per-channel averaging: the mean of the map's values, drawn as the map
+ * says (nearest or smooth), at points every quarter cell inside the ROI;
+ * no-data points are skipped. Mean angle is averaged as a plain scalar, not
+ * as an axial angle.
  */
 public final class DensitySamplingCommand {
 
@@ -126,35 +121,13 @@ public final class DensitySamplingCommand {
 
     private void sample(ImageData<BufferedImage> imageData, Path sidecar, List<PathObject> targets) throws Exception {
         ImageServer<BufferedImage> sourceServer = imageData.getServer();
-        double sourcePxUm = sourcePixelSizeUm(sourceServer);
-        if (sourcePxUm <= 0 || Double.isNaN(sourcePxUm)) {
-            throw new IOException("Source image has no pixel calibration; cannot align sidecar.");
-        }
-
-        List<DensitySidecar.ChannelInfo> channelInfos = DensitySidecar.readChannelInfos(sidecar);
-        if (channelInfos.isEmpty()) {
-            throw new IOException("Sidecar has no parseable channel descriptors; cannot sample.");
-        }
-
-        try (ImageServer<BufferedImage> sidecarServer = ImageServers.buildServer(sidecar.toUri())) {
-            PixelCalibration sidecarCal = sidecarServer.getPixelCalibration();
-            double sidecarPxUm = sidecarCal != null && sidecarCal.hasPixelSizeMicrons()
-                    ? sidecarCal.getAveragedPixelSizeMicrons()
-                    : sourcePxUm;
-            double srcToSidecar =
-                    sourcePxUm / sidecarPxUm; // multiply source-pixel coords by this to get sidecar-pixel coords
-            int sidecarW = sidecarServer.getWidth();
-            int sidecarH = sidecarServer.getHeight();
-            int nChannels = sidecarServer.nChannels();
-            if (channelInfos.size() != nChannels) {
-                logger.warn(
-                        "Channel-info count ({}) differs from sidecar channel count ({}); using min(),"
-                                + " missing channels will be skipped",
-                        channelInfos.size(),
-                        nChannels);
+        try (DensityMapReader reader = DensityMapReader.open(sidecar)) {
+            DensityMapInfo info = reader.info();
+            if (!info.fits(sourceServer.getWidth(), sourceServer.getHeight())) {
+                throw new IOException("The map was made for a " + info.sourceWidth() + " x " + info.sourceHeight()
+                        + " image; this one is " + sourceServer.getWidth() + " x " + sourceServer.getHeight() + ".");
             }
-            int channelsToSample = Math.min(channelInfos.size(), nChannels);
-
+            int nChannels = info.channels().size();
             int done = 0;
             for (PathObject obj : targets) {
                 ROI roi = obj.getROI();
@@ -162,86 +135,17 @@ public final class DensitySamplingCommand {
                     done++;
                     continue;
                 }
-
-                // ROI bbox in source pixel coords; project to sidecar coords.
-                double sx0 = roi.getBoundsX() * srcToSidecar;
-                double sy0 = roi.getBoundsY() * srcToSidecar;
-                double sw = roi.getBoundsWidth() * srcToSidecar;
-                double sh = roi.getBoundsHeight() * srcToSidecar;
-                int x0 = clamp((int) Math.floor(sx0), 0, sidecarW - 1);
-                int y0 = clamp((int) Math.floor(sy0), 0, sidecarH - 1);
-                int x1 = clamp((int) Math.ceil(sx0 + sw), x0 + 1, sidecarW);
-                int y1 = clamp((int) Math.ceil(sy0 + sh), y0 + 1, sidecarH);
-                int rw = x1 - x0;
-                int rh = y1 - y0;
-                if (rw <= 0 || rh <= 0) {
-                    done++;
-                    continue;
+                int[] b = blockFor(info, roi);
+                double[] means;
+                if (b == null) {
+                    means = new double[nChannels];
+                    java.util.Arrays.fill(means, Double.NaN);
+                } else {
+                    means = sampleRoi(info, reader.readBlock(b[0], b[1], b[2], b[3]), b[0], b[1], b[2], b[3], roi);
                 }
-
-                RegionRequest req = RegionRequest.createInstance(sidecarServer.getPath(), 1.0, x0, y0, rw, rh);
-                BufferedImage tile;
-                try {
-                    tile = sidecarServer.readRegion(req);
-                } catch (IOException ex) {
-                    logger.warn("Sidecar read failed for object {}: {}", obj, ex.getMessage());
-                    done++;
-                    continue;
-                }
-                if (tile == null) {
-                    done++;
-                    continue;
-                }
-
-                // Per-pixel polygon test: ROI is in source coords, so transform
-                // each sidecar pixel back to source coords and ask the ROI's
-                // shape if it contains. For axis-aligned bboxes (Rectangle ROIs)
-                // this collapses to "include every pixel".
-                Shape sourceShape = roi.getShape();
-                boolean isRect = sourceShape != null
-                        && roi.getRoiName() != null
-                        && "Rectangle".equalsIgnoreCase(roi.getRoiName());
-                double sidecarToSrc = sidecarPxUm / sourcePxUm;
-
-                double[] sumPerChannel = new double[channelsToSample];
-                long[] countPerChannel = new long[channelsToSample];
-
-                int tileW = tile.getWidth();
-                int tileH = tile.getHeight();
-                // Sidecar is float32. Pull samples as float[] and skip NaN
-                // (no-data sentinel). Values are already physical -- no scale
-                // or offset reapplication.
-                float[][] perChannelSamples = new float[channelsToSample][];
-                for (int c = 0; c < channelsToSample; c++) {
-                    perChannelSamples[c] = tile.getRaster().getSamples(0, 0, tileW, tileH, c, (float[]) null);
-                }
-
-                for (int ty = 0; ty < tileH; ty++) {
-                    // Sidecar pixel (x0+tx, y0+ty) maps to source physical coords
-                    // ((x0+tx) * sidecarPxUm, (y0+ty) * sidecarPxUm), which in
-                    // source pixels is (sidecar * sidecarToSrc).
-                    double srcY = (y0 + ty + 0.5) * sidecarToSrc;
-                    for (int tx = 0; tx < tileW; tx++) {
-                        if (!isRect) {
-                            double srcX = (x0 + tx + 0.5) * sidecarToSrc;
-                            if (sourceShape != null && !sourceShape.contains(srcX, srcY)) continue;
-                        }
-                        int idx = ty * tileW + tx;
-                        for (int c = 0; c < channelsToSample; c++) {
-                            float v = perChannelSamples[c][idx];
-                            if (Float.isNaN(v)) continue;
-                            sumPerChannel[c] += v;
-                            countPerChannel[c] += 1L;
-                        }
-                    }
-                }
-
-                // Write per-channel measurements on this object.
-                for (int c = 0; c < channelsToSample; c++) {
-                    String name = MEASUREMENT_PREFIX + channelInfos.get(c).name;
-                    double mean =
-                            countPerChannel[c] == 0L ? Double.NaN : sumPerChannel[c] / (double) countPerChannel[c];
-                    obj.getMeasurementList().put(name, mean);
+                for (int c = 0; c < nChannels; c++) {
+                    obj.getMeasurementList()
+                            .put(MEASUREMENT_PREFIX + info.channels().get(c).name, means[c]);
                 }
                 done++;
             }
@@ -249,10 +153,76 @@ public final class DensitySamplingCommand {
             // QuPath caches the measurement table; tell it the hierarchy changed.
             imageData.getHierarchy().fireObjectMeasurementsChangedEvent(this, targets);
             final int doneF = done;
-            final int chF = channelsToSample;
             Platform.runLater(() -> Dialogs.showInfoNotification(
                     "Fiber density sampling",
-                    "Sampled " + chF + " channel(s) into " + doneF + " object measurement(s)."));
+                    "Sampled " + nChannels + " channel(s) into " + doneF + " object measurement(s)."));
+        }
+    }
+
+    /**
+     * @param info the map
+     * @param roi  an object's ROI
+     * @return {@code {gx, gy, w, h}}: the cells under the ROI's bounds plus one on each
+     *     side, or null when the ROI misses the grid
+     */
+    static int[] blockFor(DensityMapInfo info, ROI roi) {
+        DensityLattice lat = info.lattice();
+        int cell = lat.cellPx();
+        int gx0 = Math.max(0, (int) Math.floor((roi.getBoundsX() - lat.x0()) / cell) - 1);
+        int gy0 = Math.max(0, (int) Math.floor((roi.getBoundsY() - lat.y0()) / cell) - 1);
+        int gx1 = Math.min(
+                lat.gridW() - 1, (int) Math.floor((roi.getBoundsX() + roi.getBoundsWidth() - lat.x0()) / cell) + 1);
+        int gy1 = Math.min(
+                lat.gridH() - 1, (int) Math.floor((roi.getBoundsY() + roi.getBoundsHeight() - lat.y0()) / cell) + 1);
+        if (gx1 < gx0 || gy1 < gy0) return null;
+        return new int[] {gx0, gy0, gx1 - gx0 + 1, gy1 - gy0 + 1};
+    }
+
+    /**
+     * Mean of each channel over a ROI, drawn the way the map says (nearest or
+     * smooth) at points every quarter cell inside it. A ROI smaller than that
+     * takes the value at its centroid. NaN (no data) points are skipped.
+     *
+     * @param info  the map
+     * @param block {@code [channel][row * bw + column]} for the cells from {@code (gx, gy)}
+     * @param gx    first block column
+     * @param gy    first block row
+     * @param bw    block columns
+     * @param bh    block rows
+     * @param roi   the object's ROI, source pixels
+     * @return per-channel means, NaN where nothing inside had a value
+     */
+    static double[] sampleRoi(DensityMapInfo info, float[][] block, int gx, int gy, int bw, int bh, ROI roi) {
+        DensityLattice lat = info.lattice();
+        int cell = lat.cellPx();
+        DensityLattice sub =
+                new DensityLattice(bw, bh, cell, lat.windowPx(), lat.originX() + gx * cell, lat.originY() + gy * cell);
+        int n = block.length;
+        double[] sum = new double[n];
+        long[] count = new long[n];
+        double step = Math.max(1.0, cell / 4.0);
+        boolean any = false;
+        for (double v = roi.getBoundsY() + step / 2; v < roi.getBoundsY() + roi.getBoundsHeight(); v += step) {
+            for (double u = roi.getBoundsX() + step / 2; u < roi.getBoundsX() + roi.getBoundsWidth(); u += step) {
+                if (!roi.contains(u, v)) continue;
+                any = true;
+                accumulate(sub, block, u, v, info.smooth(), sum, count);
+            }
+        }
+        if (!any) accumulate(sub, block, roi.getCentroidX(), roi.getCentroidY(), info.smooth(), sum, count);
+        double[] out = new double[n];
+        for (int c = 0; c < n; c++) out[c] = count[c] == 0 ? Double.NaN : sum[c] / count[c];
+        return out;
+    }
+
+    private static void accumulate(
+            DensityLattice sub, float[][] block, double u, double v, boolean smooth, double[] sum, long[] count) {
+        for (int c = 0; c < block.length; c++) {
+            float val = sub.sample(block[c], u, v, smooth);
+            if (Float.isFinite(val)) {
+                sum[c] += val;
+                count[c]++;
+            }
         }
     }
 
@@ -265,17 +235,5 @@ public final class DensitySamplingCommand {
                 .filter(PathObject::isAnnotation)
                 .filter(PathObject::hasROI)
                 .toList());
-    }
-
-    private static double sourcePixelSizeUm(ImageServer<BufferedImage> server) {
-        PixelCalibration cal = server.getPixelCalibration();
-        if (cal == null || !cal.hasPixelSizeMicrons()) return -1;
-        return cal.getAveragedPixelSizeMicrons();
-    }
-
-    private static int clamp(int v, int lo, int hi) {
-        if (v < lo) return lo;
-        if (v > hi) return hi;
-        return v;
     }
 }

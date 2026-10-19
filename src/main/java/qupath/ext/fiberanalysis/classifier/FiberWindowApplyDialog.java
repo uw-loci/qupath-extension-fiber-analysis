@@ -156,8 +156,12 @@ public final class FiberWindowApplyDialog {
 
         rasterCheck = new CheckBox("Write probability map (OME-TIFF sidecar)");
         rasterCheck.setSelected(true);
-        attachCheck = new CheckBox("Attach the map to this image as channels");
-        attachCheck.setSelected(true);
+        attachCheck = new CheckBox("Also add this image with the map's channels as a new project entry");
+        attachCheck.setSelected(false);
+        attachCheck.setTooltip(new javafx.scene.control.Tooltip(
+                "The map can always be shown with 'Show density map as overlay...'. This adds a separate entry,"
+                        + " tagged 'Fiber analysis' in the project metadata, for tools that need the map as"
+                        + " channels. This image's entry is not changed."));
         attachCheck.disableProperty().bind(rasterCheck.selectedProperty().not());
         detectionsCheck = new CheckBox("Create one detection per core");
         detectionsCheck.setSelected(hasSelection);
@@ -401,16 +405,21 @@ public final class FiberWindowApplyDialog {
                     WindowClassifierWorkflow.writeProbabilityMap(
                             result,
                             sidecar,
+                            entry.getImageName(),
                             data.getServer().getWidth(),
                             data.getServer().getHeight(),
                             pixelSizeUm(),
                             region.getX(),
                             region.getY());
                     log.append("Probability map: ").append(sidecar).append('\n');
+                    var colors = WindowClassifierWorkflow.probabilityChannelColors(result.classNames());
                     if (attachCheck.isSelected()) {
-                        var colors = WindowClassifierWorkflow.probabilityChannelColors(result.classNames());
-                        DensityChannelAttacher.attachSidecar(gui, data, sidecar, colors);
-                        log.append("Attached as channels.\n");
+                        DensityChannelAttacher.addAndOpen(
+                                gui, project, entry, sidecar, DensityChannelAttacher.KIND_CLASSIFIER, colors);
+                        log.append("Adding a new project entry with the map's channels.\n");
+                    } else {
+                        DensityChannelAttacher.refreshIfPresent(
+                                project, entry, sidecar, DensityChannelAttacher.KIND_CLASSIFIER, colors);
                     }
                 }
             }

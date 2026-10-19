@@ -11,256 +11,262 @@ package qupath.ext.fiberanalysis.analysis;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
-import javafx.application.Platform;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.common.ColorTools;
 import qupath.lib.display.DirectServerChannelInfo;
+import qupath.lib.display.ImageDisplay;
 import qupath.lib.gui.QuPathGUI;
-import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
-import qupath.lib.images.servers.ImageServers;
+import qupath.lib.images.servers.PixelType;
 import qupath.lib.images.servers.TransformedServerBuilder;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
 
 /**
- * Channels-mode follow-up to {@link FiberDensityMapWorkflow}: attach the
- * density-map sidecar onto the currently-open image as additional channels
- * via QuPath's {@link TransformedServerBuilder#concatChannels} machinery.
+ * Adds a map's channels to an image as a NEW project entry: the source image,
+ * converted to float32 so map values are not cut to integers, followed by the
+ * map's channels served at the image's size ({@link DensityChannelsServer}).
+ * The source entry is never changed.
  *
- * <p>What attach does:
- *
- * <ol>
- *   <li>Locate the sidecar for the currently-open project entry.</li>
- *   <li>Open the sidecar with QuPath's standard {@code ImageServers.buildServer}.</li>
- *   <li>Build a concat'd server: source channels first, then sidecar channels.</li>
- *   <li>Wrap that in a new {@link ImageData} carrying the current image's
- *       hierarchy + image-type so annotations / detections survive the swap.</li>
- *   <li>Hand the new ImageData to the viewer via
- *       {@code viewer.setImageData(...)} -- mirrors what
- *       {@code QuPathGUI.openImageEntry} does on first open.</li>
- * </ol>
- *
- * <p>Caveats called out in earlier design discussion:
- *
- * <ul>
- *   <li>For RGB base images, concat forces the wrapped server to a non-RGB
- *       multi-channel pixel type and the RGB display path is lost. The
- *       user sees R/G/B as separate grey channels by default; we leave it
- *       to them to configure channel display colours (a future iteration
- *       can auto-set R/G/B per the spectral-unmixing pattern, but doing
- *       so reliably across QuPath display-API revisions is its own task).</li>
- *   <li>This is a SESSION-only attach. The project entry's stored
- *       ImageServerBuilder is untouched, so on the next time the user
- *       opens the entry they get the original server back. A future
- *       iteration adds a marker-file-based auto-reattach on image-open.</li>
- *   <li>Unsaved hierarchy changes survive because we copy the hierarchy
- *       reference into the new ImageData -- the old + new ImageData
- *       share the same hierarchy object until the viewer swap completes.</li>
- * </ul>
+ * <p>The new entry carries the source's metadata plus three keys of its own
+ * ({@link #META_KIND}, {@link #META_SOURCE}, {@link #META_MAP}) so it can be
+ * sorted and found in the project image list and the metadata browser. Adding
+ * the same map again refreshes that entry rather than making another.
  */
 public final class DensityChannelAttacher {
 
     private static final Logger logger = LoggerFactory.getLogger(DensityChannelAttacher.class);
 
+    /** Metadata key: what the fiber extension added to this entry. */
+    public static final String META_KIND = "Fiber analysis";
+    /** Metadata key: the project image the channels were added to. */
+    public static final String META_SOURCE = "Fiber source image";
+    /** Metadata key: the map file the channels come from. */
+    public static final String META_MAP = "Fiber map";
+
+    /** {@link #META_KIND} value for density-map channels. */
+    public static final String KIND_DENSITY = "Density channels";
+    /** {@link #META_KIND} value for window-classifier channels. */
+    public static final String KIND_CLASSIFIER = "Classifier channels";
+
+    private static final String TITLE = "Fiber density channels";
+
     private DensityChannelAttacher() {}
 
-    /** User-facing entry point: warns on RGB base before attaching. */
-    public static boolean attachForCurrentImage(QuPathGUI gui) {
-        return attachForCurrentImage(gui, true);
-    }
-
     /**
-     * Locate the sidecar for the currently-open image and attach its channels.
+     * Menu entry point: add the open image's density map as channels in a new
+     * entry and open it.
      *
-     * @param gui            the QuPath GUI
-     * @param confirmForRgb  when true and the source image is RGB, show a
-     *                       confirmation dialog warning about the display
-     *                       impact before attaching. The auto-reattach hook
-     *                       passes {@code false} because the dialog's pre-run
-     *                       warning + the user's opt-in marker were the
-     *                       consent moment.
-     * @return true on successful attach.
+     * @param gui the QuPath window
      */
-    public static boolean attachForCurrentImage(QuPathGUI gui, boolean confirmForRgb) {
-        if (gui == null) return false;
+    public static void attachForCurrentImage(QuPathGUI gui) {
+        if (gui == null) return;
         ImageData<BufferedImage> imageData = gui.getImageData();
-        if (imageData == null) {
-            Dialogs.showErrorMessage("Fiber density attach", "No image is open.");
-            return false;
-        }
         Project<BufferedImage> project = gui.getProject();
-        if (project == null) {
-            Dialogs.showErrorMessage(
-                    "Fiber density attach",
-                    "No project is open. The sidecar lives under " + "<project>/fiber-analysis/density-maps/.");
-            return false;
-        }
-        ProjectImageEntry<BufferedImage> entry = project.getEntry(imageData);
+        ProjectImageEntry<BufferedImage> entry =
+                project == null || imageData == null ? null : project.getEntry(imageData);
         if (entry == null) {
-            Dialogs.showErrorMessage("Fiber density attach", "Current image is not part of the open project.");
-            return false;
+            Dialogs.showErrorMessage(TITLE, "Open a project image first.");
+            return;
         }
-        Path sidecar = DensitySidecar.sidecarPathFor(project, entry);
-        if (!DensitySidecar.exists(sidecar)) {
+        if (entry.getMetadata().containsKey(META_KIND)) {
             Dialogs.showErrorMessage(
-                    "Fiber density attach",
-                    "No density sidecar for this image yet. Run \"Project density map...\" first.\n\n" + "Expected: "
-                            + sidecar);
-            return false;
+                    TITLE,
+                    "This entry already holds fiber channels. Open \""
+                            + entry.getMetadata().get(META_SOURCE) + "\" to add its map.");
+            return;
         }
-        if (confirmForRgb && imageData.getServer().isRGB()) {
-            boolean ok = Dialogs.showConfirmDialog(
-                    "Fiber density attach",
-                    "This image is 8-bit RGB. Attaching density as channels will change how the image\n"
-                            + "renders: R/G/B become separate display channels until you reconfigure colors.\n\n"
-                            + "Continue? (Use the Sidecar + sampling workflow if you prefer to keep the\n"
-                            + "native RGB display.)");
-            if (!ok) return false;
+        Path map = DensitySidecar.sidecarPathFor(project, entry);
+        if (!DensitySidecar.exists(map)) {
+            Dialogs.showErrorMessage(
+                    TITLE,
+                    "No density map for this image yet. Run \"Project density map...\" first.\n\nExpected: " + map);
+            return;
         }
-        try {
-            attach(gui, imageData, sidecar);
-            return true;
-        } catch (Exception ex) {
-            logger.error("Density attach failed", ex);
-            Platform.runLater(
-                    () -> Dialogs.showErrorMessage("Fiber density attach", "Attach failed: " + ex.getMessage()));
-            return false;
+        if (imageData.isChanged()) {
+            Dialogs.showWarningNotification(
+                    TITLE,
+                    "The new entry copies this image's objects as last saved; unsaved changes are not included.");
         }
+        addAndOpen(gui, project, entry, map, KIND_DENSITY, null);
     }
 
     /**
-     * Build the concat'd server and swap it into the viewer's ImageData.
-     * Called from {@link #attachForCurrentImage(QuPathGUI)} and from the
-     * workflow's post-Run hook in Channels mode; package-visible so other
-     * pieces of the extension can drive the same attach without going
-     * through the user-input checks.
+     * Add (or refresh) a channels entry on a background thread, then open it.
+     *
+     * @param gui     the QuPath window
+     * @param project the project
+     * @param source  the image the map was computed on
+     * @param map     the map file
+     * @param kind    {@link #KIND_DENSITY} or {@link #KIND_CLASSIFIER}
+     * @param colours channel name to packed RGB for channels that should take a set colour, or null
      */
-    static void attach(QuPathGUI gui, ImageData<BufferedImage> imageData, Path sidecar) throws Exception {
-        attachSidecar(gui, imageData, sidecar, null);
+    public static void addAndOpen(
+            QuPathGUI gui,
+            Project<BufferedImage> project,
+            ProjectImageEntry<BufferedImage> source,
+            Path map,
+            String kind,
+            Map<String, Integer> colours) {
+        Thread t = new Thread(
+                () -> {
+                    try {
+                        ProjectImageEntry<BufferedImage> added = addChannelsEntry(project, source, map, kind, colours);
+                        HeadlessFx.runLater(() -> {
+                            gui.refreshProject();
+                            gui.openImageEntry(added);
+                        });
+                    } catch (Exception e) {
+                        logger.error("Adding fiber channels for {} failed", source.getImageName(), e);
+                        HeadlessFx.runLater(
+                                () -> Dialogs.showErrorMessage(TITLE, "Could not add the channels: " + e.getMessage()));
+                    }
+                },
+                "fiber-add-channels");
+        t.setDaemon(true);
+        t.start();
     }
 
     /**
-     * Attach any float32 sidecar whose pixel dimensions match the open image,
-     * optionally colouring named channels as they arrive.
+     * Create the channels entry for a map, or rebuild the one that already exists.
      *
-     * <p>The window classifier is the second caller: its probability map is
-     * the same {@code float[gridW * gridH]} contract upsampled to source
-     * dimensions, and the colours it passes are the pathologist's own
-     * PathClass colours, so {@code P(Dense collagen)} renders in the colour
-     * that class already has everywhere else in QuPath.
-     *
-     * @param gui           the QuPath GUI
-     * @param imageData     the open image to wrap
-     * @param sidecar       the sidecar OME-TIFF
-     * @param channelColors channel name to packed RGB, or null to leave the
-     *                      auto-assigned colours alone. Names not present in
-     *                      the sidecar are ignored.
-     * @throws Exception if the sidecar cannot be opened or wrapped
+     * @param project the project
+     * @param source  the image the map was computed on
+     * @param map     the map file
+     * @param kind    {@link #KIND_DENSITY} or {@link #KIND_CLASSIFIER}
+     * @param colours channel name to packed RGB, or null
+     * @return the channels entry
+     * @throws Exception if the image or map cannot be read, or the map does not fit the image
      */
-    public static void attachSidecar(
-            QuPathGUI gui, ImageData<BufferedImage> imageData, Path sidecar, Map<String, Integer> channelColors)
+    public static ProjectImageEntry<BufferedImage> addChannelsEntry(
+            Project<BufferedImage> project,
+            ProjectImageEntry<BufferedImage> source,
+            Path map,
+            String kind,
+            Map<String, Integer> colours)
             throws Exception {
-        if (!Files.isRegularFile(sidecar)) {
-            throw new IOException("Sidecar not found: " + sidecar);
+        ProjectImageEntry<BufferedImage> existing = findChannelsEntry(project, source, map);
+        ImageData<BufferedImage> sourceData = source.readImageData();
+        ImageServer<BufferedImage> sourceServer = sourceData.getServer();
+        DensityChannelsServer mapServer = DensityChannelsServerBuilder.build(map);
+        if (!mapServer.getMapInfo().fits(sourceServer.getWidth(), sourceServer.getHeight())) {
+            mapServer.close();
+            throw new IllegalArgumentException(map.getFileName() + " was made for a "
+                    + mapServer.getMapInfo().sourceWidth() + " x "
+                    + mapServer.getMapInfo().sourceHeight()
+                    + " image, not " + sourceServer.getWidth() + " x " + sourceServer.getHeight());
         }
-
-        ImageServer<BufferedImage> sourceServer = imageData.getServer();
-        boolean sourceWasRgb = sourceServer.isRGB();
-        ImageServer<BufferedImage> sidecarServer = ImageServers.buildServer(sidecar.toUri());
-
-        ImageServer<BufferedImage> merged = new TransformedServerBuilder(sourceServer)
-                .concatChannels(List.of(sidecarServer))
+        boolean rgb = sourceServer.isRGB();
+        var builder = new TransformedServerBuilder(sourceServer);
+        if (sourceServer.getPixelType() != PixelType.FLOAT32) builder.convertType(PixelType.FLOAT32);
+        ImageServer<BufferedImage> merged = builder.concatChannels(
+                        java.util.List.<ImageServer<BufferedImage>>of(mapServer))
                 .build();
 
-        // Carry the hierarchy + image type into the new ImageData so the
-        // user's annotations / detections survive the server swap.
-        ImageData<BufferedImage> newImageData =
-                new ImageData<>(merged, imageData.getHierarchy(), imageData.getImageType());
-
-        final QuPathViewer viewer = gui.getViewer();
-        if (viewer == null) {
-            throw new IOException("No active QuPath viewer.");
+        ProjectImageEntry<BufferedImage> entry;
+        ImageData<BufferedImage> data;
+        if (existing != null) {
+            // Keep the objects drawn on the channels entry itself.
+            entry = existing;
+            data = new ImageData<>(merged, existing.readImageData().getHierarchy(), sourceData.getImageType());
+        } else {
+            entry = project.addImage(merged.getBuilder());
+            entry.setImageName(source.getImageName() + " [" + label(kind, map) + "]");
+            entry.getMetadata().putAll(source.getMetadata());
+            BufferedImage thumb = source.getThumbnail();
+            if (thumb != null) entry.setThumbnail(thumb);
+            data = new ImageData<>(merged, sourceData.getHierarchy(), sourceData.getImageType());
         }
-        Platform.runLater(() -> {
-            try {
-                viewer.setImageData(newImageData);
-                if (channelColors != null && !channelColors.isEmpty()) {
-                    applyNamedChannelColors(viewer, channelColors);
-                }
-                if (sourceWasRgb) {
-                    // Concat forces the wrapped server to multi-channel
-                    // uint8, which drops QuPath's native RGB display path.
-                    // Configure the first three channels (= the original R,
-                    // G, B from the source) with red / green / blue LUT
-                    // colours and select them so the user gets back the
-                    // RGB look without manual reconfig. The remaining
-                    // channels (density) inherit the auto-assigned colours
-                    // from DensityChannelsImageServer's channel list.
-                    applyRgbDisplayRecovery(viewer);
-                }
-                logger.info(
-                        "Attached density channels for {} ({} sidecar channels appended; rgb-recovery={})",
-                        sourceServer.getPath(),
-                        sidecarServer.nChannels(),
-                        sourceWasRgb);
-            } catch (IOException ex) {
-                logger.error("viewer.setImageData failed during density attach", ex);
-                Dialogs.showErrorMessage(
-                        "Fiber density attach", "Setting the wrapped image failed: " + ex.getMessage());
-            }
-        });
+        entry.getMetadata().put(META_KIND, kind);
+        entry.getMetadata().put(META_SOURCE, source.getImageName());
+        entry.getMetadata().put(META_MAP, map.getFileName().toString());
+        storeDisplay(data, sourceServer.nChannels(), rgb, colours);
+        entry.saveImageData(data);
+        project.syncChanges();
+        merged.close();
+        logger.info(
+                "{} entry '{}' for {} ({} map channels)",
+                existing == null ? "Added" : "Refreshed",
+                entry.getImageName(),
+                source.getImageName(),
+                mapServer.nChannels());
+        return entry;
     }
 
     /**
-     * Force the first three channels of the viewer's ImageDisplay to render
-     * as R / G / B, all selected. Used right after attach when the source
-     * image was RGB -- the concat'd server is non-RGB multi-channel so the
-     * viewer would otherwise default to a single-channel grayscale view.
+     * Rebuild a map's channels entry if one exists, so a re-run map with
+     * different channels does not leave it stale.
      *
-     * <p>Cast to {@link DirectServerChannelInfo} to call {@code setLUTColor};
-     * skip any channel that doesn't expose it (e.g. transform channels in
-     * a more exotic concat chain).
+     * @param project the project
+     * @param source  the image the map was computed on
+     * @param map     the map file just written
+     * @param kind    {@link #KIND_DENSITY} or {@link #KIND_CLASSIFIER}
+     * @param colours channel name to packed RGB, or null
      */
-    /**
-     * Give named channels explicit LUT colours and select them. Used by the
-     * window classifier so each {@code P(<class>)} channel renders in that
-     * PathClass's own colour; a channel the sidecar does not have is simply
-     * skipped.
-     */
-    private static void applyNamedChannelColors(QuPathViewer viewer, Map<String, Integer> channelColors) {
-        var display = viewer.getImageDisplay();
-        if (display == null) return;
-        for (var info : display.availableChannels()) {
-            Integer rgb = channelColors.get(info.getName());
-            if (rgb == null) continue;
-            if (info instanceof DirectServerChannelInfo direct) {
-                direct.setLUTColor(ColorTools.red(rgb), ColorTools.green(rgb), ColorTools.blue(rgb));
-            }
-            display.setChannelSelected(info, true);
+    public static void refreshIfPresent(
+            Project<BufferedImage> project,
+            ProjectImageEntry<BufferedImage> source,
+            Path map,
+            String kind,
+            Map<String, Integer> colours) {
+        if (project == null || findChannelsEntry(project, source, map) == null) return;
+        try {
+            addChannelsEntry(project, source, map, kind, colours);
+        } catch (Exception e) {
+            logger.warn("Could not refresh the channels entry for {}: {}", source.getImageName(), e.getMessage());
         }
     }
 
-    private static void applyRgbDisplayRecovery(QuPathViewer viewer) {
-        var display = viewer.getImageDisplay();
-        if (display == null) return;
-        var channels = display.availableChannels();
-        if (channels.size() < 3) return;
-        int[][] rgb = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}};
-        for (int i = 0; i < 3; i++) {
-            var info = channels.get(i);
-            if (info instanceof DirectServerChannelInfo direct) {
-                direct.setLUTColor(rgb[i][0], rgb[i][1], rgb[i][2]);
-            }
-            display.setChannelSelected(info, true);
+    /** @return the entry holding this source's channels from this map, or null */
+    static ProjectImageEntry<BufferedImage> findChannelsEntry(
+            Project<BufferedImage> project, ProjectImageEntry<BufferedImage> source, Path map) {
+        String file = map.getFileName().toString();
+        for (var e : project.getImageList()) {
+            var m = e.getMetadata();
+            if (file.equals(m.get(META_MAP)) && source.getImageName().equals(m.get(META_SOURCE))) return e;
         }
-        viewer.repaintEntireImage();
+        return null;
+    }
+
+    private static String label(String kind, Path map) {
+        if (KIND_DENSITY.equals(kind)) return "fiber density";
+        String name = map.getFileName().toString().replaceFirst("\\.ome\\.tif$", "");
+        int us = name.lastIndexOf('_');
+        return "classifier " + (us >= 0 ? name.substring(us + 1) : name);
+    }
+
+    /**
+     * Save display settings: an RGB source keeps its colours (its first three
+     * channels shown red, green and blue over 0-255); named map channels take
+     * their colours but start hidden.
+     */
+    private static void storeDisplay(
+            ImageData<BufferedImage> data, int sourceChannels, boolean rgb, Map<String, Integer> colours)
+            throws IOException {
+        ImageDisplay display = ImageDisplay.create(data);
+        var channels = display.availableChannels();
+        int[][] rgbLut = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}};
+        for (int i = 0; i < channels.size(); i++) {
+            var info = channels.get(i);
+            if (rgb && i < 3) {
+                if (info instanceof DirectServerChannelInfo direct) {
+                    direct.setLUTColor(rgbLut[i][0], rgbLut[i][1], rgbLut[i][2]);
+                }
+                display.setMinMaxDisplay(info, 0f, 255f);
+                display.setChannelSelected(info, true);
+            } else if (i >= sourceChannels) {
+                Integer c = colours == null ? null : colours.get(info.getName());
+                if (c != null && info instanceof DirectServerChannelInfo direct) {
+                    direct.setLUTColor(ColorTools.red(c), ColorTools.green(c), ColorTools.blue(c));
+                }
+                display.setChannelSelected(info, false);
+            }
+        }
+        data.setProperty(ImageDisplay.class.getName(), display.toJSON(false));
     }
 }
