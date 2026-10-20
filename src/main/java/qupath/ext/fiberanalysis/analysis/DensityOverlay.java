@@ -85,6 +85,7 @@ public final class DensityOverlay {
      * @param map     colour map
      * @param min     value drawn with the map's first colour
      * @param max     value drawn with its last colour
+     * @param brightness a 0-1 channel of the same map setting brightness, or null
      * @return the overlay installed
      */
     public static PathOverlay show(
@@ -93,8 +94,18 @@ public final class DensityOverlay {
             Loaded loaded,
             ColorMaps.ColorMap map,
             double min,
-            double max) {
-        var overlay = new DensityMapOverlay(options, loaded.info(), loaded.channel(), loaded.grid(), map, min, max);
+            double max,
+            Loaded brightness) {
+        var overlay = new DensityMapOverlay(
+                options,
+                loaded.info(),
+                loaded.channel(),
+                loaded.grid(),
+                map,
+                min,
+                max,
+                brightness == null ? -1 : brightness.channel(),
+                brightness == null ? null : brightness.grid());
         viewer.setCustomPixelLayerOverlay(overlay);
         options.setShowPixelClassification(true);
         return overlay;

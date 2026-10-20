@@ -148,7 +148,7 @@ public final class DensityChannelsServer extends AbstractTileableImageServer {
             for (int ox = 0; ox < outW; ox++) {
                 double u = x + (ox + 0.5) * sx;
                 for (int c = 0; c < banks.length; c++) {
-                    banks[c][oy * outW + ox] = sub.sample(block[c], u, v, info.smooth());
+                    banks[c][oy * outW + ox] = sub.sample(block[c], u, v, info.smooth(), info.axialPeriod(c));
                 }
             }
         }

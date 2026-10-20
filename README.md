@@ -315,6 +315,10 @@ gates the Run button:
   `render`) and names the source image. Grid pixel (i, j) covers source
   pixels `x0 + i*cell_px` to `x0 + (i+1)*cell_px`; `render` is
   `bilinear` (interpolate between cell centres) or `nearest`.
+- A channel row ending `; axial=180` (`Mean angle (deg)`) is an
+  axial angle: interpolated, pyramid-averaged and sampled as an angle.
+  The overlay shows it with the cyclic map `Angle (cyclic)` over
+  0-180 (copied from TME Quant, same names).
 - The OME physical pixel size is `cell_px * source_pixel_um`.
 - Files written before 2026-10-19 were full image resolution (9 GB
   for a 0.3-gigapixel slide with Smooth on) and are refused; re-run.

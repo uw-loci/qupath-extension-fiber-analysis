@@ -26,8 +26,8 @@ class DensityOverlayTest {
 
     private static DensityMapOverlay overlay(DensityLattice lat, float[] grid, boolean smooth, double min, double max) {
         var info = new DensityMapInfo(
-                lat, 1000, 1000, 0.25, smooth, "img", List.of(new DensitySidecar.ChannelInfo(0, "Signal", null)));
-        return new DensityMapOverlay(null, info, 0, grid, viridis(), min, max);
+                lat, 1000, 1000, 0.25, smooth, "img", List.of(new DensitySidecar.ChannelInfo(0, "Signal", null, 0)));
+        return new DensityMapOverlay(null, info, 0, grid, viridis(), min, max, -1, null);
     }
 
     @Test
@@ -85,6 +85,56 @@ class DensityOverlayTest {
         assertThat(img.getRGB(30, 50) >>> 24).isZero();
         assertThat(img.getRGB(40, 50) >>> 24).isEqualTo(255);
         assertThat(img.getRGB(120, 50) >>> 24).isZero();
+    }
+
+    @Test
+    void anAngleMapBlendsAcrossTheWrapAndOrderParameterSetsBrightness() {
+        // Two cells at 170 and 10 degrees: half way between them is 0 (= 180), not 90.
+        var info = new DensityMapInfo(
+                DensityLattice.blocks(2, 1, 10),
+                1000,
+                1000,
+                0.25,
+                true,
+                "img",
+                List.of(
+                        new DensitySidecar.ChannelInfo(0, "Mean angle (deg)", "deg", 180),
+                        new DensitySidecar.ChannelInfo(1, "Order parameter", null, 0)));
+        float[] angle = {170f, 10f};
+        float[] order = {1f, 0.5f};
+        var cyclic = CyclicColorMaps.labCircle(CyclicColorMaps.CYCLIC);
+        var plain = new DensityMapOverlay(null, info, 0, angle, cyclic, 0, 180, -1, null);
+        BufferedImage mid = plain.render(9, 0, 2, 10, 2, 1);
+        // Both output pixels sit 0.5 px either side of the half-way point: near 0 / 180 degrees.
+        int expect = 0xff000000 | cyclic.getColor(0, 0, 180);
+        for (int x = 0; x < 2; x++)
+            assertThat(colourDistance(mid.getRGB(x, 0), expect)).isLessThan(12);
+        var lit = new DensityMapOverlay(null, info, 0, angle, cyclic, 0, 180, 1, order);
+        BufferedImage img = lit.render(0, 0, 20, 10, 4, 2);
+        // The right-hand cell centre (x = 15) is drawn at half brightness.
+        int full = plain.render(0, 0, 20, 10, 4, 2).getRGB(3, 0);
+        int half = img.getRGB(3, 0);
+        assertThat((half >> 8) & 0xff).isCloseTo(((full >> 8) & 0xff) / 2, org.assertj.core.data.Offset.offset(1));
+    }
+
+    @Test
+    void theCyclicMapsEndWhereTheyStart() {
+        for (var map : List.of(
+                CyclicColorMaps.labCircle(CyclicColorMaps.CYCLIC),
+                CyclicColorMaps.hueWheel(CyclicColorMaps.CYCLIC_VIVID))) {
+            assertThat(colourDistance(map.getColor(0, 0, 180), map.getColor(180, 0, 180)))
+                    .isLessThan(3);
+            assertThat(colourDistance(map.getColor(1, 0, 180), map.getColor(179, 0, 180)))
+                    .isLessThan(20);
+            assertThat(colourDistance(map.getColor(0, 0, 180), map.getColor(90, 0, 180)))
+                    .isGreaterThan(40);
+        }
+    }
+
+    private static int colourDistance(int a, int b) {
+        return Math.abs(((a >> 16) & 0xff) - ((b >> 16) & 0xff))
+                + Math.abs(((a >> 8) & 0xff) - ((b >> 8) & 0xff))
+                + Math.abs((a & 0xff) - (b & 0xff));
     }
 
     @Test

@@ -106,10 +106,13 @@ public record DensityLattice(int gridW, int gridH, int cellPx, int windowPx, dou
      * @param u      source x
      * @param v      source y
      * @param smooth interpolate between cell centres
+     * @param period the period of an axial angle (180 for an orientation in degrees), or 0 for
+     *               an ordinary value; an axial value is interpolated as an angle, so 1 and 179
+     *               blend to 0, not 90
      * @return the value, or NaN
      */
-    public float sample(float[] grid, double u, double v, boolean smooth) {
-        return smooth ? bilinear(grid, u, v) : nearest(grid, u, v);
+    public float sample(float[] grid, double u, double v, boolean smooth, double period) {
+        return smooth ? bilinear(grid, u, v, period) : nearest(grid, u, v);
     }
 
     /**
@@ -122,6 +125,20 @@ public record DensityLattice(int gridW, int gridH, int cellPx, int windowPx, dou
      * @return the value, or NaN outside every cell or where all four are NaN
      */
     public float bilinear(float[] grid, double u, double v) {
+        return bilinear(grid, u, v, 0);
+    }
+
+    /**
+     * {@link #bilinear(float[], double, double)} for a value that may be an axial angle: with
+     * {@code period > 0} the corners are averaged as angles of that period.
+     *
+     * @param grid   row-major values
+     * @param u      source x
+     * @param v      source y
+     * @param period axial period, or 0 for an ordinary value
+     * @return the value in {@code [0, period)} for an angle, or NaN
+     */
+    public float bilinear(float[] grid, double u, double v, double period) {
         if (!covers(u, v)) return Float.NaN;
         double fx = (u - x0()) / cellPx - 0.5;
         double fy = (v - y0()) / cellPx - 0.5;
@@ -130,7 +147,9 @@ public record DensityLattice(int gridW, int gridH, int cellPx, int windowPx, dou
         double wx = fx - x0;
         double wy = fy - y0;
         double sum = 0.0;
+        double sumSin = 0.0;
         double wsum = 0.0;
+        double k = period > 0 ? 2 * Math.PI / period : 0;
         for (int dy = 0; dy <= 1; dy++) {
             int gy = clamp(y0 + dy, gridH);
             double w1 = dy == 0 ? 1.0 - wy : wy;
@@ -139,12 +158,62 @@ public record DensityLattice(int gridW, int gridH, int cellPx, int windowPx, dou
                 double w = w1 * (dx == 0 ? 1.0 - wx : wx);
                 float val = grid[gy * gridW + gx];
                 if (w > 0.0 && !Float.isNaN(val)) {
-                    sum += val * w;
+                    if (period > 0) {
+                        sum += w * Math.cos(k * val);
+                        sumSin += w * Math.sin(k * val);
+                    } else {
+                        sum += val * w;
+                    }
                     wsum += w;
                 }
             }
         }
-        return wsum <= 0.0 ? Float.NaN : (float) (sum / wsum);
+        if (wsum <= 0.0) return Float.NaN;
+        return period > 0 ? (float) axialAngle(sumSin, sum, period) : (float) (sum / wsum);
+    }
+
+    /**
+     * @param sumSin sum of {@code sin(2 pi a / period)}
+     * @param sumCos sum of {@code cos(2 pi a / period)}
+     * @param period the axial period
+     * @return the mean angle in {@code [0, period)}
+     */
+    static double axialAngle(double sumSin, double sumCos, double period) {
+        double a = Math.atan2(sumSin, sumCos) * period / (2 * Math.PI);
+        return a < 0 ? a + period : (a >= period ? a - period : a);
+    }
+
+    /**
+     * Mean of the finite values in each {@code d x d} block, NaN where a block has none; an
+     * axial angle ({@code period > 0}) is averaged as an angle.
+     */
+    static float[] blockMean(float[] grid, int gridW, int gridH, int d, int outW, int outH, double period) {
+        float[] out = new float[outW * outH];
+        double k = period > 0 ? 2 * Math.PI / period : 0;
+        for (int oy = 0; oy < outH; oy++) {
+            for (int ox = 0; ox < outW; ox++) {
+                double sum = 0;
+                double sumSin = 0;
+                int n = 0;
+                for (int y = oy * d; y < Math.min(gridH, (oy + 1) * d); y++) {
+                    for (int x = ox * d; x < Math.min(gridW, (ox + 1) * d); x++) {
+                        float v = grid[y * gridW + x];
+                        if (Float.isFinite(v)) {
+                            if (period > 0) {
+                                sum += Math.cos(k * v);
+                                sumSin += Math.sin(k * v);
+                            } else {
+                                sum += v;
+                            }
+                            n++;
+                        }
+                    }
+                }
+                out[oy * outW + ox] =
+                        n == 0 ? Float.NaN : (float) (period > 0 ? axialAngle(sumSin, sum, period) : sum / n);
+            }
+        }
+        return out;
     }
 
     private double inset() {

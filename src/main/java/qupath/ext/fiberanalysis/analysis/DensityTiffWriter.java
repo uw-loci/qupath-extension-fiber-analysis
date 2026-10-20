@@ -141,7 +141,16 @@ public final class DensityTiffWriter {
                     throw new IOException("Failed to set resolution level " + level, e);
                 }
                 for (int c = 0; c < nChannels; c++) {
-                    float[] plane = d == 1 ? grids[c] : blockMean(grids[c], gridW, gridH, d, levelW, levelH);
+                    float[] plane = d == 1
+                            ? grids[c]
+                            : DensityLattice.blockMean(
+                                    grids[c],
+                                    gridW,
+                                    gridH,
+                                    d,
+                                    levelW,
+                                    levelH,
+                                    channels.get(c).axialPeriod());
                     IFD ifd = new IFD();
                     ifd.put(IFD.TILE_WIDTH, TILE_SIZE);
                     ifd.put(IFD.TILE_LENGTH, TILE_SIZE);
@@ -180,28 +189,6 @@ public final class DensityTiffWriter {
             for (int tx = 0; tx < ww; tx++) bb.putFloat(plane[row + tx]);
         }
         return buf;
-    }
-
-    /** Mean of the finite values in each {@code d x d} block; NaN where a block has none. */
-    static float[] blockMean(float[] grid, int gridW, int gridH, int d, int outW, int outH) {
-        float[] out = new float[outW * outH];
-        for (int oy = 0; oy < outH; oy++) {
-            for (int ox = 0; ox < outW; ox++) {
-                double sum = 0;
-                int n = 0;
-                for (int y = oy * d; y < Math.min(gridH, (oy + 1) * d); y++) {
-                    for (int x = ox * d; x < Math.min(gridW, (ox + 1) * d); x++) {
-                        float v = grid[y * gridW + x];
-                        if (Float.isFinite(v)) {
-                            sum += v;
-                            n++;
-                        }
-                    }
-                }
-                out[oy * outW + ox] = n == 0 ? Float.NaN : (float) (sum / n);
-            }
-        }
-        return out;
     }
 
     private static double[] computePyramidDownsamples(int width, int height) {

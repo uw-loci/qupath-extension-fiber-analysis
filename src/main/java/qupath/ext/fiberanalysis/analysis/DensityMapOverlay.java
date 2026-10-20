@@ -25,6 +25,11 @@ import qupath.lib.regions.ImageRegion;
  * itself, so the map is exact at every zoom: cells stay crisp when the map is
  * drawn nearest, and blend between cell centres when it is drawn smooth.
  * Hidden with "Show pixel classification" (C); the viewer applies the opacity.
+ *
+ * <p>An optional second channel sets brightness (0 black to 1 full colour),
+ * the usual orientation picture: hue for the angle, brightness for how well
+ * aligned the fibers are, so a window of randomly oriented fibers does not get
+ * a confident colour.
  */
 public final class DensityMapOverlay extends AbstractOverlay {
 
@@ -34,7 +39,11 @@ public final class DensityMapOverlay extends AbstractOverlay {
     private static final int LUT_SIZE = 1024;
 
     private final DensityMapInfo info;
+    private final int channel;
     private final float[] grid;
+    private final int brightnessChannel;
+    private final float[] brightness;
+    private final String brightnessName;
     private final String channelName;
     private final String unit;
     private final double min;
@@ -53,6 +62,8 @@ public final class DensityMapOverlay extends AbstractOverlay {
      * @param map     colour map
      * @param min     value drawn with the map's first colour
      * @param max     value drawn with its last colour
+     * @param brightnessChannel channel index setting brightness, or -1 for none
+     * @param brightness        that channel's values (0-1), or null
      */
     public DensityMapOverlay(
             OverlayOptions options,
@@ -61,10 +72,16 @@ public final class DensityMapOverlay extends AbstractOverlay {
             float[] grid,
             ColorMaps.ColorMap map,
             double min,
-            double max) {
+            double max,
+            int brightnessChannel,
+            float[] brightness) {
         super(options);
         this.info = info;
+        this.channel = channel;
         this.grid = grid;
+        this.brightnessChannel = brightness == null ? -1 : brightnessChannel;
+        this.brightness = brightness;
+        this.brightnessName = brightness == null ? null : info.channels().get(brightnessChannel).name;
         var ch = info.channels().get(channel);
         this.channelName = ch.name;
         this.unit = ch.unit;
@@ -107,9 +124,14 @@ public final class DensityMapOverlay extends AbstractOverlay {
     @Override
     public String getLocationString(ImageData<BufferedImage> imageData, double x, double y, int z, int t) {
         if (!getOverlayOptions().getShowPixelClassification()) return null;
-        float v = info.sample(grid, x, y);
+        float v = info.sample(channel, grid, x, y);
         if (!Float.isFinite(v)) return null;
-        return String.format(Locale.ROOT, "%s: %.4g%s", channelName, v, unit == null ? "" : " " + unit);
+        String s = String.format(Locale.ROOT, "%s: %.4g%s", channelName, v, unit == null ? "" : " " + unit);
+        if (brightness != null) {
+            s += String.format(
+                    Locale.ROOT, "; %s: %.3g", brightnessName, info.sample(brightnessChannel, brightness, x, y));
+        }
+        return s;
     }
 
     /**
@@ -132,15 +154,27 @@ public final class DensityMapOverlay extends AbstractOverlay {
             double v = y + (oy + 0.5) * sy;
             int row = oy * outW;
             for (int ox = 0; ox < outW; ox++) {
-                float val = info.sample(grid, x + (ox + 0.5) * sx, v);
+                double u = x + (ox + 0.5) * sx;
+                float val = info.sample(channel, grid, u, v);
                 if (!Float.isFinite(val)) continue;
                 int i = (int) Math.round((val - min) / span * (LUT_SIZE - 1));
-                argb[row + ox] = lut[i < 0 ? 0 : (i >= LUT_SIZE ? LUT_SIZE - 1 : i)];
+                int c = lut[i < 0 ? 0 : (i >= LUT_SIZE ? LUT_SIZE - 1 : i)];
+                if (brightness != null) c = scale(c, info.sample(brightnessChannel, brightness, u, v));
+                argb[row + ox] = c;
             }
         }
         BufferedImage img = new BufferedImage(outW, outH, BufferedImage.TYPE_INT_ARGB);
         img.setRGB(0, 0, outW, outH, argb, 0, outW);
         return img;
+    }
+
+    /** An opaque colour darkened by {@code b} (clamped to 0-1; NaN is black). */
+    static int scale(int argb, float b) {
+        double f = Float.isFinite(b) ? Math.max(0, Math.min(1, b)) : 0;
+        int r = (int) Math.round(((argb >> 16) & 0xff) * f);
+        int g = (int) Math.round(((argb >> 8) & 0xff) * f);
+        int bl = (int) Math.round((argb & 0xff) * f);
+        return 0xff000000 | (r << 16) | (g << 8) | bl;
     }
 
     /** @return the source rectangle the grid covers, rounded outward to whole pixels */

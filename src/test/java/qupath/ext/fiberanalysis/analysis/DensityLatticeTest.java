@@ -69,6 +69,20 @@ class DensityLatticeTest {
     }
 
     @Test
+    void anAxialAngleBlendsAcrossTheWrap() {
+        DensityLattice lat = DensityLattice.blocks(2, 1, 10);
+        float[] angles = {170f, 10f};
+        // Half way between the centres: 0 degrees (= 180), not the plain mean 90.
+        float a = lat.bilinear(angles, 10, 5, 180);
+        assertThat(Math.min(a, 180 - a)).isLessThan(1e-3f);
+        assertThat(lat.bilinear(angles, 10, 5)).isEqualTo(90f);
+        // A quarter of the way from 170 toward 10 goes through 180, landing near 175 (a weighted
+        // mean of unit vectors, so not exactly linear in the angle: 174.84).
+        assertThat(lat.bilinear(angles, 7.5, 5, 180)).isCloseTo(175f, org.assertj.core.data.Offset.offset(0.5f));
+        assertThat(lat.sample(angles, 7.5, 5, false, 180)).isEqualTo(170f);
+    }
+
+    @Test
     void aBlockLatticeCentresEachSampleOnItsBlock() {
         DensityLattice lat = DensityLattice.blocks(3, 1, 4);
         assertThat(lat.nearest(ROW, 4.5, 1)).isEqualTo(1f);

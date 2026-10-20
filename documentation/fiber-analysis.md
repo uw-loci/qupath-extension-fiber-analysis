@@ -158,7 +158,8 @@ Source image: <the image the map was computed on>
 Grid pixel (i, j) covers image pixels `x0 + i*cell_px` to `x0 + (i+1)*cell_px`
 across (and the same with `y0` down): the block centred on the window that
 produced it, so the map sits over the tissue it describes. `render` says how to
-draw between cells (below, **Smooth**). Image pixels outside the grid have no
+draw between cells (below, **Smooth**). The `Mean angle (deg)` channel row ends
+in `; axial=180`: it is averaged and interpolated as an angle of period 180. Image pixels outside the grid have no
 value: in per-window mode, a strip half a window wide around the windows and,
 at the right and bottom, up to one more stride. Channel names match the QuPath
 measurement-table column names: `Fiber coverage (%)`, `HDM`, `Ridge count`,
@@ -171,7 +172,8 @@ Three ways to use a map:
 - **Sample it into measurements**: `Sample fiber density into measurements`
   adds a `Density: <channel>` measurement per channel to each selected object
   (or every annotation): the mean of the map inside the object, read every
-  quarter cell. An object smaller than that takes the value at its centre.
+  quarter cell (the mean angle as an axial mean). An object smaller than that
+  takes the value at its centre.
 - **Add it as channels in a new image**: `Add density channels as a new image`,
   or the first output option in the dialog for every image in the run. This
   adds a new project entry named `<image> [fiber density]`: the image, converted
@@ -203,7 +205,23 @@ any other project image of the same size, marked `(from <image>)`: other images
 of the same slide, such as a map computed on the birefringence image shown over
 the brightfield one. No-data areas are transparent. The overlay is coloured from
 the grid at screen resolution each time the view changes, so it is exact at any
-zoom, and the viewer's location bar shows the map value under the cursor. It
+zoom, and the viewer's location bar shows the map value under the cursor.
+
+**Mean angle (deg)** is an orientation, where 1 and 179 degrees are two degrees
+apart. A linear colour map paints those two at opposite ends of the scale, so
+choosing that channel switches to the cyclic map **Angle (cyclic)**, whose last
+colour is its first, and fixes the range to 0-180 so a colour means the same
+angle on every image (**Auto** keeps 0-180 for this channel). **Angle (cyclic
+vivid)** is the saturated hue wheel: easier to read, but yellow looks brighter
+than blue, so use it to show results rather than judge them. Both maps come from
+TME Quant and keep its names, so with both extensions installed each appears
+once. **Brightness from** darkens the colour where a 0-1 channel is low; for the
+angle it defaults to **Order parameter**, so well-aligned fibers show strong
+colour and randomly oriented ones fade to black instead of getting a confident
+hue. (Order parameter needs fibers; **Intensity coherence** works without a
+threshold.) Where the map is drawn smooth, the angle is interpolated as an
+angle, so 170 and 10 degrees blend through 0, not 90; the same holds for
+sampling and the channels entry. It
 sits on QuPath's pixel-classification layer, so the opacity slider and **Show
 pixel classification** (`C`) control it, and showing it replaces a pixel
 classifier overlay. An RGB image keeps its normal look.

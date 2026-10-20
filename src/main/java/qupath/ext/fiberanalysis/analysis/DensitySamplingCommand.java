@@ -49,8 +49,8 @@ import qupath.lib.roi.interfaces.ROI;
  *
  * <p>Per-channel averaging: the mean of the map's values, drawn as the map
  * says (nearest or smooth), at points every quarter cell inside the ROI;
- * no-data points are skipped. Mean angle is averaged as a plain scalar, not
- * as an axial angle.
+ * no-data points are skipped. Mean angle is averaged as an axial angle, so
+ * 1 and 179 degrees average to 0, not 90.
  */
 public final class DensitySamplingCommand {
 
@@ -180,8 +180,9 @@ public final class DensitySamplingCommand {
 
     /**
      * Mean of each channel over a ROI, drawn the way the map says (nearest or
-     * smooth) at points every quarter cell inside it. A ROI smaller than that
-     * takes the value at its centroid. NaN (no data) points are skipped.
+     * smooth) at points every quarter cell inside it; an axial angle is
+     * averaged as an angle. A ROI smaller than that takes the value at its
+     * centroid. NaN (no data) points are skipped.
      *
      * @param info  the map
      * @param block {@code [channel][row * bw + column]} for the cells from {@code (gx, gy)}
@@ -197,32 +198,57 @@ public final class DensitySamplingCommand {
         int cell = lat.cellPx();
         DensityLattice sub =
                 new DensityLattice(bw, bh, cell, lat.windowPx(), lat.originX() + gx * cell, lat.originY() + gy * cell);
-        int n = block.length;
-        double[] sum = new double[n];
-        long[] count = new long[n];
+        Means means = new Means(info, block.length);
         double step = Math.max(1.0, cell / 4.0);
         boolean any = false;
         for (double v = roi.getBoundsY() + step / 2; v < roi.getBoundsY() + roi.getBoundsHeight(); v += step) {
             for (double u = roi.getBoundsX() + step / 2; u < roi.getBoundsX() + roi.getBoundsWidth(); u += step) {
                 if (!roi.contains(u, v)) continue;
                 any = true;
-                accumulate(sub, block, u, v, info.smooth(), sum, count);
+                means.add(sub, block, u, v);
             }
         }
-        if (!any) accumulate(sub, block, roi.getCentroidX(), roi.getCentroidY(), info.smooth(), sum, count);
-        double[] out = new double[n];
-        for (int c = 0; c < n; c++) out[c] = count[c] == 0 ? Double.NaN : sum[c] / count[c];
-        return out;
+        if (!any) means.add(sub, block, roi.getCentroidX(), roi.getCentroidY());
+        return means.result();
     }
 
-    private static void accumulate(
-            DensityLattice sub, float[][] block, double u, double v, boolean smooth, double[] sum, long[] count) {
-        for (int c = 0; c < block.length; c++) {
-            float val = sub.sample(block[c], u, v, smooth);
-            if (Float.isFinite(val)) {
-                sum[c] += val;
+    /** Running per-channel means; an axial channel accumulates its angle's cosine and sine. */
+    private static final class Means {
+        private final DensityMapInfo info;
+        private final double[] sum;
+        private final double[] sumSin;
+        private final long[] count;
+
+        Means(DensityMapInfo info, int n) {
+            this.info = info;
+            this.sum = new double[n];
+            this.sumSin = new double[n];
+            this.count = new long[n];
+        }
+
+        void add(DensityLattice sub, float[][] block, double u, double v) {
+            for (int c = 0; c < block.length; c++) {
+                double period = info.axialPeriod(c);
+                float val = sub.sample(block[c], u, v, info.smooth(), period);
+                if (!Float.isFinite(val)) continue;
+                if (period > 0) {
+                    sum[c] += Math.cos(2 * Math.PI * val / period);
+                    sumSin[c] += Math.sin(2 * Math.PI * val / period);
+                } else {
+                    sum[c] += val;
+                }
                 count[c]++;
             }
+        }
+
+        double[] result() {
+            double[] out = new double[sum.length];
+            for (int c = 0; c < out.length; c++) {
+                double period = info.axialPeriod(c);
+                if (count[c] == 0) out[c] = Double.NaN;
+                else out[c] = period > 0 ? DensityLattice.axialAngle(sumSin[c], sum[c], period) : sum[c] / count[c];
+            }
+            return out;
         }
     }
 

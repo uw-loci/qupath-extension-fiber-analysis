@@ -71,6 +71,22 @@ class DensitySidecarTest {
     }
 
     @Test
+    void onlyTheMeanAngleChannelIsMarkedAxial() {
+        String desc = SidecarDescription.format(
+                info(DensityLattice.blocks(4, 4, 10), false, "a"), DensityChannelSpec.defaultChannels());
+        assertThat(desc).contains("name=Mean angle (deg); unit=deg; axial=180");
+        for (var ch : SidecarDescription.parse(desc)) {
+            assertThat(ch.axialPeriod).as(ch.name).isEqualTo(ch.name.equals("Mean angle (deg)") ? 180.0 : 0.0);
+        }
+        assertThat(SidecarDescription.parse(desc).stream()
+                        .filter(c -> c.name.equals("Mean angle (deg)"))
+                        .findFirst()
+                        .orElseThrow()
+                        .unit)
+                .isEqualTo("deg");
+    }
+
+    @Test
     void aHalfPixelInsetAndARegionOriginSurviveTheRoundTrip() {
         // An odd window - cell difference puts the cells on half pixels; an
         // annotation-scope classifier map starts at the annotation.

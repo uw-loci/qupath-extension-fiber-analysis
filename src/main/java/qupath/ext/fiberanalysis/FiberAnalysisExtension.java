@@ -22,6 +22,7 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.fiberanalysis.analysis.CyclicColorMaps;
 import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
 import qupath.ext.fiberanalysis.analysis.DensityOverlayDialog;
 import qupath.ext.fiberanalysis.analysis.DensitySamplingCommand;
@@ -166,6 +167,10 @@ public class FiberAnalysisExtension implements QuPathExtension {
         // mirror existed only to feed a fallback in openHelp() that the per-user
         // path already covers, so it is gone.
         extractBundledDocumentation();
+
+        // Cyclic colour maps for the axial "Mean angle (deg)" channel; the same
+        // names as TME Quant's, so installing both registers each map once.
+        CyclicColorMaps.install();
 
         // Build the menu on the FX thread.
         Platform.runLater(() -> addMenuItems(qupath));

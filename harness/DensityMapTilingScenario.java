@@ -26,6 +26,7 @@ import javafx.scene.control.Spinner;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javax.imageio.ImageIO;
+import qupath.ext.fiberanalysis.analysis.CyclicColorMaps;
 import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
 import qupath.ext.fiberanalysis.analysis.DensityMapInfo;
 import qupath.ext.fiberanalysis.analysis.DensityMapOverlay;
@@ -36,6 +37,7 @@ import qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow;
 import qupath.ext.fiberanalysis.analysis.PixelPositivitySpec;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
+import qupath.lib.color.ColorMaps;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
@@ -165,6 +167,9 @@ public final class DensityMapTilingScenario {
             int sig = wi.channelIndex("Signal density (no threshold)");
             int coh = wi.channelIndex("Intensity coherence (no threshold)");
             check(sig >= 0 && coh >= 0, "the map carries both threshold-free channels");
+            int ang = wi.channelIndex("Mean angle (deg)");
+            check(ang >= 0 && wi.channels().get(ang).axialPeriod == 180 && wi.axialPeriod(sig) == 0,
+                    "the mean-angle channel, and only it, is marked as an axial angle of period 180");
             check(wi.fits(w, h) && pi.fits(w, h), "both maps say they belong to this image's size");
             check(wi.lattice().cellPx() == stride && wi.lattice().windowPx() == windowPx,
                     "the window map's cells are the stride and its windows the window size");
@@ -209,9 +214,9 @@ public final class DensityMapTilingScenario {
             // far from both annotations reads 0, in both modes.
             int cxIn = RECT[0] + 300 + windowPx / 2;
             int cyIn = RECT[1] + 300 + windowPx / 2;
-            check(wi.sample(wObj, cxIn, cyIn) == 1.0f && pi.sample(pObj, cxIn, cyIn) == 1.0f,
+            check(wi.sample(objCh, wObj, cxIn, cyIn) == 1.0f && pi.sample(objCh, pObj, cxIn, cyIn) == 1.0f,
                     "object density is 1 inside the annotation (window and per-pixel)");
-            check(wi.sample(wObj, 500, 7000) == 0.0f && pi.sample(pObj, 500, 7000) == 0.0f,
+            check(wi.sample(objCh, wObj, 500, 7000) == 0.0f && pi.sample(objCh, pObj, 500, 7000) == 0.0f,
                     "object density is 0 far from any annotation (window and per-pixel)");
             // Pixel positivity against a direct count from the image itself.
             int gridW = wi.lattice().gridW();
@@ -247,9 +252,9 @@ public final class DensityMapTilingScenario {
                 for (int gx = 2; gx < gridW - 2; gx += Math.max(1, gridW / 25)) {
                     int cx = gx * stride + windowPx / 2;
                     int cy = gy * stride + windowPx / 2;
-                    double wv = wi.sample(ws, cx, cy);
-                    errCentre += Math.abs(wv - pi.sample(ps, cx, cy));
-                    errOld += Math.abs(wv - pi.sample(ps, cx - inset, cy - inset));
+                    double wv = wi.sample(sig, ws, cx, cy);
+                    errCentre += Math.abs(wv - pi.sample(sig, ps, cx, cy));
+                    errOld += Math.abs(wv - pi.sample(sig, ps, cx - inset, cy - inset));
                     n++;
                 }
             }
@@ -400,6 +405,62 @@ public final class DensityMapTilingScenario {
         });
         check(onFx(viewer::getCustomPixelLayerOverlay) == null, "Hide removes it");
 
+        // The angle channel: cyclic colours over 0-180, order parameter as brightness.
+        check(ColorMaps.getColorMaps().containsKey(CyclicColorMaps.CYCLIC),
+                "the cyclic colour maps are installed");
+        var colourCombo = (javafx.scene.control.ComboBox<String>) combos.get(2);
+        var brightnessCombo = (javafx.scene.control.ComboBox<String>) combos.get(3);
+        var maxField = (javafx.scene.control.TextField) fields.get(1);
+        onFx(() -> {
+            channelCombo.getSelectionModel().select("Mean angle (deg)");
+            return null;
+        });
+        for (int i = 0; i < 300; i++) {
+            String st = statusLabel == null ? "" : onFx(statusLabel::getText);
+            if (st.startsWith("Mean angle (deg):")) break;
+            Thread.sleep(100);
+        }
+        String angleRange = onFx(() -> minField.getText() + " to " + maxField.getText());
+        note("angle channel: colour map " + onFx(colourCombo::getValue) + ", range " + angleRange + ", brightness "
+                + onFx(brightnessCombo::getValue));
+        check(CyclicColorMaps.CYCLIC.equals(onFx(colourCombo::getValue))
+                        && Double.parseDouble(onFx(minField::getText)) == 0
+                        && Double.parseDouble(onFx(maxField::getText)) == 180
+                        && "Order parameter".equals(onFx(brightnessCombo::getValue)),
+                "choosing the angle channel sets the cyclic map, 0-180 and order-parameter brightness");
+        onFx(() -> {
+            for (Node n : stage.getScene().getRoot().lookupAll(".button")) {
+                if (n instanceof javafx.scene.control.Button b && "Show".equals(b.getText())) b.fire();
+            }
+            return null;
+        });
+        Thread.sleep(1500); // the brightness channel is read after the angle
+        var angleOverlay = onFx(viewer::getCustomPixelLayerOverlay);
+        String where = angleOverlay == null
+                ? null
+                : onFx(() -> angleOverlay.getLocationString(data, server.getWidth() / 2.0, server.getHeight() / 2.0, 0, 0));
+        note("location bar at the image centre: " + where);
+        check(angleOverlay instanceof DensityMapOverlay && where != null && where.contains("Order parameter"),
+                "the angle overlay is shown with its brightness channel");
+        if (angleOverlay != null) {
+            BufferedImage ac = new BufferedImage(bw, bh, BufferedImage.TYPE_INT_RGB);
+            var g3 = ac.createGraphics();
+            g3.scale(1 / ds, 1 / ds);
+            onFx(() -> {
+                angleOverlay.paintOverlay(g3, region, ds, data, true);
+                return null;
+            });
+            g3.dispose();
+            ImageIO.write(ac, "png", outDir.resolve("overlay_angle.png").toFile());
+            note("angle overlay: " + outDir.resolve("overlay_angle.png"));
+        }
+        onFx(() -> {
+            for (Node n : stage.getScene().getRoot().lookupAll(".button")) {
+                if (n instanceof javafx.scene.control.Button b && "Hide".equals(b.getText())) b.fire();
+            }
+            return null;
+        });
+
         // Another image of the same slide (same size, different entry) can
         // show this image's map; here a second entry for the same file.
         var project = onFx(qupath::getProject);
@@ -466,7 +527,7 @@ public final class DensityMapTilingScenario {
             for (int k = 1; k <= 9; k++) {
                 int x = w * k / 10;
                 int y = h * ((k * 7) % 10 + 1) / 12;
-                float expect = info.sample(grid, x + 0.5, y + 0.5);
+                float expect = info.sample(sig, grid, x + 0.5, y + 0.5);
                 if (!Float.isFinite(expect)) continue;
                 Raster r = server.readRegion(RegionRequest.createInstance(server.getPath(), 1.0, x, y, 1, 1))
                         .getRaster();

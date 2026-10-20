@@ -126,6 +126,14 @@ public final class DensityChannelSpec {
         return ROLE_CLASS_PROBABILITY.equals(classifierRole) ? objectClassName : null;
     }
 
+    /**
+     * @return 180 for the mean-orientation channel (an axial angle in degrees, where 1 and 179
+     *     are two degrees apart), 0 for every other channel
+     */
+    public double axialPeriod() {
+        return "mean_angle_deg".equals(npzKey) ? 180.0 : 0.0;
+    }
+
     /** Default v1 channel set in canonical order. */
     public static List<DensityChannelSpec> defaultChannels() {
         return List.of(

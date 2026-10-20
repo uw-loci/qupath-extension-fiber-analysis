@@ -33,13 +33,19 @@ public record DensityMapInfo(
         List<DensitySidecar.ChannelInfo> channels) {
 
     /**
-     * @param grid one channel, {@code gridW * gridH}
-     * @param u    source x
-     * @param v    source y
+     * @param channel the channel's index (its axial period, if any, decides how it interpolates)
+     * @param grid    that channel, {@code gridW * gridH}
+     * @param u       source x
+     * @param v       source y
      * @return the value drawn at that source point, NaN outside the grid
      */
-    public float sample(float[] grid, double u, double v) {
-        return lattice.sample(grid, u, v, smooth);
+    public float sample(int channel, float[] grid, double u, double v) {
+        return lattice.sample(grid, u, v, smooth, axialPeriod(channel));
+    }
+
+    /** @return the channel's axial period, or 0 for an ordinary value */
+    public double axialPeriod(int channel) {
+        return channel >= 0 && channel < channels.size() ? channels.get(channel).axialPeriod : 0;
     }
 
     /**

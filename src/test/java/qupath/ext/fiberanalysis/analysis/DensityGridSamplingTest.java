@@ -27,6 +27,13 @@ class DensityGridSamplingTest {
     private static final int GW = 20;
     private static final int GH = 15;
 
+    private static float[] randomAngles(long seed) {
+        var rnd = new SplittableRandom(seed);
+        float[] g = new float[GW * GH];
+        for (int i = 0; i < g.length; i++) g[i] = rnd.nextInt(10) == 0 ? Float.NaN : (float) (180 * rnd.nextDouble());
+        return g;
+    }
+
     private static float[] randomGrid(long seed) {
         var rnd = new SplittableRandom(seed);
         float[] g = new float[GW * GH];
@@ -43,7 +50,9 @@ class DensityGridSamplingTest {
                 0.5,
                 smooth,
                 "img",
-                List.of(new DensitySidecar.ChannelInfo(0, "A", null), new DensitySidecar.ChannelInfo(1, "B", null)));
+                List.of(
+                        new DensitySidecar.ChannelInfo(0, "A", null, 0),
+                        new DensitySidecar.ChannelInfo(1, "Angle", "deg", 180)));
     }
 
     /** Blocks cut from in-memory grids, as the reader would return them. */
@@ -66,7 +75,7 @@ class DensityGridSamplingTest {
 
     @Test
     void aTileReadThroughABlockMatchesTheWholeGrid() throws Exception {
-        float[][] grids = {randomGrid(1), randomGrid(2)};
+        float[][] grids = {randomGrid(1), randomAngles(2)};
         int[][] tiles = {
             {0, 0, 200, 150, 50, 38},
             {40, 30, 64, 64, 64, 64},
@@ -87,7 +96,7 @@ class DensityGridSamplingTest {
                 for (int c = 0; c < 2; c++) {
                     for (int oy = 0; oy < outH; oy++) {
                         for (int ox = 0; ox < outW; ox++) {
-                            float expect = info.sample(grids[c], t[0] + (ox + 0.5) * sx, t[1] + (oy + 0.5) * sy);
+                            float expect = info.sample(c, grids[c], t[0] + (ox + 0.5) * sx, t[1] + (oy + 0.5) * sy);
                             assertThat(Float.floatToIntBits(banks[c][oy * outW + ox]))
                                     .as(
                                             "smooth=%s tile=%s channel %d at (%d, %d)",
@@ -130,6 +139,30 @@ class DensityGridSamplingTest {
         int[] b = DensitySamplingCommand.blockFor(info, roi);
         double[] means = DensitySamplingCommand.sampleRoi(info, read(blocks(grid), b), b[0], b[1], b[2], b[3], roi);
         assertThat(means[0]).isEqualTo(3.0);
+    }
+
+    @Test
+    void anObjectsMeanAngleIsAnAxialMeanNotAPlainOne() {
+        DensityMapInfo info = info(false);
+        float[][] grid = {randomGrid(7), new float[GW * GH]};
+        Arrays.fill(grid[1], Float.NaN);
+        // Two cells at 175 and 5 degrees: the plain mean is 90, the orientation is 0.
+        grid[1][3 * GW + 2] = 175f;
+        grid[1][3 * GW + 3] = 5f;
+        var roi = ROIs.createRectangleROI(9 + 2 * 8, 11 + 3 * 8, 16, 8, ImagePlane.getDefaultPlane());
+        int[] b = DensitySamplingCommand.blockFor(info, roi);
+        double[] means = DensitySamplingCommand.sampleRoi(info, read(blocks(grid), b), b[0], b[1], b[2], b[3], roi);
+        double fromZero = Math.min(means[1], 180 - means[1]);
+        assertThat(fromZero).isLessThan(1e-6);
+    }
+
+    @Test
+    void pyramidLevelsAverageAnAngleAsAnAngle() {
+        float[] grid = {175f, 5f, 170f, 10f};
+        float[] mean = DensityLattice.blockMean(grid, 2, 2, 2, 1, 1, 180);
+        assertThat(Math.min(mean[0], 180 - mean[0])).isLessThan(1e-4f);
+        float[] plain = DensityLattice.blockMean(grid, 2, 2, 2, 1, 1, 0);
+        assertThat(plain[0]).isEqualTo(90f);
     }
 
     @Test

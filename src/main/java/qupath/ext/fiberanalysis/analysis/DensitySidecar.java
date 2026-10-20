@@ -35,16 +35,24 @@ public final class DensitySidecar {
 
     private static final Logger logger = LoggerFactory.getLogger(DensitySidecar.class);
 
-    /** A channel's name and unit as the map file lists them. */
+    /** A channel's name, unit and (for an axial angle) period, as the map file lists them. */
     public static final class ChannelInfo {
         public final int index;
         public final String name;
         public final String unit; // may be null
+        /** Period of an axial angle (180 for an orientation in degrees); 0 for an ordinary value. */
+        public final double axialPeriod;
 
-        public ChannelInfo(int index, String name, String unit) {
+        public ChannelInfo(int index, String name, String unit, double axialPeriod) {
             this.index = index;
             this.name = name;
             this.unit = unit;
+            this.axialPeriod = axialPeriod;
+        }
+
+        /** @return true for an axial angle */
+        public boolean isAxial() {
+            return axialPeriod > 0;
         }
     }
 

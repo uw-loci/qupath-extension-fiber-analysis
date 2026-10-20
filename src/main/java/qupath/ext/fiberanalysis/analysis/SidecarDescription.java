@@ -28,7 +28,7 @@ final class SidecarDescription {
     static final String SOURCE_IMAGE = "Source image:";
 
     private static final Pattern CHANNEL_ROW =
-            Pattern.compile("\\[(\\d+)]\\s*name=([^;\\r\\n]+)(?:;\\s*unit=([^\\r\\n;]+))?");
+            Pattern.compile("\\[(\\d+)]\\s*name=([^;\\r\\n]+)(?:;\\s*unit=([^\\r\\n;]+))?(?:;\\s*axial=([0-9.]+))?");
     private static final Pattern KEY_VALUE = Pattern.compile("(\\w+)=([^;\\s]+)");
 
     private SidecarDescription() {}
@@ -46,6 +46,7 @@ final class SidecarDescription {
         d.append("x0 + i*cell_px to x0 + (i+1)*cell_px across and y0 + j*cell_px to y0 + (j+1)*cell_px down;\n");
         d.append("its value belongs at the cell centre. render=bilinear: interpolate between cell centres;\n");
         d.append("render=nearest: fill each cell. Source pixels outside the grid have no value.\n");
+        d.append("A channel marked axial=P is an angle of period P: interpolate and average it as an angle.\n");
         d.append(String.format(
                 Locale.ROOT,
                 "%s source_width=%d; source_height=%d; source_pixel_um=%s; cell_px=%d; window_px=%d;"
@@ -71,10 +72,11 @@ final class SidecarDescription {
             DensityChannelSpec spec = channels.get(c);
             d.append(String.format(
                     Locale.ROOT,
-                    "  [%d] name=%s%s%n",
+                    "  [%d] name=%s%s%s%n",
                     c,
                     spec.channelName,
-                    spec.unit != null ? "; unit=" + spec.unit : ""));
+                    spec.unit != null ? "; unit=" + spec.unit : "",
+                    spec.axialPeriod() > 0 ? "; axial=" + num(spec.axialPeriod()) : ""));
         }
         return d.toString();
     }
@@ -138,7 +140,10 @@ final class SidecarDescription {
         while (m.find()) {
             String unit = m.group(3);
             out.add(new DensitySidecar.ChannelInfo(
-                    Integer.parseInt(m.group(1)), m.group(2).trim(), unit == null ? null : unit.trim()));
+                    Integer.parseInt(m.group(1)),
+                    m.group(2).trim(),
+                    unit == null ? null : unit.trim(),
+                    m.group(4) == null ? 0 : Double.parseDouble(m.group(4))));
         }
         out.sort((a, b) -> Integer.compare(a.index, b.index));
         return out;

@@ -59,11 +59,19 @@ public final class DensityOverlayDialog {
     private ComboBox<Path> mapCombo;
     private ComboBox<String> channelCombo;
     private ComboBox<String> colourCombo;
+    private ComboBox<String> brightnessCombo;
     private TextField minField;
     private TextField maxField;
     private Label status;
 
     private DensityOverlay.Loaded loaded;
+    private DensityOverlay.Loaded brightnessLoaded;
+    private List<DensitySidecar.ChannelInfo> channelInfos = List.of();
+
+    static final String NO_BRIGHTNESS = "None";
+
+    /** 0-1 channels that make sense as brightness, in order of preference. */
+    static final List<String> BRIGHTNESS_CHANNELS = List.of("Order parameter", "Intensity coherence (no threshold)");
 
     /** Display text for each listed map. */
     private final java.util.Map<Path, String> labels = new java.util.HashMap<>();
@@ -119,7 +127,15 @@ public final class DensityOverlayDialog {
         minField.setPrefColumnCount(8);
         maxField.setPrefColumnCount(8);
         Button autoBtn = new Button("Auto (1-99%)");
+        autoBtn.setTooltip(new javafx.scene.control.Tooltip(
+                "The 1st to 99th percentile of the channel. An angle channel always gets its full period (0-180),"
+                        + " so colours mean the same angle on every image."));
         autoBtn.setOnAction(e -> autoRange());
+        brightnessCombo = new ComboBox<>();
+        brightnessCombo.setMaxWidth(Double.MAX_VALUE);
+        brightnessCombo.setTooltip(new javafx.scene.control.Tooltip(
+                "Darken the colour where this 0-1 channel is low. With an angle channel and 'Order parameter',"
+                        + " well-aligned fibers show bright colour and randomly oriented ones fade to black."));
         status = new Label();
         status.setWrapText(true);
         status.setMaxWidth(420);
@@ -131,6 +147,7 @@ public final class DensityOverlayDialog {
         grid.addRow(1, new Label("Channel"), channelCombo);
         grid.addRow(2, new Label("Colour map"), colourCombo);
         grid.addRow(3, new Label("Range"), new HBox(6, minField, new Label("to"), maxField, autoBtn));
+        grid.addRow(4, new Label("Brightness from"), brightnessCombo);
         GridPane.setFillWidth(mapCombo, true);
 
         Label note = new Label("Drawn on QuPath's pixel-classification layer: the opacity slider and"
@@ -155,7 +172,11 @@ public final class DensityOverlayDialog {
         stage.setScene(new Scene(root));
 
         mapCombo.valueProperty().addListener((o, a, b) -> refreshChannels());
-        channelCombo.valueProperty().addListener((o, a, b) -> load(true));
+        channelCombo.valueProperty().addListener((o, a, b) -> {
+            applyChannelDefaults();
+            load(true);
+        });
+        brightnessCombo.valueProperty().addListener((o, a, b) -> loadBrightness());
         colourCombo.valueProperty().addListener((o, a, b) -> {
             if (shown != null) render();
         });
@@ -269,16 +290,83 @@ public final class DensityOverlayDialog {
     private void refreshChannels() {
         Path map = mapCombo.getValue();
         channelCombo.getItems().clear();
+        brightnessCombo.getItems().clear();
         loaded = null;
+        brightnessLoaded = null;
+        channelInfos = List.of();
         if (map == null) return;
         try {
-            for (var info : DensitySidecar.readChannelInfos(map))
-                channelCombo.getItems().add(info.name);
+            channelInfos = DensitySidecar.readChannelInfos(map);
+            brightnessCombo.getItems().add(NO_BRIGHTNESS);
+            for (var info : channelInfos) {
+                if (BRIGHTNESS_CHANNELS.contains(info.name))
+                    brightnessCombo.getItems().add(info.name);
+            }
+            brightnessCombo.getSelectionModel().select(NO_BRIGHTNESS);
+            for (var info : channelInfos) channelCombo.getItems().add(info.name);
             if (!channelCombo.getItems().isEmpty())
                 channelCombo.getSelectionModel().select(0);
         } catch (IOException e) {
             status.setText("Could not read the map's channels: " + e.getMessage());
         }
+    }
+
+    /** The chosen channel's info, or null. */
+    private DensitySidecar.ChannelInfo selectedInfo() {
+        int i = channelCombo.getSelectionModel().getSelectedIndex();
+        return i < 0 || i >= channelInfos.size() ? null : channelInfos.get(i);
+    }
+
+    /**
+     * An angle channel gets the cyclic colour map and, where the map has one,
+     * order parameter as brightness; any other channel goes back to Viridis
+     * and no brightness if it had the angle settings.
+     */
+    private void applyChannelDefaults() {
+        var info = selectedInfo();
+        if (info == null) return;
+        if (info.isAxial()) {
+            if (colourCombo.getItems().contains(CyclicColorMaps.CYCLIC)) colourCombo.setValue(CyclicColorMaps.CYCLIC);
+            brightnessCombo.setValue(BRIGHTNESS_CHANNELS.stream()
+                    .filter(brightnessCombo.getItems()::contains)
+                    .findFirst()
+                    .orElse(NO_BRIGHTNESS));
+        } else {
+            if (CyclicColorMaps.isCyclic(colourCombo.getValue())) {
+                colourCombo.setValue(colourCombo.getItems().stream()
+                        .filter(n -> n.equalsIgnoreCase("Viridis"))
+                        .findFirst()
+                        .orElse(colourCombo.getValue()));
+            }
+            brightnessCombo.setValue(NO_BRIGHTNESS);
+        }
+    }
+
+    private void loadBrightness() {
+        Path map = mapCombo.getValue();
+        String name = brightnessCombo.getValue();
+        brightnessLoaded = null;
+        if (map == null || name == null || NO_BRIGHTNESS.equals(name)) {
+            if (shown != null) render();
+            return;
+        }
+        int ch = -1;
+        for (var info : channelInfos) if (info.name.equals(name)) ch = info.index;
+        if (ch < 0) return;
+        final int channel = ch;
+        reader.submit(() -> {
+            try {
+                DensityOverlay.Loaded b = DensityOverlay.load(map, channel);
+                HeadlessFx.runLater(() -> {
+                    if (!map.equals(mapCombo.getValue()) || !name.equals(brightnessCombo.getValue())) return;
+                    brightnessLoaded = b;
+                    if (shown != null) render();
+                });
+            } catch (Exception e) {
+                logger.warn("Could not read brightness channel {} of {}", name, map.getFileName(), e);
+                HeadlessFx.runLater(() -> status.setText("Could not read " + name + ": " + e.getMessage()));
+            }
+        });
     }
 
     private void load(boolean autoRangeAfter) {
@@ -326,7 +414,8 @@ public final class DensityOverlayDialog {
 
     private void autoRange() {
         if (loaded == null) return;
-        double[] r = DensityOverlay.percentileRange(loaded.grid(), 1, 99);
+        double period = loaded.info().axialPeriod(loaded.channel());
+        double[] r = period > 0 ? new double[] {0, period} : DensityOverlay.percentileRange(loaded.grid(), 1, 99);
         minField.setText(String.format(Locale.ROOT, "%.4g", r[0]));
         maxField.setText(String.format(Locale.ROOT, "%.4g", r[1]));
         if (shown != null) render();
@@ -371,7 +460,10 @@ public final class DensityOverlayDialog {
                     + server.getHeight() + ".");
             return;
         }
-        shown = DensityOverlay.show(viewer, qupath.getOverlayOptions(), loaded, cmap, min, max);
+        boolean wantBrightness =
+                !NO_BRIGHTNESS.equals(brightnessCombo.getValue()) && brightnessCombo.getValue() != null;
+        shown = DensityOverlay.show(
+                viewer, qupath.getOverlayOptions(), loaded, cmap, min, max, wantBrightness ? brightnessLoaded : null);
         logger.info("Density overlay: {} [{}..{}] {}", channelCombo.getValue(), min, max, colourCombo.getValue());
     }
 
