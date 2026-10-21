@@ -27,7 +27,8 @@ class DensityOverlayTest {
     private static DensityMapOverlay overlay(DensityLattice lat, float[] grid, boolean smooth, double min, double max) {
         var info = new DensityMapInfo(
                 lat, 1000, 1000, 0.25, smooth, "img", List.of(new DensitySidecar.ChannelInfo(0, "Signal", null, 0)));
-        return new DensityMapOverlay(null, info, 0, grid, viridis(), min, max, -1, null);
+        return new DensityMapOverlay(
+                null, info, 0, grid, DensityMapOverlay.Style.range(viridis(), min, max, false), -1, null);
     }
 
     @Test
@@ -46,6 +47,60 @@ class DensityOverlayTest {
         assertThat(img.getRGB(3, 0)).isEqualTo(img.getRGB(2, 0));
         assertThat(img.getRGB(0, 0)).isNotEqualTo(img.getRGB(3, 0));
         assertThat(img.getRGB(1, 0)).isEqualTo(0xff000000 | viridis().getColor(0, 0, 1));
+    }
+
+    @Test
+    void valuesAtOrBelowTheMinimumCanBeLeftUndrawn() {
+        var info = new DensityMapInfo(
+                DensityLattice.blocks(4, 1, 1),
+                1000,
+                1000,
+                0.25,
+                false,
+                "img",
+                List.of(new DensitySidecar.ChannelInfo(0, "Signal", null, 0)));
+        float[] grid = {-5f, 0f, 0.5f, 9f};
+        var o = new DensityMapOverlay(
+                null, info, 0, grid, DensityMapOverlay.Style.range(viridis(), 0, 1, true), -1, null);
+        BufferedImage img = o.render(0, 0, 4, 1, 4, 1);
+        assertThat(img.getRGB(0, 0) >>> 24).isZero();
+        assertThat(img.getRGB(1, 0) >>> 24).isZero();
+        assertThat(img.getRGB(2, 0) >>> 24).isEqualTo(255);
+        assertThat(img.getRGB(3, 0)).isEqualTo(0xff000000 | viridis().getColor(1, 0, 1));
+    }
+
+    @Test
+    void aPredictedClassChannelIsDrawnInClassColoursAndNeverBlended() {
+        var info = new DensityMapInfo(
+                DensityLattice.blocks(4, 1, 10),
+                1000,
+                1000,
+                0.25,
+                true,
+                "img",
+                List.of(
+                        new DensitySidecar.ChannelInfo(0, "P(Stroma)", "probability", 0),
+                        new DensitySidecar.ChannelInfo(1, "P(Tumor)", "probability", 0),
+                        new DensitySidecar.ChannelInfo(2, "Max probability", "probability", 0),
+                        new DensitySidecar.ChannelInfo(3, "Predicted class index", null, 0)));
+        assertThat(DensityOverlay.classNames(info)).containsExactly("Stroma", "Tumor");
+        assertThat(DensityOverlay.isClassChannel(info.channels().get(3))).isTrue();
+        assertThat(DensityOverlay.isClassChannel(info.channels().get(2))).isFalse();
+        var style = DensityMapOverlay.Style.classes(List.of("Stroma", "Tumor"), new int[] {0xff0000, 0x0000ff});
+        // Stroma, Tumor, abstained (NaN), and an index the map does not name.
+        float[] grid = {0f, 1f, Float.NaN, 7f};
+        var o = new DensityMapOverlay(null, info, 3, grid, style, -1, null);
+        // Even with "smooth" on, every pixel is its own cell's class colour.
+        BufferedImage img = o.render(0, 0, 40, 10, 40, 1);
+        for (int x = 0; x < 10; x++) assertThat(img.getRGB(x, 0)).isEqualTo(0xffff0000);
+        for (int x = 10; x < 20; x++) assertThat(img.getRGB(x, 0)).isEqualTo(0xff0000ff);
+        for (int x = 20; x < 40; x++) assertThat(img.getRGB(x, 0) >>> 24).isZero();
+        var named = new DensityMapOverlay(new qupath.lib.gui.viewer.OverlayOptions(), info, 3, grid, style, -1, null);
+        assertThat(named.getLocationString(null, 15, 5, 0, 0)).isEqualTo("Predicted class index: Tumor");
+        assertThat(named.getLocationString(null, 25, 5, 0, 0)).isNull();
+        // Max probability as brightness: a 0.5 window is drawn at half brightness.
+        var lit = new DensityMapOverlay(null, info, 3, grid, style, 2, new float[] {1f, 0.5f, 1f, 1f});
+        assertThat(lit.render(0, 0, 40, 10, 4, 1).getRGB(1, 0)).isEqualTo(0xff000080);
     }
 
     @Test
@@ -103,13 +158,15 @@ class DensityOverlayTest {
         float[] angle = {170f, 10f};
         float[] order = {1f, 0.5f};
         var cyclic = CyclicColorMaps.labCircle(CyclicColorMaps.CYCLIC);
-        var plain = new DensityMapOverlay(null, info, 0, angle, cyclic, 0, 180, -1, null);
+        var plain = new DensityMapOverlay(
+                null, info, 0, angle, DensityMapOverlay.Style.range(cyclic, 0, 180, false), -1, null);
         BufferedImage mid = plain.render(9, 0, 2, 10, 2, 1);
         // Both output pixels sit 0.5 px either side of the half-way point: near 0 / 180 degrees.
         int expect = 0xff000000 | cyclic.getColor(0, 0, 180);
         for (int x = 0; x < 2; x++)
             assertThat(colourDistance(mid.getRGB(x, 0), expect)).isLessThan(12);
-        var lit = new DensityMapOverlay(null, info, 0, angle, cyclic, 0, 180, 1, order);
+        var lit = new DensityMapOverlay(
+                null, info, 0, angle, DensityMapOverlay.Style.range(cyclic, 0, 180, false), 1, order);
         BufferedImage img = lit.render(0, 0, 20, 10, 4, 2);
         // The right-hand cell centre (x = 15) is drawn at half brightness.
         int full = plain.render(0, 0, 20, 10, 4, 2).getRGB(3, 0);

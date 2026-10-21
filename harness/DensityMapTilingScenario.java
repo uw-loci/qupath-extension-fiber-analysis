@@ -28,11 +28,15 @@ import javafx.stage.Window;
 import javax.imageio.ImageIO;
 import qupath.ext.fiberanalysis.analysis.CyclicColorMaps;
 import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
+import qupath.ext.fiberanalysis.analysis.DensityChannelSpec;
+import qupath.ext.fiberanalysis.analysis.DensityLattice;
 import qupath.ext.fiberanalysis.analysis.DensityMapInfo;
 import qupath.ext.fiberanalysis.analysis.DensityMapOverlay;
 import qupath.ext.fiberanalysis.analysis.DensityMapReader;
+import qupath.ext.fiberanalysis.analysis.DensityOverlay;
 import qupath.ext.fiberanalysis.analysis.DensityOverlayDialog;
 import qupath.ext.fiberanalysis.analysis.DensitySidecar;
+import qupath.ext.fiberanalysis.analysis.DensityTiffWriter;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow;
 import qupath.ext.fiberanalysis.analysis.PixelPositivitySpec;
@@ -110,6 +114,12 @@ public final class DensityMapTilingScenario {
                 overlayScenario(qupath, existing.getImageList().get(0), outDir);
             } catch (Exception e) {
                 check(false, "the overlay scenario ran without an exception (" + e + ")");
+            }
+            try {
+                overlayStylesScenario(qupath, existing.getImageList().get(0), outDir);
+            } catch (Exception e) {
+                e.printStackTrace();
+                check(false, "the overlay styles scenario ran without an exception (" + e + ")");
             }
             finish();
         }
@@ -277,6 +287,12 @@ public final class DensityMapTilingScenario {
             overlayScenario(qupath, entry, outDir);
         } catch (Exception e) {
             check(false, "the overlay scenario ran without an exception (" + e + ")");
+        }
+        try {
+            overlayStylesScenario(qupath, entry, outDir);
+        } catch (Exception e) {
+            e.printStackTrace();
+            check(false, "the overlay styles scenario ran without an exception (" + e + ")");
         }
         finish();
     }
@@ -476,6 +492,244 @@ public final class DensityMapTilingScenario {
                 "a map made on another image of the same size is offered, labelled with its source");
         project.removeImage(twin, true);
         project.syncChanges();
+    }
+
+    /**
+     * "Hide values at or below the minimum" on the density map, and a
+     * classifier map's predicted-class channel drawn in class colours.
+     */
+    private static void overlayStylesScenario(
+            QuPathGUI qupath, ProjectImageEntry<BufferedImage> entry, Path outDir) throws Exception {
+        var project = onFx(qupath::getProject);
+        var data = onFx(qupath::getImageData);
+        var server = data.getServer();
+        int w = server.getWidth();
+        int h = server.getHeight();
+
+        // A synthetic classifier map: Stroma on the left, Tumor on the right,
+        // an abstained (NaN) column between, max probability rising left to right.
+        int cell = 240;
+        int gw = w / cell;
+        int gh = h / cell;
+        float[] pStroma = new float[gw * gh];
+        float[] pTumor = new float[gw * gh];
+        float[] maxP = new float[gw * gh];
+        float[] index = new float[gw * gh];
+        for (int j = 0; j < gh; j++)
+            for (int i = 0; i < gw; i++) {
+                int k = j * gw + i;
+                boolean tumor = i > gw / 2;
+                maxP[k] = 0.5f + 0.5f * i / (gw - 1);
+                pTumor[k] = tumor ? maxP[k] : 1 - maxP[k];
+                pStroma[k] = 1 - pTumor[k];
+                index[k] = i == gw / 2 ? Float.NaN : (tumor ? 1 : 0);
+            }
+        Path classMap = DensitySidecar.classifierMapsRoot(project)
+                .resolve(DensitySidecar.sanitize(entry.getImageName()) + "_harness-classes.ome.tif");
+        Files.createDirectories(classMap.getParent());
+        DensityTiffWriter.write(
+                classMap.toString(),
+                new DensityMapInfo(
+                        DensityLattice.blocks(gw, gh, cell),
+                        w,
+                        h,
+                        server.getPixelCalibration().getAveragedPixelSizeMicrons(),
+                        false,
+                        entry.getImageName(),
+                        List.of()),
+                List.of(
+                        DensityChannelSpec.forClassProbability("Stroma"),
+                        DensityChannelSpec.forClassProbability("Tumor"),
+                        DensityChannelSpec.forMaxProbability(),
+                        DensityChannelSpec.forPredictedClassIndex()),
+                new float[][] {pStroma, pTumor, maxP, index});
+        note("synthetic classifier map: " + classMap.getFileName() + " (" + gw + "x" + gh + " cells)");
+
+        // A fresh dialog, so it lists the new map.
+        onFx(() -> {
+            for (Window win : new ArrayList<>(Window.getWindows())) {
+                if (win instanceof Stage st && "Fiber Analysis -- Density overlay".equals(st.getTitle())) st.close();
+            }
+            new DensityOverlayDialog(qupath).show();
+            return null;
+        });
+        Thread.sleep(1500);
+        Stage stage = onFx(() -> {
+            for (Window win : Window.getWindows()) {
+                if (win instanceof Stage st && "Fiber Analysis -- Density overlay".equals(st.getTitle())) return st;
+            }
+            return null;
+        });
+        check(stage != null, "a fresh overlay dialog opens");
+        if (stage == null) return;
+        var root = stage.getScene().getRoot();
+        var combos = onFx(() -> new ArrayList<>(root.lookupAll(".combo-box")));
+        @SuppressWarnings("unchecked")
+        var mapCombo = (javafx.scene.control.ComboBox<Path>) combos.get(0);
+        @SuppressWarnings("unchecked")
+        var channelCombo = (javafx.scene.control.ComboBox<String>) combos.get(1);
+        @SuppressWarnings("unchecked")
+        var colourCombo = (javafx.scene.control.ComboBox<String>) combos.get(2);
+        @SuppressWarnings("unchecked")
+        var brightnessCombo = (javafx.scene.control.ComboBox<String>) combos.get(3);
+        var fields = onFx(() -> new ArrayList<>(root.lookupAll(".text-field")));
+        var minField = (javafx.scene.control.TextField) fields.get(0);
+        var hideBox = (javafx.scene.control.CheckBox) onFx(() -> root.lookup(".check-box"));
+        check(hideBox != null && onFx(hideBox::getText).equals("Hide values at or below the minimum"),
+                "the dialog has the 'Hide values at or below the minimum' option");
+        var statusLabel = onFx(() -> root.lookupAll(".label").stream()
+                .filter(n -> n instanceof javafx.scene.control.Label)
+                .map(n -> (javafx.scene.control.Label) n)
+                .filter(l -> l.getMaxWidth() == 420 && l.isWrapText() && !l.getText().startsWith("Drawn on"))
+                .findFirst()
+                .orElse(null));
+        for (int i = 0; i < 300 && onFx(() -> mapCombo.getItems().size()) < 2; i++) Thread.sleep(100);
+        check(onFx(() -> mapCombo.getItems().contains(classMap)), "the classifier map is listed");
+        var viewer = onFx(qupath::getViewer);
+        double ds = Math.max(w, h) / 1600.0;
+        var region = ImageRegion.createInstance(0, 0, w, h, 0, 0);
+
+        // 1. Hide at or below the minimum, on the density map's signal channel.
+        onFx(() -> {
+            mapCombo.getSelectionModel().select(0);
+            return null;
+        });
+        for (int i = 0; i < 300 && onFx(() -> channelCombo.getItems().isEmpty()); i++) Thread.sleep(100);
+        String channel = "Signal density (no threshold)";
+        onFx(() -> {
+            channelCombo.getSelectionModel().select(channel);
+            return null;
+        });
+        for (int i = 0; i < 600; i++) {
+            if (onFx(statusLabel::getText).startsWith(channel + ":") && !onFx(minField::getText).isBlank()) break;
+            Thread.sleep(100);
+        }
+        float[] signal;
+        try (DensityMapReader r = DensityMapReader.open(DensitySidecar.sidecarPathFor(project, entry))) {
+            signal = r.readChannel(r.info().channelIndex(channel));
+        }
+        double median = DensityOverlay.percentileRange(signal, 50, 99)[0];
+        long[] drawn = new long[2];
+        for (int pass = 0; pass < 2; pass++) {
+            boolean hide = pass == 1;
+            onFx(() -> {
+                minField.setText(String.format(java.util.Locale.ROOT, "%.6g", median));
+                hideBox.setSelected(hide);
+                for (Node n : root.lookupAll(".button")) {
+                    if (n instanceof javafx.scene.control.Button b && "Show".equals(b.getText())) b.fire();
+                }
+                return null;
+            });
+            Thread.sleep(500);
+            var overlay = onFx(viewer::getCustomPixelLayerOverlay);
+            drawn[pass] = opaquePixels(overlay, region, ds, data, w, h, null);
+        }
+        note(String.format("with the minimum at the median (%.4g): %d drawn pixels, %d with the option on",
+                median, drawn[0], drawn[1]));
+        check(drawn[1] > 0 && drawn[1] < 0.65 * drawn[0],
+                "'Hide values at or below the minimum' leaves about half the map (the lower half) undrawn");
+
+        // 2. The predicted-class channel in class colours.
+        onFx(() -> {
+            hideBox.setSelected(false);
+            mapCombo.getSelectionModel().select(classMap);
+            return null;
+        });
+        for (int i = 0; i < 300 && !onFx(() -> channelCombo.getItems().contains("Predicted class index")); i++)
+            Thread.sleep(100);
+        check(onFx(() -> brightnessCombo.getItems().contains("Max probability")),
+                "'Max probability' is offered as brightness for a classifier map");
+        onFx(() -> {
+            channelCombo.getSelectionModel().select("Predicted class index");
+            return null;
+        });
+        for (int i = 0; i < 300 && !onFx(statusLabel::getText).startsWith("Predicted class index:"); i++)
+            Thread.sleep(100);
+        note("status: " + onFx(statusLabel::getText));
+        check(onFx(() -> colourCombo.isDisabled() && minField.isDisabled() && hideBox.isDisabled()),
+                "the colour map, range and hide option are disabled for a class channel");
+        onFx(() -> {
+            for (Node n : root.lookupAll(".button")) {
+                if (n instanceof javafx.scene.control.Button b && "Show".equals(b.getText())) b.fire();
+            }
+            return null;
+        });
+        Thread.sleep(500);
+        var classOverlay = onFx(viewer::getCustomPixelLayerOverlay);
+        check(classOverlay instanceof DensityMapOverlay, "the class channel is shown");
+        if (!(classOverlay instanceof DensityMapOverlay)) return;
+        int stroma = PathClass.fromString("Stroma").getColor() & 0xffffff;
+        int tumor = PathClass.fromString("Tumor").getColor() & 0xffffff;
+        BufferedImage[] img = new BufferedImage[1];
+        opaquePixels(classOverlay, region, ds, data, w, h, img);
+        int y = img[0].getHeight() / 2;
+        int left = img[0].getRGB((int) (cell * 2 / ds), y) & 0xffffff;
+        int right = img[0].getRGB(img[0].getWidth() - (int) (cell * 2 / ds), y) & 0xffffff;
+        int middle = img[0].getRGB((int) ((gw / 2 + 0.5) * cell / ds), y);
+        note(String.format("left %06x (Stroma %06x), right %06x (Tumor %06x), middle alpha %d",
+                left, stroma, right, tumor, middle >>> 24));
+        check(left == stroma && right == tumor, "each window is drawn in its class's own colour");
+        check(middle >>> 24 == 0, "an abstained window is not drawn");
+        String at = onFx(() -> classOverlay.getLocationString(data, cell * 1.5, h / 2.0, 0, 0));
+        note("location bar: " + at);
+        check("Predicted class index: Stroma".equals(at), "the location bar names the class");
+        ImageIO.write(img[0], "png", outDir.resolve("overlay_classes.png").toFile());
+        note("class overlay: " + outDir.resolve("overlay_classes.png"));
+
+        // Max probability as brightness: the left edge (0.5) is drawn darker than the right (1.0).
+        onFx(() -> {
+            brightnessCombo.setValue("Max probability");
+            return null;
+        });
+        for (int i = 0; i < 100; i++) {
+            var o = onFx(viewer::getCustomPixelLayerOverlay);
+            String s2 = o == null ? null : onFx(() -> o.getLocationString(data, cell * 1.5, h / 2.0, 0, 0));
+            if (s2 != null && s2.contains("Max probability")) break;
+            Thread.sleep(100);
+        }
+        var lit = onFx(viewer::getCustomPixelLayerOverlay);
+        String litAt = onFx(() -> lit.getLocationString(data, cell * 0.5, h / 2.0, 0, 0));
+        note("with brightness: " + litAt);
+        opaquePixels(lit, region, ds, data, w, h, img);
+        int dim = img[0].getRGB((int) (cell * 0.5 / ds), y);
+        check(litAt != null && litAt.contains("Max probability: 0.5")
+                        && Math.abs(((dim >> 16) & 0xff) - ((stroma >> 16) & 0xff) / 2) <= 2,
+                "with 'Max probability' as brightness a 0.5 window is drawn at half brightness");
+
+        onFx(() -> {
+            for (Node n : root.lookupAll(".button")) {
+                if (n instanceof javafx.scene.control.Button b && "Hide".equals(b.getText())) b.fire();
+            }
+            return null;
+        });
+        Files.deleteIfExists(classMap);
+    }
+
+    /** Paints an overlay over a transparent image of the whole slide and counts what it drew. */
+    private static long opaquePixels(
+            qupath.lib.gui.viewer.overlays.PathOverlay overlay,
+            ImageRegion region,
+            double ds,
+            ImageData<BufferedImage> data,
+            int w,
+            int h,
+            BufferedImage[] out)
+            throws Exception {
+        if (overlay == null) return -1;
+        BufferedImage img = new BufferedImage(
+                (int) Math.ceil(w / ds), (int) Math.ceil(h / ds), BufferedImage.TYPE_INT_ARGB);
+        var g = img.createGraphics();
+        g.scale(1 / ds, 1 / ds);
+        onFx(() -> {
+            overlay.paintOverlay(g, region, ds, data, true);
+            return null;
+        });
+        g.dispose();
+        long n = 0;
+        for (int y = 0; y < img.getHeight(); y++)
+            for (int x = 0; x < img.getWidth(); x++) if ((img.getRGB(x, y) >>> 24) != 0) n++;
+        if (out != null) out[0] = img;
+        return n;
     }
 
     /** "Add density channels as a new image": a new entry, saved, tagged, reopened as after a restart. */

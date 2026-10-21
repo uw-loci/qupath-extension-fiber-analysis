@@ -206,6 +206,10 @@ of the same slide, such as a map computed on the birefringence image shown over
 the brightfield one. No-data areas are transparent. The overlay is coloured from
 the grid at screen resolution each time the view changes, so it is exact at any
 zoom, and the viewer's location bar shows the map value under the cursor.
+**Hide values at or below the minimum** leaves the lowest values undrawn instead
+of painting them in the first colour, so the image shows through where there is
+nothing to see, such as the slide background around the tissue. Set the minimum
+to the background level first.
 
 **Mean angle (deg)** is an orientation, where 1 and 179 degrees are two degrees
 apart. A linear colour map paints those two at opposite ends of the scale, so
@@ -225,6 +229,14 @@ sampling and the channels entry. It
 sits on QuPath's pixel-classification layer, so the opacity slider and **Show
 pixel classification** (`C`) control it, and showing it replaces a pixel
 classifier overlay. An RGB image keeps its normal look.
+
+A window-classifier map's **Predicted class index** channel is drawn in the
+colour each class already has in QuPath, not on a colour map, so the colour map,
+range and hide controls are switched off for it. The class names come from the
+map's `P(<class>)` channels. A window the model abstained on is not drawn, and
+the location bar names the class under the cursor. For a classifier map,
+**Brightness from** also offers **Max probability**, which fades the windows the
+model was least sure of.
 
 ### Per-window or per-pixel
 

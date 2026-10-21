@@ -12,7 +12,6 @@ package qupath.ext.fiberanalysis.classifier;
 import com.google.gson.Gson;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -35,6 +34,7 @@ import qupath.ext.fiberanalysis.analysis.DensityLattice;
 import qupath.ext.fiberanalysis.analysis.DensityMapInfo;
 import qupath.ext.fiberanalysis.analysis.DensityTiffWriter;
 import qupath.ext.fiberanalysis.analysis.NpzReader;
+import qupath.ext.fiberanalysis.service.ApposeArrays;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
@@ -241,7 +241,7 @@ public final class WindowClassifierWorkflow {
             }
             return new ContextResult(combined, feat.asFloat32());
         } finally {
-            closeQuietly(nd);
+            ApposeArrays.closeQuietly(nd);
         }
     }
 
@@ -403,7 +403,7 @@ public final class WindowClassifierWorkflow {
                     "BLOCK".equals(verdict) ? null : modelDir,
                     Map.copyOf(rejections));
         } finally {
-            closeQuietly(xNd, yNd, gNd, aNd);
+            ApposeArrays.closeQuietly(xNd, yNd, gNd, aNd);
         }
     }
 
@@ -467,7 +467,7 @@ public final class WindowClassifierWorkflow {
                     List.copyOf(warnings),
                     features);
         } finally {
-            closeQuietly(nd);
+            ApposeArrays.closeQuietly(nd);
         }
     }
 
@@ -652,39 +652,16 @@ public final class WindowClassifierWorkflow {
         return task;
     }
 
-    /**
-     * Build a float32 (rows, cols) NDArray.
-     *
-     * <p>Hand-rolled rather than going through the shared
-     * {@code ApposeArrays} helper, which does not exist in this repo's main
-     * branch yet. When it lands, this and {@link #intVector} move there.
-     */
+    /** A float32 (rows, cols) array from row-major values; the caller closes it. */
     private static NDArray matrix(float[] values, int rows, int cols) {
-        NDArray nd = new NDArray(NDArray.DType.FLOAT32, new NDArray.Shape(NDArray.Shape.Order.C_ORDER, rows, cols));
-        ByteBuffer buf = nd.buffer();
-        buf.rewind();
-        buf.asFloatBuffer().put(values, 0, rows * cols);
+        NDArray nd = ApposeArrays.allocate(NDArray.DType.FLOAT32, rows, cols);
+        ApposeArrays.bytes(nd).asFloatBuffer().put(values, 0, rows * cols);
         return nd;
     }
 
     private static NDArray intVector(List<Integer> values) {
-        NDArray nd = new NDArray(NDArray.DType.INT32, new NDArray.Shape(NDArray.Shape.Order.C_ORDER, values.size()));
-        ByteBuffer buf = nd.buffer();
-        buf.rewind();
-        var ints = buf.asIntBuffer();
-        for (int v : values) ints.put(v);
-        return nd;
-    }
-
-    private static void closeQuietly(NDArray... arrays) {
-        for (NDArray a : arrays) {
-            if (a == null) continue;
-            try {
-                a.close();
-            } catch (Exception ex) {
-                logger.warn("Could not release shared memory: {}", ex.getMessage());
-            }
-        }
+        return ApposeArrays.int32Vector(
+                values.stream().mapToInt(Integer::intValue).toArray());
     }
 
     /** Column-major grids to row-major rows, which is what the model wants. */

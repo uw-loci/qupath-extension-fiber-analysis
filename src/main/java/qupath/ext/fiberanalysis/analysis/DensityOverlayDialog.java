@@ -23,6 +23,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
@@ -47,6 +48,7 @@ import qupath.lib.projects.ProjectImageEntry;
  * ({@link DensityOverlay}). Lists the open image's own maps first, then maps
  * computed on other project images of the same size -- other images of the
  * same slide, such as a birefringence map over the brightfield image.
+ * A classifier's predicted-class channel is drawn in the class colours.
  * Non-modal; follows the open image.
  */
 public final class DensityOverlayDialog {
@@ -62,6 +64,8 @@ public final class DensityOverlayDialog {
     private ComboBox<String> brightnessCombo;
     private TextField minField;
     private TextField maxField;
+    private Button autoBtn;
+    private CheckBox hideBelowBox;
     private Label status;
 
     private DensityOverlay.Loaded loaded;
@@ -71,7 +75,10 @@ public final class DensityOverlayDialog {
     static final String NO_BRIGHTNESS = "None";
 
     /** 0-1 channels that make sense as brightness, in order of preference. */
-    static final List<String> BRIGHTNESS_CHANNELS = List.of("Order parameter", "Intensity coherence (no threshold)");
+    static final List<String> BRIGHTNESS_CHANNELS = List.of(
+            "Order parameter",
+            "Intensity coherence (no threshold)",
+            DensityChannelSpec.forMaxProbability().channelName);
 
     /** Display text for each listed map. */
     private final java.util.Map<Path, String> labels = new java.util.HashMap<>();
@@ -126,16 +133,21 @@ public final class DensityOverlayDialog {
         maxField = new TextField();
         minField.setPrefColumnCount(8);
         maxField.setPrefColumnCount(8);
-        Button autoBtn = new Button("Auto (1-99%)");
+        autoBtn = new Button("Auto (1-99%)");
         autoBtn.setTooltip(new javafx.scene.control.Tooltip(
                 "The 1st to 99th percentile of the channel. An angle channel always gets its full period (0-180),"
                         + " so colours mean the same angle on every image."));
         autoBtn.setOnAction(e -> autoRange());
+        hideBelowBox = new CheckBox("Hide values at or below the minimum");
+        hideBelowBox.setTooltip(new javafx.scene.control.Tooltip(
+                "Leave the lowest values undrawn instead of painting them in the first colour, so the image"
+                        + " shows through where, for example, the slide background has no collagen."));
         brightnessCombo = new ComboBox<>();
         brightnessCombo.setMaxWidth(Double.MAX_VALUE);
         brightnessCombo.setTooltip(new javafx.scene.control.Tooltip(
                 "Darken the colour where this 0-1 channel is low. With an angle channel and 'Order parameter',"
-                        + " well-aligned fibers show bright colour and randomly oriented ones fade to black."));
+                        + " well-aligned fibers show bright colour and randomly oriented ones fade to black;"
+                        + " with the predicted class and 'Max probability', uncertain windows fade."));
         status = new Label();
         status.setWrapText(true);
         status.setMaxWidth(420);
@@ -147,7 +159,8 @@ public final class DensityOverlayDialog {
         grid.addRow(1, new Label("Channel"), channelCombo);
         grid.addRow(2, new Label("Colour map"), colourCombo);
         grid.addRow(3, new Label("Range"), new HBox(6, minField, new Label("to"), maxField, autoBtn));
-        grid.addRow(4, new Label("Brightness from"), brightnessCombo);
+        grid.add(hideBelowBox, 1, 4);
+        grid.addRow(5, new Label("Brightness from"), brightnessCombo);
         GridPane.setFillWidth(mapCombo, true);
 
         Label note = new Label("Drawn on QuPath's pixel-classification layer: the opacity slider and"
@@ -178,6 +191,9 @@ public final class DensityOverlayDialog {
         });
         brightnessCombo.valueProperty().addListener((o, a, b) -> loadBrightness());
         colourCombo.valueProperty().addListener((o, a, b) -> {
+            if (shown != null) render();
+        });
+        hideBelowBox.selectedProperty().addListener((o, a, b) -> {
             if (shown != null) render();
         });
         imageListener = (o, a, b) -> {
@@ -317,14 +333,23 @@ public final class DensityOverlayDialog {
         return i < 0 || i >= channelInfos.size() ? null : channelInfos.get(i);
     }
 
+    /** True when the chosen channel is a predicted class and the map names its classes. */
+    private boolean classChannelSelected() {
+        return DensityOverlay.isClassChannel(selectedInfo())
+                && channelInfos.stream().anyMatch(c -> c.name.startsWith("P("));
+    }
+
     /**
      * An angle channel gets the cyclic colour map and, where the map has one,
      * order parameter as brightness; any other channel goes back to Viridis
-     * and no brightness if it had the angle settings.
+     * and no brightness if it had the angle settings. A class channel has
+     * no colour map or range to set.
      */
     private void applyChannelDefaults() {
         var info = selectedInfo();
         if (info == null) return;
+        boolean classes = classChannelSelected();
+        for (var control : List.of(colourCombo, minField, maxField, autoBtn, hideBelowBox)) control.setDisable(classes);
         if (info.isAxial()) {
             if (colourCombo.getItems().contains(CyclicColorMaps.CYCLIC)) colourCombo.setValue(CyclicColorMaps.CYCLIC);
             brightnessCombo.setValue(BRIGHTNESS_CHANNELS.stream()
@@ -389,15 +414,18 @@ public final class DensityOverlayDialog {
                     loading = false;
                     var lat = c.info().lattice();
                     status.setText(String.format(
-                            Locale.ROOT,
-                            "%s: %d x %d cells of %d px (%s) for a %d x %d image.",
-                            channelCombo.getValue(),
-                            lat.gridW(),
-                            lat.gridH(),
-                            lat.cellPx(),
-                            c.info().smooth() ? "smooth" : "one value per cell",
-                            c.info().sourceWidth(),
-                            c.info().sourceHeight()));
+                                    Locale.ROOT,
+                                    "%s: %d x %d cells of %d px (%s) for a %d x %d image.",
+                                    channelCombo.getValue(),
+                                    lat.gridW(),
+                                    lat.gridH(),
+                                    lat.cellPx(),
+                                    c.info().smooth() ? "smooth" : "one value per cell",
+                                    c.info().sourceWidth(),
+                                    c.info().sourceHeight())
+                            + (classChannelSelected()
+                                    ? " Drawn in each class's colour; a window the model abstained on is not drawn."
+                                    : ""));
                     if (autoRangeAfter) autoRange();
                     if (shown != null || showWhenLoaded) render();
                 });
@@ -413,7 +441,7 @@ public final class DensityOverlayDialog {
     }
 
     private void autoRange() {
-        if (loaded == null) return;
+        if (loaded == null || classChannelSelected()) return;
         double period = loaded.info().axialPeriod(loaded.channel());
         double[] r = period > 0 ? new double[] {0, period} : DensityOverlay.percentileRange(loaded.grid(), 1, 99);
         minField.setText(String.format(Locale.ROOT, "%.4g", r[0]));
@@ -433,21 +461,10 @@ public final class DensityOverlayDialog {
             return;
         }
         showWhenLoaded = false;
-        double min;
-        double max;
-        try {
-            min = Double.parseDouble(minField.getText().trim());
-            max = Double.parseDouble(maxField.getText().trim());
-        } catch (NumberFormatException e) {
-            status.setText("The range must be two numbers.");
-            return;
-        }
-        if (!(max > min)) {
-            status.setText("The upper end of the range must be above the lower end.");
-            return;
-        }
-        var cmap = ColorMaps.getColorMaps().get(colourCombo.getValue());
-        if (cmap == null) return;
+        DensityMapOverlay.Style style = classChannelSelected()
+                ? DensityOverlay.classStyle(DensityOverlay.classNames(loaded.info()))
+                : rangeStyle();
+        if (style == null) return;
         var viewer = qupath.getViewer();
         if (viewer == null || viewer.getImageData() == null) {
             Dialogs.showErrorMessage(TITLE, "Open the image the map belongs to first.");
@@ -463,8 +480,38 @@ public final class DensityOverlayDialog {
         boolean wantBrightness =
                 !NO_BRIGHTNESS.equals(brightnessCombo.getValue()) && brightnessCombo.getValue() != null;
         shown = DensityOverlay.show(
-                viewer, qupath.getOverlayOptions(), loaded, cmap, min, max, wantBrightness ? brightnessLoaded : null);
-        logger.info("Density overlay: {} [{}..{}] {}", channelCombo.getValue(), min, max, colourCombo.getValue());
+                viewer, qupath.getOverlayOptions(), loaded, style, wantBrightness ? brightnessLoaded : null);
+        if (style.isClasses()) {
+            logger.info("Density overlay: {} in class colours {}", channelCombo.getValue(), style.classNames());
+        } else {
+            logger.info(
+                    "Density overlay: {} [{}..{}] {}{}",
+                    channelCombo.getValue(),
+                    style.min(),
+                    style.max(),
+                    colourCombo.getValue(),
+                    style.hideAtOrBelowMin() ? ", hiding values at or below the minimum" : "");
+        }
+    }
+
+    /** The range and colour map from the controls, or null (with a status message) if they are not valid. */
+    private DensityMapOverlay.Style rangeStyle() {
+        double min;
+        double max;
+        try {
+            min = Double.parseDouble(minField.getText().trim());
+            max = Double.parseDouble(maxField.getText().trim());
+        } catch (NumberFormatException e) {
+            status.setText("The range must be two numbers.");
+            return null;
+        }
+        if (!(max > min)) {
+            status.setText("The upper end of the range must be above the lower end.");
+            return null;
+        }
+        var cmap = ColorMaps.getColorMaps().get(colourCombo.getValue());
+        if (cmap == null) return null;
+        return DensityMapOverlay.Style.range(cmap, min, max, hideBelowBox.isSelected());
     }
 
     private void hide() {

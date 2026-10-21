@@ -11,11 +11,13 @@ package qupath.ext.fiberanalysis.analysis;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
-import qupath.lib.color.ColorMaps;
+import java.util.List;
 import qupath.lib.gui.viewer.OverlayOptions;
 import qupath.lib.gui.viewer.QuPathViewer;
 import qupath.lib.gui.viewer.overlays.PathOverlay;
+import qupath.lib.objects.classes.PathClass;
 
 /**
  * A density or classifier map shown as a coloured overlay on QuPath's pixel
@@ -77,14 +79,52 @@ public final class DensityOverlay {
     }
 
     /**
+     * The classes a classifier map's predicted-class channel indexes: the
+     * {@code P(<class>)} channels, which are written in the model's class order.
+     *
+     * @param info a map's channels
+     * @return class names by index, empty for a map with no class channels
+     */
+    public static List<String> classNames(DensityMapInfo info) {
+        List<String> out = new ArrayList<>();
+        for (var ch : info.channels()) {
+            String n = ch.name;
+            if (n.startsWith("P(") && n.endsWith(")")) out.add(n.substring(2, n.length() - 1));
+        }
+        return out;
+    }
+
+    /**
+     * @param channel a channel
+     * @return true for a classifier's predicted-class channel
+     */
+    public static boolean isClassChannel(DensitySidecar.ChannelInfo channel) {
+        return channel != null
+                && DensityChannelSpec.forPredictedClassIndex().channelName.equals(channel.name);
+    }
+
+    /**
+     * Each class in the colour its QuPath class already has.
+     *
+     * @param names class names by index
+     * @return the class-colour style for them
+     */
+    public static DensityMapOverlay.Style classStyle(List<String> names) {
+        int[] colours = new int[names.size()];
+        for (int i = 0; i < colours.length; i++) {
+            Integer c = PathClass.fromString(names.get(i)).getColor();
+            colours[i] = c == null ? 0x808080 : c & 0xffffff;
+        }
+        return DensityMapOverlay.Style.classes(names, colours);
+    }
+
+    /**
      * Show a channel over the image, replacing whatever is on the viewer's pixel layer.
      *
      * @param viewer  the viewer
      * @param options its overlay options
      * @param loaded  the channel
-     * @param map     colour map
-     * @param min     value drawn with the map's first colour
-     * @param max     value drawn with its last colour
+     * @param style   how its values become colours
      * @param brightness a 0-1 channel of the same map setting brightness, or null
      * @return the overlay installed
      */
@@ -92,18 +132,14 @@ public final class DensityOverlay {
             QuPathViewer viewer,
             OverlayOptions options,
             Loaded loaded,
-            ColorMaps.ColorMap map,
-            double min,
-            double max,
+            DensityMapOverlay.Style style,
             Loaded brightness) {
         var overlay = new DensityMapOverlay(
                 options,
                 loaded.info(),
                 loaded.channel(),
                 loaded.grid(),
-                map,
-                min,
-                max,
+                style,
                 brightness == null ? -1 : brightness.channel(),
                 brightness == null ? null : brightness.grid());
         viewer.setCustomPixelLayerOverlay(overlay);
