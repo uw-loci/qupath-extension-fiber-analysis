@@ -76,10 +76,58 @@ class TileScalarAggregationTest {
     }
 
     @Test
-    void zeroWeightTilesDoNotContribute() throws Exception {
-        Map<String, Double> out =
-                aggregate(List.of(Map.of("fiber_pixels", 100.0), Map.of("fiber_pixels", 999.0)), List.of(5, 0));
-        assertThat(out.get("fiber_pixels")).isEqualTo(100.0);
+    void aTileOwningNoWindowStillAddsItsPixelsButNotItsAverages() throws Exception {
+        // A tile owns pixels whether or not a window centre falls in it. Skipping
+        // such tiles made a real 42-tile run report half the zone.
+        Map<String, Double> out = aggregate(
+                List.of(
+                        Map.of("zone_pixels", 100.0, "texture.contrast", 1.0),
+                        Map.of("zone_pixels", 300.0, "texture.contrast", 9.0)),
+                List.of(5, 0));
+        assertThat(out.get("zone_pixels")).isEqualTo(400.0);
+        assertThat(out.get("texture.contrast")).isEqualTo(1.0);
+    }
+
+    @Test
+    void coverageAndHdmComeFromTheSummedPixels() throws Exception {
+        // Tile A: 10 of 100 zone px are fiber; tile B: 90 of 300. Window-weighted
+        // averaging of the per-tile ratios (0.1 and 0.3, weights 1 and 9) would
+        // give 0.28; the annotation's ratio is 100 / 400 = 0.25.
+        Map<String, Double> a = Map.of(
+                "zone_pixels", 100.0,
+                "fiber_in_zone_pixels", 10.0,
+                "fiber_pixels", 20.0,
+                "region_pixels", 1000.0,
+                "morphometrics.hdm_coverage", 0.1,
+                "fiber_coverage_zone_percent", 10.0);
+        Map<String, Double> b = Map.of(
+                "zone_pixels", 300.0,
+                "fiber_in_zone_pixels", 90.0,
+                "fiber_pixels", 180.0,
+                "region_pixels", 1000.0,
+                "morphometrics.hdm_coverage", 0.3,
+                "fiber_coverage_zone_percent", 30.0);
+        Map<String, Double> out = aggregate(List.of(a, b), List.of(1, 9));
+        assertThat(out.get("morphometrics.hdm_coverage")).isCloseTo(0.25, within(1e-12));
+        assertThat(out.get("fiber_coverage_zone_percent")).isCloseTo(25.0, within(1e-9));
+        assertThat(out.get("fiber_coverage_region_percent")).isCloseTo(10.0, within(1e-9));
+    }
+
+    @Test
+    void gapWidthsCombineByGapCountAndMaximum() throws Exception {
+        Map<String, Double> a = Map.of(
+                "morphometrics.gap_mean_um", 2.0, "morphometrics.gap_max_um", 10.0, "morphometrics.gap_count", 30.0);
+        Map<String, Double> b = Map.of(
+                "morphometrics.gap_mean_um", 6.0, "morphometrics.gap_max_um", 40.0, "morphometrics.gap_count", 10.0);
+        // A tile with no gap reports NaN, which must not pull the mean anywhere.
+        Map<String, Double> c = Map.of(
+                "morphometrics.gap_mean_um", Double.NaN,
+                "morphometrics.gap_max_um", Double.NaN,
+                "morphometrics.gap_count", 0.0);
+        Map<String, Double> out = aggregate(List.of(a, b, c), List.of(1, 50, 5));
+        assertThat(out.get("morphometrics.gap_mean_um")).isCloseTo(3.0, within(1e-12)); // (2*30 + 6*10) / 40
+        assertThat(out.get("morphometrics.gap_max_um")).isEqualTo(40.0);
+        assertThat(out.get("morphometrics.gap_count")).isEqualTo(40.0);
     }
 
     @Test

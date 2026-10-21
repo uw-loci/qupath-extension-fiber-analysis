@@ -57,7 +57,7 @@ def _scalar(x):
     return x
 
 
-def save_windows_json(window_grid, path, meta=None, zone_area_px=None, pixel_size_um=None):
+def save_windows_json(window_grid, path, meta=None, pixel_size_um=None):
     """Serialise a window_grid dict (from windows.compute_windows + family
     augmentations) to windows.json.
 
@@ -67,8 +67,6 @@ def save_windows_json(window_grid, path, meta=None, zone_area_px=None, pixel_siz
         path:           output JSON path.
         meta:           optional provenance dict (versions / run / parameters)
                         written to the top-level "meta" key. See PI-tester M2.
-        zone_area_px:   optional dilated-zone area (px) used as denominator for
-                        the per-window HDM (n_fiber_px / window_area_px).
         pixel_size_um:  optional pixel size; reserved for future
                         physical-unit conversions in the windows array.
     """
@@ -94,11 +92,10 @@ def save_windows_json(window_grid, path, meta=None, zone_area_px=None, pixel_siz
         else {}
     )
 
-    # Per-window HDM denominator. If the caller did not supply the zone area
-    # (legacy path), fall back to the window's own pixel area -- in that
-    # degenerate case `hdm` becomes "fraction of the window that is fiber".
-    # Either way the field is present in every record (docs section 9 promise).
     window_area_px = window_px * window_px
+    # Per-window HDM (fiber in zone / zone pixels in the window), computed by
+    # the pipeline; absent when the caller laid no zone.
+    hdm_grid = window_grid.get("hdm")
 
     invalid_mask = window_grid.get("_invalid_below_coverage")
 
@@ -135,21 +132,10 @@ def save_windows_json(window_grid, path, meta=None, zone_area_px=None, pixel_siz
             # Per-window pixel count (was `n_pixels`; renamed to `n_fiber_px`).
             n_fiber_v = _scalar(n_pix[iy, ix]) if n_pix is not None else 0
 
-            # Per-window HDM (NEW field per docs). Denominator: prefer
-            # zone-area-of-this-cell when supplied, else window pixel area.
-            denom = zone_area_px if zone_area_px and zone_area_px > 0 else window_area_px
-            hdm_v = None
-            if n_fiber_v is not None and denom and denom > 0:
-                try:
-                    hdm_v = float(n_fiber_v) / float(window_area_px)
-                except Exception:
-                    hdm_v = None
+            hdm_v = _scalar(hdm_grid[iy, ix]) if hdm_grid is not None else None
 
-            # User-comparable percentage: fraction of THIS window that is
-            # fiber, on a 0-100 scale. hdm above is the same fraction scaled
-            # 0-1 (and named for the fiber-literature term); we expose the
-            # percentage separately because that's what scientists actually
-            # plot in density-map workflows.
+            # Fraction of THIS window that is fiber, on a 0-100 scale. It
+            # differs from hdm only where the window crosses the zone edge.
             coverage_pct = None
             if n_fiber_v is not None and window_area_px > 0:
                 try:

@@ -130,7 +130,22 @@ try:
         except Exception as exc:
             logger.warning("Could not load boundary_mask_path %s: %s", bmp, exc)
 
-    out = fiberlib.analyze(image=image, boundary_mask=boundary_mask, **kwargs)
+    # The analysis zone, rasterised by Java from the whole outline. A tile
+    # sees only part of the annotation, so a zone computed here from the
+    # tile's boundary mask would miss band pixels whose nearest edge is in
+    # another tile.
+    zone_mask = None
+    zmp = str(opt_get("zone_mask_path", "") or "")
+    if zmp and os.path.exists(zmp):
+        zarr = np.asarray(Image.open(zmp))
+        if zarr.ndim == 3:
+            zarr = zarr[..., 0]
+        if zarr.shape == image.shape[:2]:
+            zone_mask = zarr > 127
+        else:
+            logger.warning("zone_mask shape %s != region %s; computing the zone here", zarr.shape, image.shape[:2])
+
+    out = fiberlib.analyze(image=image, boundary_mask=boundary_mask, zone_mask=zone_mask, **kwargs)
 
     _payload = json.dumps(fiberlib.sanitize_json(out["result"]))
     task.outputs["result_json"] = _payload  # noqa: F821

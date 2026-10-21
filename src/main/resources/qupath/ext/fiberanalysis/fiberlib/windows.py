@@ -109,3 +109,30 @@ def compute_windows(fiber_angles, fiber_mask, window_px, stride_px=None, min_pix
         "min_pixels": int(min_pixels),
         "grid_shape": (hw, ww),
     }
+
+
+def window_counts(mask, window_px, stride_px, grid_shape):
+    """True pixels of ``mask`` in each window of the grid compute_windows lays.
+
+    Args:
+        mask:       (H, W) bool.
+        window_px:  window side, pixels.
+        stride_px:  window stride, pixels.
+        grid_shape: (Hw, Ww) from compute_windows.
+
+    Returns:
+        (Hw, Ww) int64 counts.
+    """
+    hw, ww = grid_shape
+    integral = np.zeros((mask.shape[0] + 1, mask.shape[1] + 1), dtype=np.int64)
+    integral[1:, 1:] = np.cumsum(np.cumsum(mask.astype(np.int64), axis=0), axis=1)
+    y0 = np.arange(hw) * stride_px
+    x0 = np.arange(ww) * stride_px
+    y1 = np.minimum(y0 + window_px, mask.shape[0])
+    x1 = np.minimum(x0 + window_px, mask.shape[1])
+    return (
+        integral[np.ix_(y1, x1)]
+        - integral[np.ix_(y0, x1)]
+        - integral[np.ix_(y1, x0)]
+        + integral[np.ix_(y0, x0)]
+    )

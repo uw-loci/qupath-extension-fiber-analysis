@@ -85,11 +85,12 @@ def render_window_heatmap(per_window, window_grid, path, image_h, image_w, cmap_
     Image.fromarray(out, mode="RGBA").save(path)
 
 
-def render_morphometrics_overlay(window_grid, path, image_h, image_w, zone_area_px=None):
+def render_morphometrics_overlay(window_grid, path, image_h, image_w):
     """Render a per-window HDM heatmap and write to ``path``.
 
-    HDM = ``n_pixels`` / window_area_px (or zone_area_px if supplied) per
-    window. Viridis colormap, alpha-masked where ``n_pixels`` is missing.
+    HDM is ``window_grid["hdm"]`` (fiber in zone / zone pixels per window),
+    or ``n_pixels`` / window area when the grid has no zone. Viridis
+    colormap, alpha-masked where ``n_pixels`` is missing.
 
     Provides the ``morphometrics_overlay.png`` the user guide promises but the
     v0.1.0 pipeline never wrote (Scientist-tester M2 schema reconcile).
@@ -99,10 +100,10 @@ def render_morphometrics_overlay(window_grid, path, image_h, image_w, zone_area_
         # Nothing to render -- skip silently. Callers gate on this.
         return
     window_px = int(window_grid["window_px"])
-    denom = float(zone_area_px) if zone_area_px and zone_area_px > 0 else float(window_px * window_px)
-    if denom <= 0:
-        return
-    arr = np.asarray(n_pix, dtype=np.float32) / float(window_px * window_px)
+    if window_grid.get("hdm") is not None:
+        arr = np.asarray(window_grid["hdm"], dtype=np.float32)
+    else:
+        arr = np.asarray(n_pix, dtype=np.float32) / float(window_px * window_px)
     # Mask cells that contributed zero pixels (so blank windows are
     # transparent rather than 0-valued viridis dark-purple).
     arr = np.where(np.asarray(n_pix) > 0, arr, np.nan)

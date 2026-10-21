@@ -180,7 +180,12 @@ def apply_ridge_filter(
 
 
 def threshold_scalar(
-    arr, method, manual_threshold, project_threshold_norm=None, manual_full_scale=255.0
+    arr,
+    method,
+    manual_threshold,
+    project_threshold_norm=None,
+    manual_full_scale=255.0,
+    fit_mask=None,
 ):
     """Pick a threshold and return a boolean foreground mask.
 
@@ -196,12 +201,21 @@ def threshold_scalar(
                              'project_otsu'; ignored otherwise.
         manual_full_scale:   divisor for ``manual_threshold``; see
                              :func:`full_scale`.
+        fit_mask:            pixels Otsu / triangle are fitted on, normally the
+                             analysis zone, so the margin read around an
+                             annotation does not move its threshold. None, or
+                             a mask with no pixels, fits on the whole array.
     """
     method = (method or "otsu").lower()
+    fit = arr
+    if fit_mask is not None and method in ("otsu", "triangle", "project_otsu"):
+        fm = np.asarray(fit_mask, dtype=bool)
+        if fm.shape == arr.shape and fm.any():
+            fit = arr[fm]
     if method == "otsu":
-        t = skfilters.threshold_otsu(arr)
+        t = skfilters.threshold_otsu(fit)
     elif method == "triangle":
-        t = skfilters.threshold_triangle(arr)
+        t = skfilters.threshold_triangle(fit)
     elif method == "manual":
         t = float(manual_threshold) / float(manual_full_scale)
     elif method == "project_otsu":
@@ -209,12 +223,12 @@ def threshold_scalar(
             logger.warning(
                 "project_otsu selected but no calibrated threshold supplied -- falling back to per-region Otsu"
             )
-            t = skfilters.threshold_otsu(arr)
+            t = skfilters.threshold_otsu(fit)
         else:
             t = float(project_threshold_norm)
     else:
         logger.warning("Unknown threshold method %r -- falling back to Otsu", method)
-        t = skfilters.threshold_otsu(arr)
+        t = skfilters.threshold_otsu(fit)
     # Otsu / triangle / project_otsu resolve at runtime, so this is the only
     # record of what a given run actually cut at.
     logger.info(
@@ -277,6 +291,7 @@ def segment_internal(
     invert_intensity=False,
     rolling_ball_radius=0,
     project_threshold_norm=None,
+    fit_mask=None,
 ):
     """Internal fiber segmenter. See module docstring for parameters.
 
@@ -289,6 +304,9 @@ def segment_internal(
 
     ``project_threshold_norm`` is the calibrated [0,1] threshold from a prior
     project-calibration pass; required when threshold_method == 'project_otsu'.
+
+    ``fit_mask`` limits the pixels Otsu / triangle are fitted on (see
+    :func:`threshold_scalar`); the mask itself still covers the whole image.
 
     Scale contract: with no ridge filter the scalar keeps the source image's
     absolute scale, so ``manual_threshold`` is a gray level in the image's own
@@ -331,6 +349,7 @@ def segment_internal(
         manual_threshold,
         project_threshold_norm,
         manual_full_scale,
+        fit_mask=fit_mask,
     )
     mask = skmorph.binary_closing(mask, footprint=skmorph.disk(1))
     if min_fiber_area_px > 0:

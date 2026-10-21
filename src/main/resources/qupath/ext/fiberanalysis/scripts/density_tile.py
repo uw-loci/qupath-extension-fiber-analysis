@@ -72,7 +72,6 @@ Outputs:
     task.outputs['ok'] = '1' on success; writes a .npz with these arrays
     (window mode: (Hw, Ww); pixel mode: (tile_h, tile_w)):
       fiber_coverage_percent  (float32, NaN where no fibers)
-      hdm                     (float32)
       ridge_count             (float32; NaN in pixel mode)
       skeleton_length_um      (float32)
       branch_points           (float32)
@@ -141,10 +140,8 @@ def _run_window_mode(
         fiber_coverage_percent = np.where(
             n_pix > 0, 100.0 * n_pix.astype(np.float64) / window_area_px, np.nan
         )
-        hdm = n_pix.astype(np.float64) / window_area_px
     else:
         fiber_coverage_percent = np.full((Hw, Ww), np.nan, dtype=np.float64)
-        hdm = np.full((Hw, Ww), np.nan, dtype=np.float64)
 
     tort = straight_mod.compute_skeleton_tortuosity(
         fiber_mask,
@@ -181,7 +178,6 @@ def _run_window_mode(
     np.savez_compressed(
         out_npz,
         fiber_coverage_percent=fiber_coverage_percent.astype(np.float32),
-        hdm=hdm.astype(np.float32),
         ridge_count=ridge_count.astype(np.float32),
         skeleton_length_um=skeleton_length_um.astype(np.float32),
         branch_points=(
@@ -246,7 +242,6 @@ def _run_pixel_mode(
     mask_f = fiber_mask.astype(np.float64)
     coverage_frac = sample(_box_mean(mask_f, window_px))
     fiber_coverage_percent = np.where(coverage_frac > 0, 100.0 * coverage_frac, np.nan)
-    hdm = coverage_frac
 
     # Counts are scaled to a full window, so an edge window reads the same
     # density as an interior one rather than a smaller count.
@@ -282,7 +277,6 @@ def _run_pixel_mode(
     np.savez_compressed(
         out_npz,
         fiber_coverage_percent=fiber_coverage_percent.astype(np.float32),
-        hdm=hdm.astype(np.float32),
         ridge_count=ridge_count,
         skeleton_length_um=skeleton_length_um.astype(np.float32),
         branch_points=branch_count.astype(np.float32),

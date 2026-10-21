@@ -86,6 +86,7 @@ def analyze(
     image,
     *,
     boundary_mask=None,
+    zone_mask=None,
     existing_fiber_mask=None,
     existing_mask_path=None,
     # Search area
@@ -168,6 +169,11 @@ def analyze(
     boundary_mask:
         Optional bool array (H, W), True inside the annotation. If None, the
         bbox (bbox_x/y/w/h, defaulting to the whole region) is used.
+    zone_mask:
+        Optional bool array (H, W), the analysis zone itself. Supplied when
+        the region is one tile of a larger annotation, whose zone cannot be
+        measured from the part of the outline the tile sees. If None, the
+        zone is computed from ``boundary_mask``.
     existing_fiber_mask / existing_mask_path:
         Used when seg_source == 'existing': a bool array, or a PNG path.
 
@@ -437,6 +443,19 @@ def analyze(
             boundary_mask[y0:y1, x0:x1] = True
         logger.info("Using bbox boundary mask (default whole-region when unset)")
 
+    # ---- Dilated zone (before segmentation: Otsu / triangle fit inside it) ----
+    # A caller that knows the whole outline (the Java side, for every tile)
+    # supplies the zone; otherwise it is computed from the boundary mask.
+    if zone_mask is not None:
+        zone_mask = np.asarray(zone_mask).astype(bool)
+        if zone_mask.shape != (rh, rw):
+            raise ValueError(f"zone_mask shape {zone_mask.shape} != region ({rh}, {rw})")
+    else:
+        dilation_px = max(1, int(round(border_um / px_um)))
+        zone_mask = dil.compute_border_zone_mask(
+            boundary_mask, dilation_px, mode=zone, fill_holes=True
+        )["zone_mask"]
+
     # ---- Segmentation ----
     if seg_src == "existing":
         if existing_fiber_mask is not None:
@@ -466,6 +485,7 @@ def analyze(
             invert_intensity=invert_intensity_v,
             rolling_ball_radius=rolling_ball_radius_v,
             project_threshold_norm=project_threshold_norm_v,
+            fit_mask=zone_mask,
         )
     logger.info(
         "Fiber mask: %d pixels (%.2f%% coverage)",
@@ -473,12 +493,6 @@ def analyze(
         100.0 * float(fiber_mask.sum()) / fiber_mask.size,
     )
 
-    # ---- Dilated zone ----
-    dilation_px = max(1, int(round(border_um / px_um)))
-    zone_info = dil.compute_border_zone_mask(
-        boundary_mask, dilation_px, mode=zone, fill_holes=True
-    )
-    zone_mask = zone_info["zone_mask"]
     analysis_mask = fiber_mask & zone_mask
     logger.info(
         "Zone: %d px, fiber-in-zone: %d px",
@@ -499,6 +513,15 @@ def analyze(
             fiber_angles_deg, analysis_mask, window_px, stride_px=stride_px
         )
         window_grid["window_um"] = float(win_um)
+        # Per-window HDM: fiber in zone / zone pixels in the window, the same
+        # ratio as the annotation-level hdm_coverage. Through fiberlib 0.3.11
+        # it divided by the window area instead, which made it exactly
+        # fiber_coverage_percent / 100.
+        zone_px = win.window_counts(zone_mask, window_px, stride_px, window_grid["grid_shape"])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            window_grid["hdm"] = np.where(
+                zone_px > 0, window_grid["n_pixels"] / np.maximum(zone_px, 1), np.nan
+            )
         logger.info(
             "Windows: %s grid, window=%dpx stride=%dpx",
             window_grid["grid_shape"],
@@ -532,6 +555,7 @@ def analyze(
     result["fiber_pixels"] = fiber_px_v
     result["zone_pixels"] = zone_px_v
     result["fiber_in_zone_pixels"] = fiber_in_zone_v
+    result["region_pixels"] = region_px_v
     result["fiber_coverage_zone_percent"] = (
         100.0 * fiber_in_zone_v / zone_px_v if zone_px_v > 0 else None
     )
@@ -611,9 +635,12 @@ def analyze(
             )
             m_block["lacunarity_per_box"] = {int(k): float(v) for k, v in lac.items()}
         if morph_flags["gaps"]:
-            gap = morph.gap_analysis(analysis_mask)
-            m_block["gap_mean_um"] = float(gap.get("mean_gap_px", float("nan")) * px_um)
-            m_block["gap_max_um"] = float(gap.get("max_gap_px", float("nan")) * px_um)
+            # Counted in the owned core only, so a tiled run counts each gap
+            # once; the Java merge combines tiles by gap_count and maximum.
+            gap = morph.gap_analysis(fiber_mask, _c(zone_mask))
+            m_block["gap_mean_um"] = float(gap["mean_gap_px"] * px_um)
+            m_block["gap_max_um"] = float(gap["max_gap_px"] * px_um)
+            m_block["gap_count"] = int(gap["n_gaps"])
         result["morphometrics"] = m_block
 
     # ---- Family: texture (GLCM) ----
@@ -651,6 +678,8 @@ def analyze(
             fd_boxes=fd_boxes,
             segment_len_px=max(2, int(round(2.0 / px_um))),
             flags=morph_flags,
+            zone_mask=zone_mask,
+            gap_fiber_mask=fiber_mask,
         )
         if "total_length_px" in pw_morph:
             pw_morph["total_length_um"] = pw_morph["total_length_px"] * px_um
@@ -728,7 +757,6 @@ def analyze(
                 window_grid,
                 windows_json,
                 meta=meta_for_windows,
-                zone_area_px=int(zone_mask.sum()),
                 pixel_size_um=px_um,
             )
         if emit_npz_v and window_grid is not None:
@@ -838,14 +866,12 @@ def analyze(
                 a[~zone_included] = np.nan
                 return a
 
-            zone_area_px_v = int(zone_mask.sum())
             n_pix_masked = _zone_masked(window_grid.get("n_pixels"))
             rndr.render_morphometrics_overlay(
                 {**window_grid, "n_pixels": n_pix_masked},
                 os.path.join(out_dir, "morphometrics_overlay.png"),
                 rh,
                 rw,
-                zone_area_px=zone_area_px_v,
             )
 
             morph_per_window = OrderedDict()
@@ -855,8 +881,7 @@ def analyze(
                 if window_area_px > 0:
                     cov = 100.0 * n_pix_grid.astype(float) / window_area_px
                     morph_per_window["fiber_coverage_percent"] = _zone_masked(cov)
-                    hdm_arr = n_pix_grid.astype(float) / window_area_px
-                    morph_per_window["hdm"] = _zone_masked(hdm_arr)
+                    morph_per_window["hdm"] = _zone_masked(window_grid["hdm"])
             if "n_fibers" in window_grid and window_grid["n_fibers"] is not None:
                 morph_per_window["ridge_count"] = _zone_masked(window_grid["n_fibers"])
             morph_extra = window_grid.get("morphometrics")

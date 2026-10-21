@@ -150,7 +150,7 @@ at-a-glance reference.
 | HDM coverage | 5. Morphometrics | checked | -- | High-Density-Matrix coverage: fiber area / zone area. |
 | Lacunarity | 5. Morphometrics | checked | -- | Gappiness across multiple box sizes. |
 | Fractal dimension | 5. Morphometrics | checked | -- | Box-counting fractal dimension; collagen networks typically 1.4-1.8. |
-| Gap analysis | 5. Morphometrics | checked | -- | Distribution of inscribed-circle diameters in fiber-free regions. |
+| Gap analysis | 5. Morphometrics | checked | -- | Widths of the gaps between fibers: the diameter of the largest empty circle at each gap centre inside the analysis zone. |
 | Lacunarity box sizes | 5. Morphometrics | 0.5,1,2,4,8 | um | Box sizes for the gliding-box lacunarity computation. |
 | Fractal box sizes | 5. Morphometrics | 0.25,0.5,1,2,4,8,16 | um | Box sizes for box-counting fractal dimension. |
 | Enable GLCM texture | 6. Texture | checked | -- | Master toggle for per-window GLCM / Haralick features. |
@@ -210,7 +210,7 @@ Per-annotation files:
   "tortuosity_median": float,   # per-window median chord/arc (1.0 = straight)
   "n_fibers": int,              # path count contributing to tortuosity
   "glcm_<prop>": float,         # one field per enabled GLCM property
-  "hdm": float,                 # local HDM (when enabled)
+  "hdm": float,                 # fiber in zone / zone pixels in this window
   ...
 }
 ```

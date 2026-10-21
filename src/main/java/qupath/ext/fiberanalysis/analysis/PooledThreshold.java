@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import org.apposed.appose.Service.Task;
+import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.Geometry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
@@ -28,6 +30,7 @@ import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.projects.ProjectImageEntry;
 import qupath.lib.regions.RegionRequest;
+import qupath.lib.roi.interfaces.ROI;
 
 /**
  * One threshold (Otsu or Triangle) for a whole run, from a grid of sample tiles
@@ -126,10 +129,93 @@ public final class PooledThreshold {
 
         double[] px =
                 pixelSizes.stream().mapToDouble(Double::doubleValue).sorted().toArray();
-        double pxUm = px[px.length / 2];
+        return poolSamples(pngs, List.of(), px[px.length / 2], spec, images);
+    }
+
+    /**
+     * One threshold for a whole annotation that is analysed in tiles, fitted
+     * on its analysis zone. Without it every tile fits its own Otsu or
+     * triangle cut, so one annotation is segmented at several thresholds.
+     *
+     * @param server        the image
+     * @param roi           the annotation
+     * @param zoneMode      "whole", "inside", "outside" or "both"
+     * @param borderPx      zone width, full-resolution pixels
+     * @param downsample    the analysis downsample; samples are read at it
+     * @param readBox       {@code {x, y, w, h}} the annotation's read region, full-resolution pixels
+     * @param pixelSizeUm   pixel size at the analysis downsample
+     * @param spec          the segmentation settings
+     * @param workDir       scratch directory for the sample PNGs
+     * @return the pooled threshold
+     * @throws IOException if nothing could be sampled or the task failed
+     */
+    public static Result poolZone(
+            ImageServer<BufferedImage> server,
+            ROI roi,
+            String zoneMode,
+            double borderPx,
+            double downsample,
+            int[] readBox,
+            double pixelSizeUm,
+            Settings spec,
+            Path workDir)
+            throws IOException {
+        Files.createDirectories(workDir);
+        ROI zoneRoi = AnalysisZone.roi(roi, zoneMode, borderPx);
+        Geometry zone = zoneRoi.getGeometry();
+        int side = (int) Math.round(SAMPLE_PX * downsample);
+        List<String> pngs = new ArrayList<>();
+        List<String> masks = new ArrayList<>();
+        int k = 0;
+        for (int[] b : zoneBoxes(readBox, zone, side, GRID * GRID)) {
+            Path png = workDir.resolve(String.format(java.util.Locale.ROOT, "zone_%02d.png", k));
+            Path mask = workDir.resolve(String.format(java.util.Locale.ROOT, "zone_%02d_mask.png", k++));
+            RegionRequest req = RegionRequest.createInstance(server.getPath(), downsample, b[0], b[1], b[2], b[3]);
+            SourceChannel.WrittenSize size = SourceChannel.writeRegionPng(server, req, spec.segChannel(), png);
+            FiberAnalysisWorkflow.rasterisePolygonMask(
+                    zoneRoi, b[0], b[1], size.width(), size.height(), downsample, mask);
+            pngs.add(png.toString());
+            masks.add(mask.toString());
+        }
+        if (pngs.isEmpty())
+            throw new IOException("The annotation's analysis zone is empty; nothing to fit a threshold on");
+        return poolSamples(pngs, masks, pixelSizeUm, spec, 1);
+    }
+
+    /**
+     * Sample boxes over a read region that touch the zone, spread evenly
+     * through the candidates so a thin band is sampled along its length.
+     *
+     * @param readBox {@code {x, y, w, h}}
+     * @param zone    the zone
+     * @param side    box side, same units
+     * @param max     most boxes returned
+     * @return {@code {x, y, w, h}} boxes inside the read region
+     */
+    static List<int[]> zoneBoxes(int[] readBox, Geometry zone, int side, int max) {
+        List<int[]> candidates = new ArrayList<>();
+        int bw = Math.min(side, readBox[2]);
+        int bh = Math.min(side, readBox[3]);
+        var factory = zone.getFactory();
+        for (int y = readBox[1]; y < readBox[1] + readBox[3]; y += bh) {
+            for (int x = readBox[0]; x < readBox[0] + readBox[2]; x += bw) {
+                int x0 = Math.min(x, readBox[0] + readBox[2] - bw);
+                int y0 = Math.min(y, readBox[1] + readBox[3] - bh);
+                Geometry cell = factory.toGeometry(new Envelope(x0, x0 + bw, y0, y0 + bh));
+                if (cell.intersects(zone)) candidates.add(new int[] {x0, y0, bw, bh});
+            }
+        }
+        if (candidates.size() <= max) return candidates;
+        List<int[]> out = new ArrayList<>();
+        for (int i = 0; i < max; i++) out.add(candidates.get((int) ((i + 0.5) * candidates.size() / max)));
+        return out;
+    }
+
+    private static Result poolSamples(List<String> pngs, List<String> masks, double pxUm, Settings spec, int images)
+            throws IOException {
         Map<String, Object> in = new HashMap<>();
         in.put("region_paths", pngs);
-        in.put("mask_paths", new ArrayList<String>());
+        in.put("mask_paths", new ArrayList<>(masks));
         in.put("seg_channel", spec.segChannel());
         in.put("ridge_filter", spec.ridgeFilter().toLowerCase(java.util.Locale.ROOT));
         in.put("sigma_min", spec.sigmaMinUm() / pxUm);

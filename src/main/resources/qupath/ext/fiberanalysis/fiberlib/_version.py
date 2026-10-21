@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.3.11"
+__version__ = "0.4.0"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -455,3 +455,38 @@ __version__ = "0.3.11"
 #     matplotlib.colormaps registry, present since 3.5.
 #   Written on 2026-10-13 as 0.3.9 but never committed; 0.3.10 shipped first
 #   without it, so it needs its own bump for installed copies to re-extract.
+
+# 0.4.0 (2026-10-20): four measurements change meaning. Values are NOT
+# comparable with runs made under 0.3.x.
+#   - morphometrics.gap_analysis / per-window gaps: a gap is reported as its
+#     WIDTH (twice the distance to the nearest fiber at a gap centre; the
+#     diameter of the largest empty circle), where 0.3.x reported the radius.
+#     Only gap centres inside the analysis zone count (0.3.x counted the empty
+#     read margin around an annotation, which in "whole" mode was often the
+#     largest "gap"), and distances are measured to every fiber, not only
+#     those in the zone. A centre whose empty circle reaches the edge of the
+#     array is dropped (its bounding fiber may be out of view; a fiber-free
+#     tile reported 424 um "gaps"), no gap is NaN rather than 0, and the
+#     annotation-level count is restricted to the owned core and reported as
+#     morphometrics.gap_count so the Java tile merge can weight by it.
+#   - analyze(zone_mask=...): the Java side now rasterises the analysis zone
+#     from the whole annotation outline and passes it (run_fiber_analysis.py
+#     zone_mask_path). A tile computing the band from its own part of the
+#     outline missed band pixels whose nearest edge was in another tile
+#     (0.9% of the zone on a 63-tile ellipse).
+#   - result["region_pixels"]: the owned region's pixel count, so the tile
+#     merge can recompute fiber_coverage_region_percent from totals.
+#   - texture.py: background is a separate code dropped from the
+#     co-occurrence matrix, so only fiber-fiber pairs count. 0.3.x read
+#     background as gray level 0, and its pairs made contrast and entropy
+#     track coverage. A window with no fiber-fiber pair is NaN.
+#   - segmentation.threshold_scalar / segment_internal: fit_mask; the pipeline
+#     fits Otsu / triangle on the analysis zone, not the whole read region,
+#     so the margin read around an annotation no longer moves its threshold.
+#     (Tiled annotation runs now get one zone-fitted threshold for the whole
+#     annotation from the Java side, instead of one per tile.)
+#   - per-window hdm: fiber in zone / zone pixels in the window, the same
+#     ratio as the annotation-level hdm_coverage. 0.3.x divided by the window
+#     area, so it was exactly fiber_coverage_percent / 100. density_tile.py
+#     no longer writes hdm: with no zone it is always coverage / 100.
+#   - windows.window_counts: box sums on the window lattice.

@@ -13,6 +13,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
 
 /** The run-wide threshold's sampling and the spec it hands every tile. */
 class PooledThresholdTest {
@@ -90,5 +93,57 @@ class PooledThresholdTest {
             b.remove(k);
         }
         assertThat(b).isEqualTo(a);
+    }
+
+    private static Geometry squareWithHole() {
+        var f = new GeometryFactory();
+        var shell = f.createLinearRing(new Coordinate[] {
+            new Coordinate(1000, 1000),
+            new Coordinate(3000, 1000),
+            new Coordinate(3000, 3000),
+            new Coordinate(1000, 3000),
+            new Coordinate(1000, 1000)
+        });
+        var hole = f.createLinearRing(new Coordinate[] {
+            new Coordinate(1900, 1900),
+            new Coordinate(2100, 1900),
+            new Coordinate(2100, 2100),
+            new Coordinate(1900, 2100),
+            new Coordinate(1900, 1900)
+        });
+        return f.createPolygon(shell, new org.locationtech.jts.geom.LinearRing[] {hole});
+    }
+
+    @Test
+    void theZoneMatchesEachModeWithHolesFilled() {
+        Geometry ann = squareWithHole();
+        double d = 100;
+        // whole: the filled 2000 x 2000 square.
+        assertThat(AnalysisZone.geometry(ann, "whole", d).getArea()).isEqualTo(4_000_000.0);
+        // inside: a 100 px band inside the edge = 2000^2 - 1800^2.
+        assertThat(AnalysisZone.geometry(ann, "inside", d).getArea()).isEqualTo(760_000.0);
+        // outside: a 100 px band outside it (rounded corners, so a little under 2200^2 - 2000^2).
+        double outside = AnalysisZone.geometry(ann, "outside", d).getArea();
+        assertThat(outside).isBetween(800_000.0 + Math.PI * d * d * 0.95, 840_000.0);
+        double both = AnalysisZone.geometry(ann, "both", d).getArea();
+        assertThat(both).isCloseTo(outside + 760_000.0, org.assertj.core.data.Offset.offset(1.0));
+    }
+
+    @Test
+    void zoneSamplesFollowAThinBandAndSkipTheInterior() {
+        Geometry band = AnalysisZone.geometry(squareWithHole(), "inside", 100);
+        int[] read = {800, 800, 2400, 2400};
+        List<int[]> boxes = PooledThreshold.zoneBoxes(read, band, 400, 16);
+        assertThat(boxes).hasSize(16);
+        var f = band.getFactory();
+        for (int[] b : boxes) {
+            assertThat(b[0]).isGreaterThanOrEqualTo(800);
+            assertThat(b[0] + b[2]).isLessThanOrEqualTo(3200);
+            assertThat(b[1] + b[3]).isLessThanOrEqualTo(3200);
+            var cell = f.toGeometry(new org.locationtech.jts.geom.Envelope(b[0], b[0] + b[2], b[1], b[1] + b[3]));
+            assertThat(cell.intersects(band)).isTrue();
+        }
+        // The interior box at (2000, 2000) never touches an inside band 100 px wide.
+        assertThat(boxes).noneMatch(b -> b[0] == 2000 && b[1] == 2000);
     }
 }

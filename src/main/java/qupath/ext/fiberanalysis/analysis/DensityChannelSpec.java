@@ -138,7 +138,6 @@ public final class DensityChannelSpec {
     public static List<DensityChannelSpec> defaultChannels() {
         return List.of(
                 new DensityChannelSpec("fiber_coverage_percent", "Fiber coverage (%)", "%", null, null, null),
-                new DensityChannelSpec("hdm", "HDM", null, null, null, null),
                 new DensityChannelSpec("ridge_count", "Ridge count", null, null, null, null),
                 new DensityChannelSpec("skeleton_length_um", "Skeleton length (um)", "um", null, null, null),
                 new DensityChannelSpec("branch_points", "Branch points", null, null, null, null),

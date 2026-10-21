@@ -162,7 +162,7 @@ draw between cells (below, **Smooth**). The `Mean angle (deg)` channel row ends
 in `; axial=180`: it is averaged and interpolated as an angle of period 180. Image pixels outside the grid have no
 value: in per-window mode, a strip half a window wide around the windows and,
 at the right and bottom, up to one more stride. Channel names match the QuPath
-measurement-table column names: `Fiber coverage (%)`, `HDM`, `Ridge count`,
+measurement-table column names: `Fiber coverage (%)`, `Ridge count`,
 `Skeleton length (um)`, `Branch points`, `Mean angle (deg)`, `Order parameter`,
 `Signal density (no threshold)`, `Intensity coherence (no threshold)`.
 
@@ -426,6 +426,12 @@ gray level. The manual cutoff is in the source image's **own gray
 levels**, so on a single-channel 16-bit image the spinner runs
 0-65535 and typing 4500 cuts at 4500 -- in every region and every
 image, not rescaled to each region's brightest and darkest pixel.
+Otsu and Triangle are fitted on the pixels of the analysis zone only, so the
+margin read around an annotation does not move its threshold. An annotation
+large enough to be analysed in tiles gets one threshold for all its tiles,
+fitted on up to 16 samples of 1024 px (at the analysis downsample) spread
+along its zone, instead of one per tile; the log line "every tile cuts at"
+gives the value.
 Optionally a **ridge filter** (Frangi, Sato, or
 Meijering from scikit-image) runs first across a configurable
 **sigma range** (default 1-4 um, step 1 um) to enhance line-like
@@ -454,6 +460,13 @@ Two consequences worth knowing:
   is truncated in both tiles, so tortuosity and fibre counts are
   aggregated across tiles rather than measured end to end. Per-window
   metrics (coverage, orientation, order parameter, GLCM) are exact.
+- **One threshold for all tiles.** With Otsu or Triangle the annotation
+  gets one threshold, fitted on samples of its analysis zone before the
+  tiles run, so every tile segments at the same cut (above).
+- **Totals are exact; ratios come from them.** Pixel counts and lengths
+  are summed over the rectangle each tile alone owns, and coverage and HDM
+  are recomputed from those sums. Gap widths combine by gap count, and a
+  gap larger than about a window that crosses a tile edge is not seen.
 - **No annotation-level overlays for a tiled run.** At this size a
   single full-resolution PNG cannot be allocated either. Per-tile
   overlays are kept under `tiles/`.
@@ -703,7 +716,13 @@ straightness pipeline already computes.
 
 **Math notes.**
 
-- **HDM:** `sum(fiber_mask) / area(zone)`.
+- **HDM:** `sum(fiber_mask & zone) / area(zone)`. Per window it is the same
+  ratio over the zone pixels inside that window, so it equals `Fiber coverage
+  (%)` / 100 for a window wholly inside the zone and is larger at the zone's
+  edge, where coverage also counts the window's out-of-zone pixels. (Before
+  fiberlib 0.4.0 the per-window value divided by the window area and was
+  always coverage / 100.) Density maps have no zone, so they have no HDM
+  channel.
 - **Total fiber length:** skeleton pixel count * pixel size; skeleton
   reused from the straightness pipeline.
 - **Branch / end-point counts:** 8-neighbour count per skeleton
@@ -719,9 +738,17 @@ straightness pipeline already computes.
 - **Lacunarity** (gliding-box): mean / variance of box mass `M(r)`
   over positions; `L(r) = var(M) / mean(M)^2 + 1`. Reported per `r`,
   aggregated by area-under-curve.
-- **Gap analysis:** distance transform of `~fiber_mask`; per-gap max
-  inscribed circle = local max of the distance transform. Report
-  distribution of gap diameters.
+- **Gap analysis:** distance from each fiber-free pixel to the nearest
+  fiber; a gap centre is a local maximum of that distance, and its **width**
+  is twice it, the diameter of the largest empty circle there. Only centres
+  inside the analysis zone count, and distances are measured to every fiber,
+  including those just outside the zone. A gap whose empty circle reaches
+  the edge of the read region (or of a tile) is left out, because the fiber
+  bounding it may be out of view; so is everything when there is no fiber.
+  Reported as `Mean gap width` and `Max gap width` (empty when there is no
+  gap); a tiled run combines tiles by gap count and takes the largest
+  maximum. (Before fiberlib 0.4.0 the radius was reported, and the
+  empty margin around an annotation counted as gaps.)
 
 **Out-of-v1 scope.** Steger ridge detection (Steger 1998, *IEEE TPAMI*
 20(2):113-125) supplies a width-annotated centreline and is the
@@ -746,11 +773,17 @@ al. 2014 (3-D texture review -- we use the 2-D math, not 3-D).
 derived scalar channel (biref intensity, or grayscale of the RGB),
 not raw RGB.
 
-1. **Quantise** to `L = 16` (or 32) gray levels (uniform binning,
-   per-window min-to-max).
-2. **GLCM** `P_d_theta(i, j)` = pixel-pair count for gray levels
-   `(i, j)` at offset `(d, theta)`. `d in {1, 2, 3}` (`d <=
-   window_side / 8`), `theta in {0, 45, 90, 135 deg}`, averaged.
+1. **Quantise** fiber pixels to `L = 16` (or up to 256) gray levels,
+   uniform over the channel's full 0-1 scale, the same for every window and
+   image so values can be compared.
+2. **GLCM** `P_d_theta(i, j)` = count of fiber-pixel pairs with gray levels
+   `(i, j)` at offset `(d, theta)`. A pair with a background pixel is not
+   counted, so the features describe the fibers, not how much of the window
+   they cover. (Before fiberlib 0.4.0 background was gray level 0 and its
+   pairs dominated, so contrast and entropy mostly tracked coverage.)
+   `d in {1, 2, 3}` (`d <= window_side / 8`), `theta in {0, 45, 90, 135
+   deg}`, averaged over the offsets that have at least one pair; a window
+   with none is NaN.
 3. **Features** (scikit-image `graycoprops`) on normalised
    `P(i, j)`:
 
@@ -814,7 +847,7 @@ per-annotation outputs.
   "tortuosity_median": float,   # per-window median chord/arc (1.0 = straight)
   "n_fibers": int,              # path count contributing to tortuosity
   "glcm_<prop>": float,         # one field per enabled GLCM property
-  "hdm": float,                 # local HDM (when enabled)
+  "hdm": float,                 # fiber in zone / zone pixels in this window
   ...
 }
 ```

@@ -540,6 +540,10 @@ public class FiberAnalysisWorkflow {
         // semantics without dragging in a separate Python rasteriser.
         Path boundaryPng = annDir.resolve("boundary_mask.png");
         rasterisePolygonMask(roi, rx, ry, regionW, regionH, ds, boundaryPng);
+        // The analysis zone from the whole outline, the same one a tiled run uses.
+        Path zonePng = annDir.resolve("zone_mask.png");
+        rasterisePolygonMask(
+                AnalysisZone.roi(roi, params.zoneMode(), dilationPx), rx, ry, regionW, regionH, ds, zonePng);
 
         // Python works entirely in READ-scale pixels, so every geometry handed
         // over is divided by the downsample and the pixel size multiplied by it.
@@ -559,6 +563,7 @@ public class FiberAnalysisWorkflow {
                 (int) Math.round((y - ry) / ds),
                 (int) Math.round(w / ds),
                 (int) Math.round(h / ds));
+        inputs.put("zone_mask_path", zonePng.toString());
 
         progress.setSub("Running fiber analysis (Python)...");
         Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", inputs);
@@ -673,6 +678,9 @@ public class FiberAnalysisWorkflow {
 
         ImageServer<BufferedImage> server = imageData.getServer();
         ROI roi = annotation.getROI();
+        // Each tile sees only part of the outline, so the zone (a band measured
+        // from the whole outline) is computed here once and rasterised per tile.
+        ROI zoneRoi = AnalysisZone.roi(roi, params.zoneMode(), params.borderZoneUm() / (pixelSizeEffUm / ds));
         Path tilesDir = annDir.resolve("tiles");
         Files.createDirectories(tilesDir);
 
@@ -690,6 +698,34 @@ public class FiberAnalysisWorkflow {
         // Disjoint rectangle each tile alone counts, so the additive scalars
         // from overlapping tiles sum to the region instead of overshooting it.
         List<TileGrid.Box> ownedBoxes = grid.ownedBoxes();
+
+        // One Otsu / triangle cut for the whole annotation, fitted on its
+        // analysis zone; otherwise each tile fits its own.
+        Double pooledThreshold = null;
+        if (!"existing".equalsIgnoreCase(params.segSource())
+                && PooledThreshold.needsPooling(params.thresholdMethod())) {
+            progress.setSub("Fitting one threshold for the annotation");
+            int regionW =
+                    grid.tiles().stream().mapToInt(b -> b.x() + b.w()).max().orElse(0);
+            int regionH =
+                    grid.tiles().stream().mapToInt(b -> b.y() + b.h()).max().orElse(0);
+            PooledThreshold.Result pooled = PooledThreshold.poolZone(
+                    server,
+                    roi,
+                    params.zoneMode(),
+                    params.borderZoneUm() / (pixelSizeEffUm / ds),
+                    ds,
+                    new int[] {rx, ry, (int) Math.round(regionW * ds), (int) Math.round(regionH * ds)},
+                    pixelSizeEffUm,
+                    segmentationSettings(params),
+                    tilesDir.resolve("threshold"));
+            pooledThreshold = pooled.thresholdNorm();
+            logger.info(
+                    "Annotation {}: every tile cuts at {} ({})",
+                    index,
+                    String.format(Locale.ROOT, "%.5f", pooledThreshold),
+                    PooledThreshold.describe(pooled).replace(" image(s)", " annotation(s)"));
+        }
 
         ProgressEstimator est = new ProgressEstimator(grid.count());
         String runId = "";
@@ -725,6 +761,8 @@ public class FiberAnalysisWorkflow {
 
                 Path tileMask = tileDir.resolve("boundary_mask.png");
                 rasterisePolygonMask(roi, tileFullX, tileFullY, tileSize.width(), tileSize.height(), ds, tileMask);
+                Path tileZone = tileDir.resolve("zone_mask.png");
+                rasterisePolygonMask(zoneRoi, tileFullX, tileFullY, tileSize.width(), tileSize.height(), ds, tileZone);
 
                 Map<String, Object> in = buildScriptInputs(
                         params,
@@ -741,6 +779,11 @@ public class FiberAnalysisWorkflow {
                         (int) Math.round(annW / ds),
                         (int) Math.round(annH / ds),
                         ownedBoxes.get(t));
+                in.put("zone_mask_path", tileZone.toString());
+                if (pooledThreshold != null) {
+                    in.put("threshold_method", "project_otsu");
+                    in.put("project_threshold_norm", pooledThreshold);
+                }
 
                 Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", in);
                 Object json = task.outputs.get("result_json");
@@ -931,10 +974,18 @@ public class FiberAnalysisWorkflow {
             "fiber_pixels",
             "zone_pixels",
             "fiber_in_zone_pixels",
+            "region_pixels",
             "zone_area_um2",
             "fiber_in_zone_area_um2",
             "morphometrics.total_length_px",
-            "morphometrics.total_length_um");
+            "morphometrics.total_length_um",
+            "morphometrics.gap_count");
+
+    /** Gap means, combined weighted by each tile's {@code morphometrics.gap_count}. */
+    private static final String GAP_MEAN = "morphometrics.gap_mean_um";
+
+    /** Gap maxima, combined as the largest. */
+    private static final String GAP_MAX = "morphometrics.gap_max_um";
 
     /**
      * Scalars that cannot be combined across tiles from the tile summaries
@@ -970,9 +1021,13 @@ public class FiberAnalysisWorkflow {
     /**
      * Combines per-tile scalar summaries.
      *
-     * <p>Additive keys are summed; angular, non-linear and seam-sensitive keys
-     * are dropped; the rest are averaged weighted by the windows each tile
-     * contributed, so a sliver tile does not count as much as a full one.
+     * <p>Additive keys are summed over every tile, including a tile that owns
+     * no window centre: its owned pixels still count.
+     * Coverage and HDM are then recomputed from the summed pixel counts rather
+     * than averaged; gap widths combine by gap count (mean) and maximum;
+     * angular, non-linear and seam-sensitive keys are dropped; the rest are
+     * averaged weighted by the windows each tile contributed, so a sliver
+     * tile does not count as much as a full one.
      *
      * <p>A plain sum is correct here ONLY because each tile was told to count
      * just the rectangle it owns ({@link TileGrid#ownedBoxes}, forwarded to the
@@ -994,11 +1049,14 @@ public class FiberAnalysisWorkflow {
         Map<String, Double> weightedSums = new LinkedHashMap<>();
         Map<String, Double> totalWeight = new LinkedHashMap<>();
         Set<String> dropped = new java.util.TreeSet<>();
+        double gapSum = 0;
+        double gapCount = 0;
+        Double gapMax = null;
 
         for (int i = 0; i < tileScalars.size(); i++) {
             double wgt = i < weights.size() ? Math.max(0, weights.get(i)) : 0;
-            if (wgt <= 0) continue;
-            for (Map.Entry<String, Double> e : tileScalars.get(i).entrySet()) {
+            Map<String, Double> tile = tileScalars.get(i);
+            for (Map.Entry<String, Double> e : tile.entrySet()) {
                 String key = e.getKey();
                 Double v = e.getValue();
                 if (v == null || v.isNaN() || v.isInfinite()) continue;
@@ -1006,7 +1064,13 @@ public class FiberAnalysisWorkflow {
                     dropped.add(key);
                 } else if (ADDITIVE_TILE_SCALARS.contains(key)) {
                     sums.merge(key, v, Double::sum);
-                } else {
+                } else if (key.equals(GAP_MEAN)) {
+                    double n = tile.getOrDefault("morphometrics.gap_count", 0.0);
+                    gapSum += v * n;
+                    gapCount += n;
+                } else if (key.equals(GAP_MAX)) {
+                    gapMax = gapMax == null ? v : Math.max(gapMax, v);
+                } else if (wgt > 0) {
                     weightedSums.merge(key, v * wgt, Double::sum);
                     totalWeight.merge(key, wgt, Double::sum);
                 }
@@ -1017,6 +1081,21 @@ public class FiberAnalysisWorkflow {
         for (Map.Entry<String, Double> e : weightedSums.entrySet()) {
             double tw = totalWeight.getOrDefault(e.getKey(), 0.0);
             if (tw > 0) out.put(e.getKey(), e.getValue() / tw);
+        }
+        if (gapCount > 0) out.put(GAP_MEAN, gapSum / gapCount);
+        if (gapMax != null) out.put(GAP_MAX, gapMax);
+        // Ratios of totals, from the totals: averaging per-tile ratios weights
+        // a tile by its windows, not by its pixels.
+        double zone = sums.getOrDefault("zone_pixels", 0.0);
+        double fiberInZone = sums.getOrDefault("fiber_in_zone_pixels", 0.0);
+        double region = sums.getOrDefault("region_pixels", 0.0);
+        if (zone > 0) {
+            out.put("fiber_coverage_zone_percent", 100.0 * fiberInZone / zone);
+            if (out.containsKey("morphometrics.hdm_coverage"))
+                out.put("morphometrics.hdm_coverage", fiberInZone / zone);
+        }
+        if (region > 0 && sums.containsKey("fiber_pixels")) {
+            out.put("fiber_coverage_region_percent", 100.0 * sums.get("fiber_pixels") / region);
         }
         if (!dropped.isEmpty()) {
             logger.info(
@@ -1094,9 +1173,12 @@ public class FiberAnalysisWorkflow {
         tiling.addProperty("merged_windows", windowCount);
         tiling.addProperty(
                 "additive_scalars",
-                "summed after scaling each tile onto the area it alone owns, so the"
+                "summed over the rectangle each tile alone owns, so the"
                         + " one-window tile overlap is not counted twice");
-        tiling.addProperty("averaged_scalars", "weighted by the windows each tile contributed");
+        tiling.addProperty(
+                "averaged_scalars",
+                "weighted by the windows each tile contributed; coverage and HDM are recomputed from the"
+                        + " summed pixel counts, and gap widths combine by gap count (mean) and maximum");
         JsonArray droppedArr = new JsonArray();
         for (String k : droppedTileScalarKeys(tileScalars)) droppedArr.add(k);
         tiling.add("omitted_scalars", droppedArr);
@@ -1805,6 +1887,51 @@ public class FiberAnalysisWorkflow {
      * This sidesteps GeoJSON serialisation entirely while still respecting concave,
      * curved, and multi-part annotations.
      */
+    /** The settings {@link PooledThreshold} pools under, from a run's parameters. */
+    static PooledThreshold.Settings segmentationSettings(FiberAnalysisParams p) {
+        return new PooledThreshold.Settings() {
+            @Override
+            public String thresholdMethod() {
+                return p.thresholdMethod();
+            }
+
+            @Override
+            public String segChannel() {
+                return p.internalChannel();
+            }
+
+            @Override
+            public String ridgeFilter() {
+                return p.ridgeFilter();
+            }
+
+            @Override
+            public double sigmaMinUm() {
+                return p.sigmaMinUm();
+            }
+
+            @Override
+            public double sigmaMaxUm() {
+                return p.sigmaMaxUm();
+            }
+
+            @Override
+            public double sigmaStepUm() {
+                return p.sigmaStepUm();
+            }
+
+            @Override
+            public boolean invertIntensity() {
+                return p.invertIntensity();
+            }
+
+            @Override
+            public double rollingBallRadiusUm() {
+                return p.rollingBallRadiusUm();
+            }
+        };
+    }
+
     static void rasterisePolygonMask(
             ROI roi, int regionX, int regionY, int maskW, int maskH, double downsample, Path outputPng)
             throws IOException {
@@ -1931,10 +2058,10 @@ public class FiberAnalysisWorkflow {
                 addOptionalNumeric(det, w, "mean_curvature_per_px", "Mean curvature (rad/px)");
                 addOptionalNumeric(det, w, "fractal_dimension", "Fractal dimension");
                 addOptionalNumeric(det, w, "lacunarity_mean", "Lacunarity (mean)");
-                addOptionalNumeric(det, w, "gap_mean_um", "Mean gap (um)");
-                addOptionalNumeric(det, w, "gap_mean_px", "Mean gap (px)");
-                addOptionalNumeric(det, w, "gap_max_um", "Max gap (um)");
-                addOptionalNumeric(det, w, "gap_max_px", "Max gap (px)");
+                addOptionalNumeric(det, w, "gap_mean_um", "Mean gap width (um)");
+                addOptionalNumeric(det, w, "gap_mean_px", "Mean gap width (px)");
+                addOptionalNumeric(det, w, "gap_max_um", "Max gap width (um)");
+                addOptionalNumeric(det, w, "gap_max_px", "Max gap width (px)");
                 // Per-box lacunarity columns -- key shape "lacunarity_box_<N>".
                 // Number of columns matches the user's configured box-size list,
                 // so we discover them dynamically rather than hard-coding.

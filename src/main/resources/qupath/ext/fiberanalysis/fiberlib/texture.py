@@ -10,11 +10,16 @@ References:
     Depeursinge, A. et al. (2014). Three-dimensional solid texture analysis
         in biomedical imaging. Med Image Anal 18(1).
 
-We use scikit-image's ``graycomatrix`` + ``graycoprops``. The image is
-quantised to ``quant_levels`` (default 16). Co-occurrence is computed at
-each requested distance and averaged over four angles (0, 45, 90, 135 deg)
-to be rotation-invariant, then ``graycoprops`` extracts the requested
-properties.
+We use scikit-image's ``graycomatrix`` + ``graycoprops``. Fiber pixels are
+quantised to ``quant_levels`` (default 16) gray levels; background is a
+separate code that is dropped from the co-occurrence matrix, so only
+fiber-fiber pixel pairs count. (Through fiberlib 0.3.11 background was gray
+level 0 and its pairs dominated the matrix, so contrast and entropy tracked
+fiber coverage more than texture.) Co-occurrence is computed at each
+requested distance and averaged over four angles (0, 45, 90, 135 deg) to be
+rotation-invariant, then ``graycoprops`` extracts the requested properties.
+A distance/angle with no fiber-fiber pair is left out of the average; a
+window with none at all is NaN.
 
 A native ``entropy`` is added since scikit-image's ``graycoprops`` does
 not include it.
@@ -41,18 +46,33 @@ def quantise(image_scalar, levels):
     return q
 
 
-def glcm_props_for_patch(patch_q, distances_px, levels, props):
-    """Compute a dict of {prop_name: scalar} for a single window patch."""
-    if patch_q.size == 0:
-        return {p: float("nan") for p in props}
-    glcm = graycomatrix(
-        patch_q,
+def code_fibers(q, fiber_mask):
+    """Gray levels 0..L-1 on fiber pixels become codes 1..L; background is 0."""
+    return np.where(fiber_mask, q.astype(np.uint16) + 1, 0).astype(np.uint16)
+
+
+def glcm_props_for_patch(patch_codes, distances_px, levels, props):
+    """Compute a dict of {prop_name: scalar} for a single window patch.
+
+    ``patch_codes`` is from :func:`code_fibers`: 0 = background, 1..levels =
+    fiber gray levels. Pairs with a background pixel are not counted.
+    """
+    nan = {p: float("nan") for p in props}
+    if patch_codes.size == 0:
+        return nan
+    counts = graycomatrix(
+        patch_codes,
         distances=list(distances_px),
         angles=_ANGLES,
-        levels=int(levels),
+        levels=int(levels) + 1,
         symmetric=True,
-        normed=True,
-    )
+        normed=False,
+    )[1:, 1:, :, :].astype(np.float64)
+    totals = counts.sum(axis=(0, 1))  # (Nd, Na)
+    used = totals > 0
+    if not used.any():
+        return nan
+    glcm = counts / np.where(used, totals, 1.0)
     out = {}
     for p in props:
         if p == "entropy":
@@ -62,11 +82,11 @@ def glcm_props_for_patch(patch_q, distances_px, levels, props):
             with np.errstate(divide="ignore", invalid="ignore"):
                 ent = -np.where(valid, P * np.log2(np.where(valid, P, 1)), 0.0)
             ent = ent.sum(axis=(0, 1))  # (Nd, Na)
-            out[p] = float(np.mean(ent))
+            out[p] = float(np.mean(ent[used]))
         else:
             try:
                 v = graycoprops(glcm, p)  # (Nd, Na)
-                out[p] = float(np.mean(v))
+                out[p] = float(np.mean(v[used]))
             except Exception as e:
                 logger.warning("graycoprops(%s) failed: %s", p, e)
                 out[p] = float("nan")
@@ -83,11 +103,9 @@ def compute_glcm_window(
     returns a dict with ``per_window``: a dict {prop_name: (Hw, Ww) array}.
     """
     q = quantise(image_scalar, int(quant_levels))
-    q_masked = np.where(fiber_mask, q, 0).astype(np.uint8)
+    q_masked = code_fibers(q, fiber_mask)
 
     if window_grid is None:
-        # graycomatrix needs a 2D array, so the masked image goes in whole --
-        # background reads as level 0 rather than being dropped.
         single = glcm_props_for_patch(q_masked, distances_px, quant_levels, props)
         return {
             "per_window": {

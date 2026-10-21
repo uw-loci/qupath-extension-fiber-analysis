@@ -1300,7 +1300,8 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.gapAnalysisProperty().get());
         applyTooltip(
                 gapAnalysisCheck,
-                "Distribution of gap sizes between fibers (largest inscribed circle in fiber-free regions).");
+                "Widths of the gaps between fibers: the diameter of the largest empty circle at each gap"
+                        + " centre inside the analysis zone.");
 
         checks.add(branchpointsCheck, 0, 0);
         checks.add(endpointsCheck, 1, 0);
