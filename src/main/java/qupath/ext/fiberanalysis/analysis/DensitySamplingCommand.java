@@ -54,6 +54,9 @@ import qupath.lib.roi.interfaces.ROI;
  */
 public final class DensitySamplingCommand {
 
+    /** Object metadata key: the threshold the sampled map was segmented at. */
+    static final String MAP_THRESHOLD_KEY = "fiber_analysis.map_threshold";
+
     private static final Logger logger = LoggerFactory.getLogger(DensitySamplingCommand.class);
 
     /** Measurement-name prefix so the new columns are easy to spot in the table. */
@@ -147,6 +150,8 @@ public final class DensitySamplingCommand {
                     obj.getMeasurementList()
                             .put(MEASUREMENT_PREFIX + info.channels().get(c).name, means[c]);
                 }
+                // The values are only comparable with others cut at the same threshold.
+                if (info.threshold() != null) obj.getMetadata().put(MAP_THRESHOLD_KEY, info.threshold());
                 done++;
             }
 

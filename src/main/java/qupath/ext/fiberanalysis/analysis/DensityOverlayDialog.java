@@ -67,6 +67,7 @@ public final class DensityOverlayDialog {
     private Button autoBtn;
     private CheckBox hideBelowBox;
     private Label status;
+    private Label thresholdLabel;
 
     private DensityOverlay.Loaded loaded;
     private DensityOverlay.Loaded brightnessLoaded;
@@ -151,6 +152,12 @@ public final class DensityOverlayDialog {
         status = new Label();
         status.setWrapText(true);
         status.setMaxWidth(420);
+        thresholdLabel = new Label();
+        thresholdLabel.setWrapText(true);
+        thresholdLabel.setMaxWidth(420);
+        thresholdLabel.setTooltip(new javafx.scene.control.Tooltip(
+                "The threshold this map's fibers were segmented at. Maps cut at different thresholds, or with"
+                        + " other segmentation settings, are not comparable."));
 
         GridPane grid = new GridPane();
         grid.setHgap(8);
@@ -161,6 +168,7 @@ public final class DensityOverlayDialog {
         grid.addRow(3, new Label("Range"), new HBox(6, minField, new Label("to"), maxField, autoBtn));
         grid.add(hideBelowBox, 1, 4);
         grid.addRow(5, new Label("Brightness from"), brightnessCombo);
+        grid.addRow(6, new Label("Threshold"), thresholdLabel);
         GridPane.setFillWidth(mapCombo, true);
 
         Label note = new Label("Drawn on QuPath's pixel-classification layer: the opacity slider and"
@@ -310,9 +318,11 @@ public final class DensityOverlayDialog {
         loaded = null;
         brightnessLoaded = null;
         channelInfos = List.of();
+        thresholdLabel.setText("");
         if (map == null) return;
         try {
             channelInfos = DensitySidecar.readChannelInfos(map);
+            thresholdLabel.setText(thresholdText(DensitySidecar.readInfo(map).threshold()));
             brightnessCombo.getItems().add(NO_BRIGHTNESS);
             for (var info : channelInfos) {
                 if (BRIGHTNESS_CHANNELS.contains(info.name))
@@ -325,6 +335,16 @@ public final class DensityOverlayDialog {
         } catch (IOException e) {
             status.setText("Could not read the map's channels: " + e.getMessage());
         }
+    }
+
+    /**
+     * @param threshold a map's recorded threshold label, or null
+     * @return the text the Threshold row shows
+     */
+    static String thresholdText(String threshold) {
+        if (threshold == null) return "Not recorded (map made before 2026-10-21)";
+        ThresholdIdentity t = ThresholdIdentity.parse(threshold);
+        return t == null ? threshold : t.cut() + "\n" + t.source() + "\nsettings " + t.settings();
     }
 
     /** The chosen channel's info, or null. */

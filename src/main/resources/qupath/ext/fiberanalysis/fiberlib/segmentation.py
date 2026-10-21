@@ -239,6 +239,23 @@ def threshold_scalar(
 ):
     """Pick a threshold and return a boolean foreground mask.
 
+    Same parameters as :func:`resolve_threshold`.
+    """
+    return arr >= resolve_threshold(
+        arr, method, manual_threshold, project_threshold_norm, manual_full_scale, fit_mask
+    )
+
+
+def resolve_threshold(
+    arr,
+    method,
+    manual_threshold,
+    project_threshold_norm=None,
+    manual_full_scale=255.0,
+    fit_mask=None,
+):
+    """The cut a threshold method resolves to on ``arr``.
+
     Parameters:
         arr:                 scalar image on [0, 1].
         method:              'otsu' (per-region) | 'triangle' | 'manual' |
@@ -288,7 +305,7 @@ def threshold_scalar(
         t * float(manual_full_scale),
         float(manual_full_scale),
     )
-    return arr >= t
+    return float(t)
 
 
 # ---- entry points ----------------------------------------------------------
@@ -335,8 +352,13 @@ def segment_internal(
     project_threshold_norm=None,
     fit_mask=None,
     manual_response_threshold=0.1,
+    return_threshold=False,
 ):
     """Internal fiber segmenter. See module docstring for parameters.
+
+    ``return_threshold`` returns ``(mask, cut, full_scale)`` instead of the
+    mask: the resolved cut on the thresholded scalar's scale, and the divisor
+    that turns a gray level into it (1.0 with a ridge filter).
 
     ``invert_intensity`` flips bright<->dark before thresholding -- needed for
     DAB / chromogenic brightfield where collagen appears DARKER than
@@ -384,7 +406,7 @@ def segment_internal(
     # the response too would make the threshold pick the background.
     normed = flatten_background(enhanced, invert_intensity and not response, rolling_ball_radius)
 
-    mask = threshold_scalar(
+    cut = resolve_threshold(
         normed,
         threshold_method,
         manual_cut,
@@ -392,9 +414,11 @@ def segment_internal(
         manual_full_scale,
         fit_mask=fit_mask,
     )
-    mask = skmorph.binary_closing(mask, footprint=skmorph.disk(1))
+    mask = skmorph.binary_closing(normed >= cut, footprint=skmorph.disk(1))
     if min_fiber_area_px > 0:
         mask = skmorph.remove_small_objects(mask, min_size=int(min_fiber_area_px))
+    if return_threshold:
+        return mask.astype(bool), cut, float(manual_full_scale)
     return mask.astype(bool)
 
 

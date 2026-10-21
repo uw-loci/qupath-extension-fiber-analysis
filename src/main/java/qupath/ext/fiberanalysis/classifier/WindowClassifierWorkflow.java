@@ -486,6 +486,7 @@ public final class WindowClassifierWorkflow {
      * @param srcPxUm      source pixel size
      * @param regionX      x of the region the windows were laid on
      * @param regionY      y of that region
+     * @param threshold    the {@code ThresholdIdentity} label the features were segmented at, or null
      * @return the channels written, in order, so the caller can colour them
      * @throws IOException if the sidecar cannot be written
      */
@@ -497,7 +498,8 @@ public final class WindowClassifierWorkflow {
             int srcH,
             double srcPxUm,
             int regionX,
-            int regionY)
+            int regionY,
+            String threshold)
             throws IOException {
 
         int n = result.features().windowCount();
@@ -538,7 +540,7 @@ public final class WindowClassifierWorkflow {
                 regionY);
         DensityTiffWriter.write(
                 outputPath.toString(),
-                new DensityMapInfo(lattice, srcW, srcH, srcPxUm, false, sourceImage, List.of()),
+                new DensityMapInfo(lattice, srcW, srcH, srcPxUm, false, sourceImage, threshold, List.of()),
                 channels,
                 grids.toArray(new float[0][]));
         logger.info(

@@ -61,6 +61,28 @@ public record SegmentationSpec(
         implements PooledThreshold.Settings {
 
     /**
+     * @param source how a pooled or calibrated threshold was obtained
+     * @return the threshold this spec cuts at, for map files and objects
+     */
+    public qupath.ext.fiberanalysis.analysis.ThresholdIdentity thresholdIdentity(String source) {
+        return qupath.ext.fiberanalysis.analysis.ThresholdIdentity.of(
+                thresholdMethod,
+                manualThreshold,
+                manualResponseThreshold,
+                projectThresholdNorm,
+                source,
+                segChannel,
+                ridgeFilter,
+                sigmaMinUm,
+                sigmaMaxUm,
+                sigmaStepUm,
+                invertIntensity,
+                rollingBallRadiusUm,
+                minFiberAreaUm2,
+                1.0);
+    }
+
+    /**
      * Read the segmentation settings the user last ran with.
      *
      * <p>The classifier deliberately does not grow its own copy of the

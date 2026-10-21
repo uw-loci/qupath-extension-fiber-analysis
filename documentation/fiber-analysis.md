@@ -130,6 +130,53 @@ GUI dialogs call). Output goes to the same on-disk location as the
 original GUI-driven run -- a re-run replaces the previous run's files in
 place.
 
+## Which threshold a result was cut at
+
+Fiber coverage, skeleton length and every other fiber measurement depend on
+the threshold the mask was cut at, so two results are comparable only when
+they were cut at the same value with the same segmentation settings. Every
+result records that in one line:
+
+```
+Otsu 0.08337 | Otsu pooled over 2 annotation(s) on 1 image(s): 21 sample(s) of their analysis zones (7595099 px), run 20261021_113342_9afbe194 | settings 7a3ec246
+```
+
+The first part is the cut: the method and value (a fraction of the channel's
+full scale, `gray level N` for a Manual cut, or `response N` with a ridge
+filter). The second says how it was obtained: pooled in which run or batch,
+`calibration '<name>'`, or `set by hand`. The third is a fingerprint of the
+settings that decide what the cut means: source channel, ridge filter and its
+sigmas, invert, rolling ball, minimum fiber area and analysis downsample. Two
+results with the same cut and fingerprint are comparable, however the cut was
+obtained.
+
+The line is written to:
+
+- `threshold.json` in an annotation run's folder, with the settings spelled
+  out;
+- the image's project entry metadata, as `Fiber threshold (annotations)` for
+  the latest annotation run and `Fiber threshold (density map)` for its density
+  map, so the project list and the metadata browser can sort and filter by it;
+- each detection a run creates, as object metadata `fiber_analysis.threshold`,
+  and each object a density map is sampled into, as
+  `fiber_analysis.map_threshold`;
+- a density or classifier map's file description (a `Threshold:` line) and
+  `_density_params.json` (`thresholdIdentity`).
+
+After a run, the extension compares the new line with the one recorded on every
+other image of the project. When any differ it shows a warning naming them, for
+example:
+
+```
+1 other image(s) in this project were cut at a different threshold, so their results are not comparable with these:
+  Otsu 0.09620 (pooled over 1 annotation(s) on 1 image(s), run old): earlier run
+Run them together, or use one project calibration, to compare them.
+```
+
+A batch run makes this comparison once, at the end, against the images it did
+not cover. To make a whole project comparable, run it as one batch, or
+calibrate once and use **Project Otsu (calibrated)** everywhere.
+
 ## Project density map (whole-slide)
 
 For density-of-fiber maps across an entire slide, use the separate
@@ -153,6 +200,7 @@ where the grid sits on the image:
 ```
 Placement: source_width=16952; source_height=18225; source_pixel_um=0.1732; cell_px=36; window_px=144; x0=54; y0=54; grid=467x503; render=bilinear
 Source image: <the image the map was computed on>
+Threshold: <the threshold the map was cut at; see "Which threshold a result was cut at">
 ```
 
 Grid pixel (i, j) covers image pixels `x0 + i*cell_px` to `x0 + (i+1)*cell_px`
@@ -173,7 +221,8 @@ Three ways to use a map:
   adds a `Density: <channel>` measurement per channel to each selected object
   (or every annotation): the mean of the map inside the object, read every
   quarter cell (the mean angle as an axial mean). An object smaller than that
-  takes the value at its centre.
+  takes the value at its centre. Each object also gets the map's threshold as
+  metadata (`fiber_analysis.map_threshold`).
 - **Add it as channels in a new image**: `Add density channels as a new image`,
   or the first output option in the dialog for every image in the run. This
   adds a new project entry named `<image> [fiber density]`: the image, converted
@@ -209,7 +258,8 @@ zoom, and the viewer's location bar shows the map value under the cursor.
 **Hide values at or below the minimum** leaves the lowest values undrawn instead
 of painting them in the first colour, so the image shows through where there is
 nothing to see, such as the slide background around the tissue. Set the minimum
-to the background level first.
+to the background level first. The **Threshold** row shows what the map's fibers
+were cut at; maps made before 2026-10-21 say it was not recorded.
 
 **Mean angle (deg)** is an orientation, where 1 and 179 degrees are two degrees
 apart. A linear colour map paints those two at opposite ends of the scale, so
@@ -295,8 +345,12 @@ and every tile of every image uses that value. With one image selected that is
 a slide-level threshold; with several it is shared across them. The value and
 how it was obtained are written to `_density_params.json`
 (`projectThresholdNorm`, `thresholdSource`), and the re-run script replays that
-value rather than sampling again. **Manual** and **Project Otsu** are already
-one value.
+value rather than sampling again. Because the pool depends on which images were
+selected, two density runs over different images are cut at different values;
+the map's `Threshold:` line and the entry metadata record which, and the run
+warns when other images' maps differ. **Manual** and **Project Otsu** are already
+one value. A Project Otsu density run refuses a calibration that cannot be read
+or was fitted with other segmentation settings, as an annotation run does.
 
 The window classifier does the same at training time, pooled over the training
 images, and stores the whole segmentation (threshold included) in the model.
@@ -435,7 +489,8 @@ value, so one run is comparable within itself. The margin read around an
 annotation never enters the fit. The value and how it was obtained are written
 to `threshold.json` in the run folder and logged as "Every annotation cuts
 at". A different run fits its own value; to compare separate runs, calibrate
-once and choose **Project Otsu (calibrated)**. Calibration fits the same way,
+once and choose **Project Otsu (calibrated)** (see "Which threshold a result
+was cut at" for how results record their cut). Calibration fits the same way,
 with the run's zone mode, zone width, analysis downsample and ridge-filter
 sizes, and skips images with no pixel size and channels entries this
 extension made.
@@ -450,6 +505,31 @@ without the per-image division. The thresholded mask is then
 cleaned: `binary_closing` to bridge 1-px gaps, then
 `remove_small_objects` at the **Min fiber area** (default 1.0 um2).
 The clean mask is the fiber segmentation.
+
+### Previewing the segmentation
+
+**Preview segmentation...** (under the internal segmentation settings)
+segments a 128, 256 or 512 px square around the viewer centre, or around the
+selected annotation, and shows the mask in magenta over it. It reads the way
+the run does: at the **Analysis downsample**, with the run's pixel size, and it
+re-runs when a setting in the Run dialog changes (pan or zoom, then click
+**Refresh**). A cyan locked rectangle, `Fiber-Preview-Region`, marks the square
+on the image while the window is open; it is never selected and no run
+analyses it.
+
+The window states the cut it used and whether the run will cut at the same
+value:
+
+- **Manual** and **Project Otsu**: one value, the same in the preview and the
+  run.
+- **Otsu** and **Triangle**: the run fits one value over the analysis zones of
+  all the annotations it would analyse (the **Search area**). With **Cut at
+  the run's threshold** ticked (the default) the preview fits that same value
+  first, which takes a few seconds and is reused until a setting that moves it
+  changes, and cuts the square there. Unticked, it fits Otsu or Triangle on
+  the square alone; the line then turns orange and says the run will cut
+  differently. When no annotation matches the Search area there is nothing to
+  pool over, so the preview fits on the square and says so.
 
 ### Large annotations are tiled automatically
 

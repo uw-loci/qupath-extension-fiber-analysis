@@ -26,6 +26,7 @@ final class SidecarDescription {
 
     static final String PLACEMENT = "Placement:";
     static final String SOURCE_IMAGE = "Source image:";
+    static final String THRESHOLD = ThresholdIdentity.DESCRIPTION_PREFIX;
 
     private static final Pattern CHANNEL_ROW =
             Pattern.compile("\\[(\\d+)]\\s*name=([^;\\r\\n]+)(?:;\\s*unit=([^\\r\\n;]+))?(?:;\\s*axial=([0-9.]+))?");
@@ -34,7 +35,7 @@ final class SidecarDescription {
     private SidecarDescription() {}
 
     /**
-     * @param info     placement, render mode and source image (its channel list is ignored)
+     * @param info     placement, render mode, source image and threshold (its channel list is ignored)
      * @param channels the channels, in file order
      * @return the description text
      */
@@ -67,6 +68,8 @@ final class SidecarDescription {
                     .append(' ')
                     .append(oneLine(info.sourceImage()))
                     .append('\n');
+        if (info.threshold() != null)
+            d.append(THRESHOLD).append(' ').append(oneLine(info.threshold())).append('\n');
         d.append("Channels:\n");
         for (int c = 0; c < channels.size(); c++) {
             DensityChannelSpec spec = channels.get(c);
@@ -83,13 +86,14 @@ final class SidecarDescription {
 
     /**
      * @param desc a map file's image description
-     * @return placement, render mode, source image and channels
+     * @return placement, render mode, source image, threshold and channels
      * @throws IllegalArgumentException if the description has no placement line, as in
      *     files written before maps were stored at grid resolution
      */
     static DensityMapInfo parseInfo(String desc) {
         Map<String, String> kv = null;
         String source = null;
+        String threshold = null;
         for (String line : desc.split("\\R")) {
             String t = line.trim();
             if (t.startsWith(PLACEMENT)) {
@@ -98,6 +102,8 @@ final class SidecarDescription {
                 while (m.find()) kv.put(m.group(1), m.group(2));
             } else if (t.startsWith(SOURCE_IMAGE)) {
                 source = t.substring(SOURCE_IMAGE.length()).trim();
+            } else if (t.startsWith(THRESHOLD)) {
+                threshold = t.substring(THRESHOLD.length()).trim();
             }
         }
         if (kv == null) {
@@ -124,6 +130,7 @@ final class SidecarDescription {
                     Double.parseDouble(kv.get("source_pixel_um")),
                     "bilinear".equals(kv.get("render")),
                     source,
+                    threshold,
                     parse(desc));
         } catch (RuntimeException e) {
             throw new IllegalArgumentException("Malformed placement line in map file: " + kv, e);

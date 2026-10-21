@@ -536,6 +536,7 @@ public final class DensityMapTilingScenario {
                         server.getPixelCalibration().getAveragedPixelSizeMicrons(),
                         false,
                         entry.getImageName(),
+                        null,
                         List.of()),
                 List.of(
                         DensityChannelSpec.forClassProbability("Stroma"),

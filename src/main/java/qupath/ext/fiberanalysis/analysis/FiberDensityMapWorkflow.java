@@ -164,7 +164,12 @@ public final class FiberDensityMapWorkflow {
                     try {
                         PooledThreshold.Result pooled =
                                 PooledThreshold.pool(entries, spec.settings(), poolDir, progress::setSub);
-                        runSpec = spec.withPooledThreshold(pooled.thresholdNorm(), PooledThreshold.describe(pooled));
+                        runSpec = spec.withRunThreshold(
+                                pooled.thresholdNorm(),
+                                PooledThreshold.describe(pooled) + ", density run "
+                                        + java.time.LocalDateTime.now()
+                                                .format(java.time.format.DateTimeFormatter.ofPattern(
+                                                        "yyyyMMdd_HHmmss")));
                     } finally {
                         deleteTree(poolDir);
                     }
@@ -179,6 +184,9 @@ public final class FiberDensityMapWorkflow {
                 }
             }
 
+            ThresholdIdentity identity = ThresholdIdentity.of(runSpec);
+            logger.info("Threshold: {}", identity.label());
+            List<ProjectImageEntry<BufferedImage>> made = new ArrayList<>();
             int total = entries.size();
             int ok = 0;
             int failed = 0;
@@ -190,6 +198,7 @@ public final class FiberDensityMapWorkflow {
                     Path tiffPath = runForOneImage(runSpec, entry, project, outRoot, progress);
                     if (tiffPath != null) {
                         ok++;
+                        made.add(entry);
                         logger.info("Density map written: {}", tiffPath);
                     } else {
                         failed++;
@@ -203,6 +212,8 @@ public final class FiberDensityMapWorkflow {
                             "Fiber density map", "Image \"" + name + "\" failed: " + msg));
                 }
             }
+            ProjectThresholds.warnIfDiffers(
+                    project, made, identity, ThresholdIdentity.META_DENSITY, "Fiber density map");
             final int okF = ok;
             final int failedF = failed;
             HeadlessFx.runLater(() -> {
@@ -403,12 +414,21 @@ public final class FiberDensityMapWorkflow {
         // source image, so readers draw it at any zoom.
         String safeName = sanitize(entry.getImageName());
         Path outPath = outRoot.resolve(safeName + "_density.ome.tif");
+        ThresholdIdentity identity = ThresholdIdentity.of(spec);
         DensityTiffWriter.write(
                 outPath.toString(),
                 new DensityMapInfo(
-                        geo.lattice(), srcW, srcH, pxUm, spec.smoothInterpolation, entry.getImageName(), List.of()),
+                        geo.lattice(),
+                        srcW,
+                        srcH,
+                        pxUm,
+                        spec.smoothInterpolation,
+                        entry.getImageName(),
+                        identity.label(),
+                        List.of()),
                 channels,
                 accum);
+        ProjectThresholds.record(project, List.of(entry), ThresholdIdentity.META_DENSITY, identity);
         DensityChannelAttacher.refreshIfPresent(project, entry, outPath, DensityChannelAttacher.KIND_DENSITY, null);
 
         // Provenance triple: <image>_density_params.json + _params.txt + _rerun.groovy
@@ -716,6 +736,12 @@ public final class FiberDensityMapWorkflow {
         public final String thresholdSource;
 
         /**
+         * The method a {@link #withRunThreshold} cut came from (otsu, triangle, or project_otsu for a
+         * calibration); {@link #thresholdMethod} otherwise.
+         */
+        public final String fittedMethod;
+
+        /**
          * When true, the sidecar grows additional channels: one per class
          * name in {@link #objectDensityClasses}, computed as the fraction
          * of pixels in the local box that fall inside any object of that
@@ -785,6 +811,7 @@ public final class FiberDensityMapWorkflow {
             }
             this.pixelStepUm = pixelStepUm;
             this.thresholdSource = null;
+            this.fittedMethod = this.thresholdMethod;
             this.includeObjectDensity = includeObjectDensity;
             this.objectDensityClasses = objectDensityClasses == null
                     ? java.util.Collections.emptyList()
@@ -796,17 +823,18 @@ public final class FiberDensityMapWorkflow {
         }
 
         /**
-         * This spec with a run-wide threshold every tile uses instead of its own.
+         * This spec with one threshold every tile uses instead of its own: pooled for the run, or a
+         * project calibration.
          *
          * @param thresholdNorm the cut on [0, 1]
          * @param source        how it was obtained, for the provenance record
          * @return a copy using {@code project_otsu} at that value
          */
-        public DensityMapJobSpec withPooledThreshold(double thresholdNorm, String source) {
-            return new DensityMapJobSpec(this, thresholdNorm, source);
+        public DensityMapJobSpec withRunThreshold(double thresholdNorm, String source) {
+            return new DensityMapJobSpec(this, thresholdNorm, source, fittedMethod);
         }
 
-        private DensityMapJobSpec(DensityMapJobSpec o, double thresholdNorm, String source) {
+        private DensityMapJobSpec(DensityMapJobSpec o, double thresholdNorm, String source, String fittedMethod) {
             this.windowSizeUm = o.windowSizeUm;
             this.windowOverlapPercent = o.windowOverlapPercent;
             this.segChannel = o.segChannel;
@@ -825,6 +853,7 @@ public final class FiberDensityMapWorkflow {
             this.densityMode = o.densityMode;
             this.pixelStepUm = o.pixelStepUm;
             this.thresholdSource = source;
+            this.fittedMethod = fittedMethod;
             this.includeObjectDensity = o.includeObjectDensity;
             this.objectDensityClasses = o.objectDensityClasses;
             this.includePixelPositivity = o.includePixelPositivity;
@@ -898,6 +927,8 @@ public final class FiberDensityMapWorkflow {
             m.put("densityMode", densityMode);
             m.put("pixelStepUm", pixelStepUm);
             if (thresholdSource != null) m.put("thresholdSource", thresholdSource);
+            m.put("fittedMethod", fittedMethod);
+            m.put("thresholdIdentity", ThresholdIdentity.of(this).label());
             m.put("includeObjectDensity", includeObjectDensity);
             m.put("objectDensityClasses", objectDensityClasses);
             m.put("includePixelPositivity", includePixelPositivity);
@@ -972,7 +1003,8 @@ public final class FiberDensityMapWorkflow {
             // re-pooled, so a re-run reproduces the original map.
             String source = jstring(p, "thresholdSource", null);
             if (source != null && spec.projectThresholdNorm != null) {
-                return spec.withPooledThreshold(spec.projectThresholdNorm, source);
+                return new DensityMapJobSpec(
+                        spec, spec.projectThresholdNorm, source, jstring(p, "fittedMethod", spec.thresholdMethod));
             }
             return spec;
         }

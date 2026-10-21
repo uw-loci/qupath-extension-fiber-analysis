@@ -29,6 +29,8 @@ Outputs:
         "fiber_pixels": int,        # mask pixel count
         "total_pixels": int,        # region pixel count
         "coverage_percent": float,  # fiber_pixels / total_pixels * 100
+        "threshold": float,         # the cut, on the thresholded scalar's scale
+        "full_scale": float,        # gray level = threshold * full_scale (1.0 with a ridge filter)
         "ms_segment": float,
         "ms_render": float
       }
@@ -72,7 +74,7 @@ try:
         except (TypeError, ValueError):
             pthr = None
 
-    fiber_mask = seg.segment_internal(
+    fiber_mask, cut, scale = seg.segment_internal(
         image=image_rgb,
         channel=str(seg_channel),
         threshold_method=str(threshold_method).lower(),
@@ -86,6 +88,7 @@ try:
         invert_intensity=invert,
         rolling_ball_radius=rb,
         project_threshold_norm=pthr,
+        return_threshold=True,
     )
     t_seg = (time.time() - t0) * 1000.0
 
@@ -102,6 +105,8 @@ try:
         "fiber_pixels": n_fiber,
         "total_pixels": n_total,
         "coverage_percent": coverage,
+        "threshold": cut,
+        "full_scale": scale,
         "ms_segment": t_seg,
         "ms_render": t_render,
     })

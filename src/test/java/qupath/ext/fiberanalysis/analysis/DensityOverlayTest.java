@@ -26,7 +26,14 @@ class DensityOverlayTest {
 
     private static DensityMapOverlay overlay(DensityLattice lat, float[] grid, boolean smooth, double min, double max) {
         var info = new DensityMapInfo(
-                lat, 1000, 1000, 0.25, smooth, "img", List.of(new DensitySidecar.ChannelInfo(0, "Signal", null, 0)));
+                lat,
+                1000,
+                1000,
+                0.25,
+                smooth,
+                "img",
+                null,
+                List.of(new DensitySidecar.ChannelInfo(0, "Signal", null, 0)));
         return new DensityMapOverlay(
                 null, info, 0, grid, DensityMapOverlay.Style.range(viridis(), min, max, false), -1, null);
     }
@@ -58,6 +65,7 @@ class DensityOverlayTest {
                 0.25,
                 false,
                 "img",
+                null,
                 List.of(new DensitySidecar.ChannelInfo(0, "Signal", null, 0)));
         float[] grid = {-5f, 0f, 0.5f, 9f};
         var o = new DensityMapOverlay(
@@ -78,6 +86,7 @@ class DensityOverlayTest {
                 0.25,
                 true,
                 "img",
+                null,
                 List.of(
                         new DensitySidecar.ChannelInfo(0, "P(Stroma)", "probability", 0),
                         new DensitySidecar.ChannelInfo(1, "P(Tumor)", "probability", 0),
@@ -152,6 +161,7 @@ class DensityOverlayTest {
                 0.25,
                 true,
                 "img",
+                null,
                 List.of(
                         new DensitySidecar.ChannelInfo(0, "Mean angle (deg)", "deg", 180),
                         new DensitySidecar.ChannelInfo(1, "Order parameter", null, 0)));

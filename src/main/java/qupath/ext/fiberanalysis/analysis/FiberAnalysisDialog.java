@@ -988,19 +988,30 @@ public final class FiberAnalysisDialog {
                                 "Segment a small region around the viewer center with the current Section 2 settings and show the mask in magenta.")));
         previewBtn.setOnAction(e -> FiberSegmentationPreviewWindow.show(
                 gui,
-                internalChannelCombo,
-                thresholdMethodCombo,
-                manualThresholdSpinner,
-                manualResponseSpinner,
-                ridgeFilterCombo,
-                sigmaMinSpinner,
-                sigmaMaxSpinner,
-                sigmaStepSpinner,
-                minFiberAreaSpinner,
-                invertIntensityCheck,
-                rollingBallSpinner,
-                calibrationCombo,
-                borderZoneSpinner));
+                () -> {
+                    FiberAnalysisParams p = buildParams();
+                    return new FiberSegmentationPreviewWindow.Context(
+                            p, resolveAnnotationsForRun(p, currentImageData()));
+                },
+                List.of(
+                        internalChannelCombo.valueProperty(),
+                        thresholdMethodCombo.valueProperty(),
+                        manualThresholdSpinner.valueProperty(),
+                        manualResponseSpinner.valueProperty(),
+                        ridgeFilterCombo.valueProperty(),
+                        sigmaMinSpinner.valueProperty(),
+                        sigmaMaxSpinner.valueProperty(),
+                        sigmaStepSpinner.valueProperty(),
+                        minFiberAreaSpinner.valueProperty(),
+                        invertIntensityCheck.selectedProperty(),
+                        rollingBallSpinner.valueProperty(),
+                        calibrationCombo.valueProperty(),
+                        borderZoneSpinner.valueProperty(),
+                        zoneModeGroup.selectedToggleProperty(),
+                        analysisDownsampleSpinner.valueProperty(),
+                        searchAreaCombo.valueProperty(),
+                        useImagePixelSizeCheck.selectedProperty(),
+                        pixelSizeOverrideSpinner.valueProperty())));
         for (var prop : List.of(
                 thresholdMethodCombo.valueProperty(),
                 calibrationCombo.valueProperty(),
@@ -1757,7 +1768,17 @@ public final class FiberAnalysisDialog {
             showError(String.join("\n", errors));
             return null;
         }
+        if ("class".equals(searchAreaCodeFromLabel(searchAreaCombo.getValue()))
+                && classFilterCheckedAsCsv().isBlank()) {
+            showError("Check at least one class in 'Annotation class(es)'.");
+            return null;
+        }
+        return buildParams();
+    }
 
+    /** @return the parameters the controls describe, unvalidated */
+    private FiberAnalysisParams buildParams() {
+        String outDir = outputDirField.getText();
         String zoneMode = zoneWhole.isSelected()
                 ? "whole"
                 : zoneInside.isSelected() ? "inside" : zoneBoth.isSelected() ? "both" : "outside";
@@ -1768,10 +1789,6 @@ public final class FiberAnalysisDialog {
 
         String searchAreaCode = searchAreaCodeFromLabel(searchAreaCombo.getValue());
         String classFilterCsv = classFilterCheckedAsCsv();
-        if ("class".equals(searchAreaCode) && classFilterCsv.isBlank()) {
-            showError("Check at least one class in 'Annotation class(es)'.");
-            return null;
-        }
 
         // Field order matches qupath.ext.fiberanalysis.analysis.FiberAnalysisParams exactly.
         return new FiberAnalysisParams(
@@ -1937,7 +1954,7 @@ public final class FiberAnalysisDialog {
         }
         try {
             return gui.getImageData().getHierarchy().getSelectionModel().getSelectedObjects().stream()
-                    .filter(o -> o != null && o.isAnnotation())
+                    .filter(o -> o != null && o.isAnnotation() && !FiberSegmentationPreviewWindow.isPreviewMarker(o))
                     .collect(Collectors.toList());
         } catch (Exception e) {
             logger.debug("Could not read selection: {}", e.getMessage());
@@ -2136,7 +2153,7 @@ public final class FiberAnalysisDialog {
         }
         String mode = params.searchArea() == null ? "selected" : params.searchArea();
         List<PathObject> all = imageData.getHierarchy().getAnnotationObjects().stream()
-                .filter(o -> o != null && o.isAnnotation())
+                .filter(o -> o != null && o.isAnnotation() && !FiberSegmentationPreviewWindow.isPreviewMarker(o))
                 .collect(Collectors.toList());
         switch (mode) {
             case "all":

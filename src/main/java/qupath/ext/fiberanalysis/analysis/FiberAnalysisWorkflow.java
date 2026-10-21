@@ -67,6 +67,7 @@ import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.classes.PathClass;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.projects.Project;
+import qupath.lib.projects.ProjectImageEntry;
 import qupath.lib.regions.ImagePlane;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.ROIs;
@@ -100,6 +101,12 @@ public class FiberAnalysisWorkflow {
     private volatile Double runThreshold;
 
     private volatile String runThresholdSource;
+
+    /** The project at launch; the worker thread cannot ask QP for it. */
+    private volatile Project<BufferedImage> projectAtLaunch;
+
+    /** False when a batch compares thresholds across the project once, at its end. */
+    private volatile boolean checkProjectThresholds = true;
 
     private static final Logger logger = LoggerFactory.getLogger(FiberAnalysisWorkflow.class);
 
@@ -172,6 +179,16 @@ public class FiberAnalysisWorkflow {
     public FiberAnalysisWorkflow withRunThreshold(double thresholdNorm, String source) {
         this.runThreshold = thresholdNorm;
         this.runThresholdSource = source;
+        return this;
+    }
+
+    /**
+     * Skip the end-of-run comparison with other images' thresholds; a batch makes it once.
+     *
+     * @return this workflow
+     */
+    public FiberAnalysisWorkflow withoutProjectThresholdCheck() {
+        this.checkProjectThresholds = false;
         return this;
     }
 
@@ -289,6 +306,7 @@ public class FiberAnalysisWorkflow {
         // is thread-local, so anything the worker thread asks for later comes
         // back empty.
         projectDirAtLaunch = resolveProjectDir();
+        projectAtLaunch = qupath != null && qupath.getProject() != null ? qupath.getProject() : QP.getProject();
         if (projectDirAtLaunch != null) {
             logger.info("Project directory for this run: {}", projectDirAtLaunch);
         }
@@ -368,6 +386,7 @@ public class FiberAnalysisWorkflow {
 
             // Otsu / triangle fitted once for the whole run, so every
             // annotation (and, in a batch, every image) is cut at one value.
+            boolean pooledHere = false;
             if (runThreshold == null && poolsThreshold(params)) {
                 progress.setMain("Fitting one threshold for the run...", 0, total);
                 try {
@@ -378,6 +397,7 @@ public class FiberAnalysisWorkflow {
                             progress::setSub);
                     runThreshold = pooled.thresholdNorm();
                     runThresholdSource = describeRunThreshold(pooled, annotations.size());
+                    pooledHere = true;
                 } catch (IOException e) {
                     logger.error("Could not fit a run-wide threshold", e);
                     HeadlessFx.runLater(() -> {
@@ -395,7 +415,11 @@ public class FiberAnalysisWorkflow {
                         "Every annotation cuts at {} ({})",
                         String.format(Locale.ROOT, "%.5f", runThreshold),
                         runThresholdSource);
-                writeRunThreshold(outputRoot, params, runThreshold, runThresholdSource);
+            }
+            ThresholdIdentity identity = runIdentity(params, pooledHere ? ", run " + runFolder : "");
+            if (identity != null) {
+                logger.info("Threshold: {}", identity.label());
+                writeThresholdRecord(outputRoot, params, identity);
             }
             try {
                 writeParamsFiles(outputRoot, params, paramsHash, runStamp, imageData, qupath, annotations);
@@ -486,6 +510,13 @@ public class FiberAnalysisWorkflow {
                 }
             }
 
+            if (identity != null) {
+                for (PathObject d : allWindowDetections)
+                    d.getMetadata().put(ThresholdIdentity.META_OBJECT, identity.label());
+                for (PathObject d : allCollagenDetections)
+                    d.getMetadata().put(ThresholdIdentity.META_OBJECT, identity.label());
+            }
+
             // Add all window detections to the hierarchy in one shot.
             if (!allWindowDetections.isEmpty() && imageData.getHierarchy() != null) {
                 final PathObjectHierarchy hierarchy = imageData.getHierarchy();
@@ -510,6 +541,18 @@ public class FiberAnalysisWorkflow {
 
             long ms = System.currentTimeMillis() - t0;
             logger.info("Fiber Analysis run complete: {} ok, {} failed, {} ms", completed, failed, ms);
+
+            ProjectImageEntry<BufferedImage> entry = ProjectThresholds.entryOf(projectAtLaunch, imageData);
+            if (identity != null && entry != null && completed > 0) {
+                ProjectThresholds.record(projectAtLaunch, List.of(entry), ThresholdIdentity.META_ANNOTATIONS, identity);
+                if (checkProjectThresholds)
+                    ProjectThresholds.warnIfDiffers(
+                            projectAtLaunch,
+                            List.of(entry),
+                            identity,
+                            ThresholdIdentity.META_ANNOTATIONS,
+                            "Fiber Analysis");
+            }
 
             // Tell the panel we are done (status line flips to "complete in X s").
             try {
@@ -1797,24 +1840,49 @@ public class FiberAnalysisWorkflow {
     }
 
     /**
-     * Writes the per-run {@code params.json} (machine-readable, suitable as
-     * input to a batch run), {@code params.txt} (human-readable echo of every
-     * dialog control), and {@code rerun.groovy} (headless re-run script).
-     * All three land in the per-run subdir alongside the per-annotation
-     * output folders. Delegates to {@link RunProvenance}.
+     * The threshold an annotation run cuts at.
      *
-     * @param qupath      GUI handle for resolving project path; may be null
-     *                    (in which case the rerun script still writes but
-     *                    leaves the project path placeholder unresolved).
-     * @param annotations the input annotations -- their names are baked into
-     *                    rerun.groovy so a re-run picks the same set.
+     * @param p         the run's parameters
+     * @param runSuffix appended to a pooled source (the run folder when this run pooled it)
+     * @return the identity, or null for an existing mask
      */
-    /** Records the run-wide threshold beside params.json, so the cut a run used is on disk. */
-    private static void writeRunThreshold(Path runDir, FiberAnalysisParams p, double thresholdNorm, String source) {
+    ThresholdIdentity runIdentity(FiberAnalysisParams p, String runSuffix) {
+        if ("existing".equalsIgnoreCase(p.segSource())) return null;
+        if (poolsThreshold(p)) {
+            return ThresholdIdentity.of(
+                    p, runThreshold, (runThresholdSource == null ? "" : runThresholdSource) + runSuffix);
+        }
+        if ("Project Otsu (calibrated)".equals(p.thresholdMethod())) {
+            Path projDir = projectDirAtLaunch != null ? projectDirAtLaunch : resolveProjectDir();
+            return ThresholdIdentity.of(
+                    p,
+                    loadCalibratedThreshold(p.projectCalibrationName(), projDir),
+                    "calibration '" + p.projectCalibrationName() + "'");
+        }
+        return ThresholdIdentity.of(p, null, null);
+    }
+
+    /** Records the run's threshold beside params.json, so the cut a run used is on disk. */
+    private static void writeThresholdRecord(Path runDir, FiberAnalysisParams p, ThresholdIdentity id) {
         JsonObject o = new JsonObject();
+        o.addProperty("identity", id.label());
         o.addProperty("threshold_method", p.thresholdMethod());
-        o.addProperty("threshold_normalised", thresholdNorm);
-        o.addProperty("source", source);
+        o.addProperty("cut", id.cut());
+        if (!Double.isNaN(id.value())) o.addProperty("value", id.value());
+        o.addProperty("unit", id.unit().isEmpty() ? "fraction of full scale" : id.unit());
+        o.addProperty("source", id.source());
+        o.addProperty("settings_fingerprint", id.settings());
+        JsonObject settings = new JsonObject();
+        settings.addProperty("channel", p.internalChannel());
+        settings.addProperty("ridge_filter", p.ridgeFilter());
+        settings.addProperty("sigma_min_um", p.sigmaMinUm());
+        settings.addProperty("sigma_max_um", p.sigmaMaxUm());
+        settings.addProperty("sigma_step_um", p.sigmaStepUm());
+        settings.addProperty("invert_intensity", p.invertIntensity());
+        settings.addProperty("rolling_ball_radius_um", p.rollingBallRadiusUm());
+        settings.addProperty("min_fiber_area_um2", p.minFiberAreaUm2());
+        settings.addProperty("analysis_downsample", Math.max(1.0, p.analysisDownsample()));
+        o.add("settings", settings);
         try {
             Files.writeString(
                     runDir.resolve("threshold.json"),
@@ -1827,6 +1895,19 @@ public class FiberAnalysisWorkflow {
         }
     }
 
+    /**
+     * Writes the per-run {@code params.json} (machine-readable, suitable as
+     * input to a batch run), {@code params.txt} (human-readable echo of every
+     * dialog control), and {@code rerun.groovy} (headless re-run script).
+     * All three land in the per-run subdir alongside the per-annotation
+     * output folders. Delegates to {@link RunProvenance}.
+     *
+     * @param qupath      GUI handle for resolving project path; may be null
+     *                    (in which case the rerun script still writes but
+     *                    leaves the project path placeholder unresolved).
+     * @param annotations the input annotations -- their names are baked into
+     *                    rerun.groovy so a re-run picks the same set.
+     */
     static void writeParamsFiles(
             Path runDir,
             FiberAnalysisParams p,

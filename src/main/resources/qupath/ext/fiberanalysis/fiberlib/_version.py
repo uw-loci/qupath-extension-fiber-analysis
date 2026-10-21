@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -511,3 +511,9 @@ __version__ = "0.4.1"
 #     already looks for dark ridges), so the mask picked the background
 #     (Sato, Meijering) or everything (Frangi). Fixed.
 #   - flatten_background: the rescale option is gone.
+
+# 0.4.2 (2026-10-21):
+#   - segmentation.resolve_threshold: the cut threshold_scalar applies, on its
+#     own. segment_internal(return_threshold=True) returns it with the mask, so
+#     the segmentation preview can say which value it cut at and whether the
+#     run will cut at the same one.

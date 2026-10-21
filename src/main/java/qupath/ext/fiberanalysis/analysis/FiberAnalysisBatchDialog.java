@@ -406,7 +406,11 @@ public final class FiberAnalysisBatchDialog {
                                 PooledThreshold.Result pooled =
                                         FiberAnalysisWorkflow.poolForRun(params, regions, work, null);
                                 batchThreshold = pooled.thresholdNorm();
-                                batchThresholdSource = FiberAnalysisWorkflow.describeRunThreshold(pooled, nAnn);
+                                batchThresholdSource = FiberAnalysisWorkflow.describeRunThreshold(pooled, nAnn)
+                                        + ", batch "
+                                        + java.time.LocalDateTime.now()
+                                                .format(java.time.format.DateTimeFormatter.ofPattern(
+                                                        "yyyyMMdd_HHmmss"));
                                 logger.info(
                                         "Batch: every image cuts at {} ({})",
                                         String.format(java.util.Locale.ROOT, "%.5f", batchThreshold),
@@ -422,6 +426,7 @@ public final class FiberAnalysisBatchDialog {
                             return;
                         }
                     }
+                    List<ProjectImageEntry<BufferedImage>> ran = new ArrayList<>();
                     for (int i = 0; i < entries.size(); i++) {
                         ProjectImageEntry<BufferedImage> entry = entries.get(i);
                         String name = entry.getImageName();
@@ -438,13 +443,15 @@ public final class FiberAnalysisBatchDialog {
                             // returns the worker Thread so the batch can join it instead of
                             // racing the next image's readImageData against the previous
                             // image's Appose call.
-                            FiberAnalysisWorkflow workflow = new FiberAnalysisWorkflow(resultPanel);
+                            FiberAnalysisWorkflow workflow =
+                                    new FiberAnalysisWorkflow(resultPanel).withoutProjectThresholdCheck();
                             if (batchThreshold != null) workflow.withRunThreshold(batchThreshold, batchThresholdSource);
                             Thread worker = workflow.runForAnnotations(params, annotations, data, gui);
                             if (worker != null) {
                                 worker.join();
                             }
                             ok++;
+                            ran.add(entry);
                         } catch (InterruptedException ie) {
                             Thread.currentThread().interrupt();
                             failed++;
@@ -457,6 +464,18 @@ public final class FiberAnalysisBatchDialog {
                             failed++;
                             logger.error("Batch entry '{}' failed", name, ex);
                         }
+                    }
+                    // One comparison for the whole batch, against images it did not cover.
+                    FiberAnalysisWorkflow idSource = new FiberAnalysisWorkflow(null);
+                    if (batchThreshold != null) idSource.withRunThreshold(batchThreshold, batchThresholdSource);
+                    ThresholdIdentity batchId = idSource.runIdentity(params, "");
+                    if (batchId != null && !ran.isEmpty() && gui != null && gui.getProject() != null) {
+                        ProjectThresholds.warnIfDiffers(
+                                gui.getProject(),
+                                ran,
+                                batchId,
+                                ThresholdIdentity.META_ANNOTATIONS,
+                                "Fiber Analysis Batch");
                     }
                     final int okF = ok;
                     final int skipF = skipped;
@@ -473,7 +492,7 @@ public final class FiberAnalysisBatchDialog {
     private static List<PathObject> resolveAnnotations(FiberAnalysisParams params, ImageData<BufferedImage> data) {
         if (data == null || data.getHierarchy() == null) return List.of();
         List<PathObject> all = data.getHierarchy().getAnnotationObjects().stream()
-                .filter(o -> o != null && o.isAnnotation())
+                .filter(o -> o != null && o.isAnnotation() && !FiberSegmentationPreviewWindow.isPreviewMarker(o))
                 .collect(Collectors.toList());
         String mode = params.searchArea() == null ? "selected" : params.searchArea();
         switch (mode) {

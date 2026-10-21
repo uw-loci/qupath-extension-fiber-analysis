@@ -184,6 +184,9 @@ public final class DensityChannelAttacher {
         }
         entry.getMetadata().put(META_KIND, kind);
         entry.getMetadata().put(META_SOURCE, source.getImageName());
+        String threshold = source.getMetadata().get(ThresholdIdentity.META_DENSITY);
+        if (KIND_DENSITY.equals(kind) && threshold != null)
+            entry.getMetadata().put(ThresholdIdentity.META_DENSITY, threshold);
         entry.getMetadata().put(META_MAP, map.getFileName().toString());
         storeDisplay(data, sourceServer.nChannels(), rgb, colours);
         entry.saveImageData(data);

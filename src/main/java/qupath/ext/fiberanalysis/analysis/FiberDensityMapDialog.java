@@ -428,12 +428,35 @@ public final class FiberDensityMapDialog {
         // can review the segmentation behaviour in the regular Run dialog
         // before kicking off the whole-slide density compute.
         Double projectThresholdNorm = null;
+        String calName = null;
         String thrMethod = FiberAnalysisPreferences.thresholdMethodProperty().get();
         if ("Project Otsu (calibrated)".equals(thrMethod)) {
-            String calName =
-                    FiberAnalysisPreferences.projectCalibrationNameProperty().get();
+            calName = FiberAnalysisPreferences.projectCalibrationNameProperty().get();
             if (calName != null && !calName.isBlank()) {
                 projectThresholdNorm = FiberAnalysisWorkflow.loadCalibratedThreshold(calName);
+            }
+            // Python would fall back to Otsu on every tile, silently.
+            if (projectThresholdNorm == null) {
+                Dialogs.showErrorMessage(
+                        "Fiber density map",
+                        "The threshold method is Project Otsu, but calibration '" + calName
+                                + "' could not be read. Choose a calibration in the Run dialog, or another"
+                                + " threshold method.");
+                return;
+            }
+            String mismatch = FiberAnalysisWorkflow.calibrationMismatch(
+                    calName,
+                    FiberAnalysisWorkflow.resolveProjectDir(),
+                    FiberAnalysisPreferences.internalChannelProperty().get(),
+                    FiberAnalysisPreferences.ridgeFilterProperty().get(),
+                    FiberAnalysisPreferences.invertIntensityProperty().get(),
+                    FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
+                    FiberAnalysisPreferences.sigmaMinProperty().get(),
+                    FiberAnalysisPreferences.sigmaMaxProperty().get(),
+                    FiberAnalysisPreferences.sigmaStepProperty().get());
+            if (mismatch != null) {
+                Dialogs.showErrorMessage("Fiber density map", mismatch);
+                return;
             }
             // Always submit lowercase canonical method name to the Python side.
             thrMethod = "project_otsu";
@@ -472,6 +495,8 @@ public final class FiberDensityMapDialog {
                 pixelPositivityCheck != null && pixelPositivityCheck.isSelected()
                         ? new ArrayList<>(pixelPositivityRows)
                         : java.util.Collections.emptyList());
+        if (projectThresholdNorm != null)
+            spec = spec.withRunThreshold(projectThresholdNorm, "calibration '" + calName + "'");
         logger.info(
                 "Project density map: dispatching {} image(s), mode={}",
                 entries.size(),

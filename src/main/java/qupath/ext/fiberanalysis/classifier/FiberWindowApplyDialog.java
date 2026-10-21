@@ -310,6 +310,12 @@ public final class FiberWindowApplyDialog {
      * The segmentation a model was trained with, when it stored one; older
      * models fall back to the current preferences and the hash check.
      */
+    /** @return how the model's threshold was obtained, for its maps */
+    static String thresholdSource(WindowClassifierModelManager.ModelInfo model) {
+        Object s = model.geometry().get("threshold_source");
+        return (s == null ? "" : s + ", ") + "model " + model.id();
+    }
+
     static SegmentationSpec segmentationFor(WindowClassifierModelManager.ModelInfo model) {
         Object stored = model.geometry().get("segmentation");
         if (stored instanceof Map<?, ?> m) {
@@ -418,7 +424,8 @@ public final class FiberWindowApplyDialog {
                             data.getServer().getHeight(),
                             pixelSizeUm(),
                             region.getX(),
-                            region.getY());
+                            region.getY(),
+                            seg.thresholdIdentity(thresholdSource(model)).label());
                     log.append("Probability map: ").append(sidecar).append('\n');
                     var colors = WindowClassifierWorkflow.probabilityChannelColors(result.classNames());
                     if (attachCheck.isSelected()) {

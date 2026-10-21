@@ -50,6 +50,7 @@ class DensityGridSamplingTest {
                 0.5,
                 smooth,
                 "img",
+                null,
                 List.of(
                         new DensitySidecar.ChannelInfo(0, "A", null, 0),
                         new DensitySidecar.ChannelInfo(1, "Angle", "deg", 180)));
