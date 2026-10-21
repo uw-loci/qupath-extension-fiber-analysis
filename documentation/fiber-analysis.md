@@ -426,12 +426,19 @@ gray level. The manual cutoff is in the source image's **own gray
 levels**, so on a single-channel 16-bit image the spinner runs
 0-65535 and typing 4500 cuts at 4500 -- in every region and every
 image, not rescaled to each region's brightest and darkest pixel.
-Otsu and Triangle are fitted on the pixels of the analysis zone only, so the
-margin read around an annotation does not move its threshold. An annotation
-large enough to be analysed in tiles gets one threshold for all its tiles,
-fitted on up to 16 samples of 1024 px (at the analysis downsample) spread
-along its zone, instead of one per tile; the log line "every tile cuts at"
-gives the value.
+Otsu and Triangle are fitted **once per run**, on samples of the analysis
+zones of every annotation in it (every image's, in a batch run): up to 64
+samples of at most 1024 px at the analysis downsample, spread along the zones,
+with the ridge-filter and rolling-ball sizes converted with each image's own
+pixel size. Every annotation, and every tile of a large one, then cuts at that
+value, so one run is comparable within itself. The margin read around an
+annotation never enters the fit. The value and how it was obtained are written
+to `threshold.json` in the run folder and logged as "Every annotation cuts
+at". A different run fits its own value; to compare separate runs, calibrate
+once and choose **Project Otsu (calibrated)**. Calibration fits the same way,
+with the run's zone mode, zone width, analysis downsample and ridge-filter
+sizes, and skips images with no pixel size and channels entries this
+extension made.
 Optionally a **ridge filter** (Frangi, Sato, or
 Meijering from scikit-image) runs first across a configurable
 **sigma range** (default 1-4 um, step 1 um) to enhance line-like
@@ -460,9 +467,8 @@ Two consequences worth knowing:
   is truncated in both tiles, so tortuosity and fibre counts are
   aggregated across tiles rather than measured end to end. Per-window
   metrics (coverage, orientation, order parameter, GLCM) are exact.
-- **One threshold for all tiles.** With Otsu or Triangle the annotation
-  gets one threshold, fitted on samples of its analysis zone before the
-  tiles run, so every tile segments at the same cut (above).
+- **One threshold for all tiles.** With Otsu or Triangle every tile cuts
+  at the run's one threshold (above).
 - **Totals are exact; ratios come from them.** Pixel counts and lengths
   are summed over the rectangle each tile alone owns, and coverage and HDM
   are recomputed from those sums. Gap widths combine by gap count, and a

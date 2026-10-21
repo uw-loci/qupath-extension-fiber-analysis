@@ -490,3 +490,8 @@ __version__ = "0.4.0"
 #     area, so it was exactly fiber_coverage_percent / 100. density_tile.py
 #     no longer writes hdm: with no zone it is always coverage / 100.
 #   - windows.window_counts: box sums on the window lattice.
+#   - scripts/calibrate_threshold.py (not fiberlib, ships beside it):
+#     region_pixel_um + *_um inputs convert the filter sizes per region, so a
+#     pool over images of different pixel sizes filters each at the same
+#     physical scale. Used by every pooled threshold, including the run-wide
+#     one annotation runs now fit and project calibration.

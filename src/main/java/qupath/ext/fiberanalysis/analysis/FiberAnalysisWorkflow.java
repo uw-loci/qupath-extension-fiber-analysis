@@ -96,6 +96,11 @@ public class FiberAnalysisWorkflow {
      */
     private volatile Path projectDirAtLaunch;
 
+    /** One Otsu / triangle cut for every annotation of the run, or null to pool at the start of the run. */
+    private volatile Double runThreshold;
+
+    private volatile String runThresholdSource;
+
     private static final Logger logger = LoggerFactory.getLogger(FiberAnalysisWorkflow.class);
 
     /**
@@ -157,6 +162,99 @@ public class FiberAnalysisWorkflow {
      * Constructs a workflow that will append per-annotation results to the
      * given panel. {@code panel} may be {@code null} for headless runs.
      */
+    /**
+     * Use a threshold pooled by the caller, so a batch run cuts every image at one value.
+     *
+     * @param thresholdNorm the cut on [0, 1]
+     * @param source        how it was obtained, for the run record
+     * @return this workflow
+     */
+    public FiberAnalysisWorkflow withRunThreshold(double thresholdNorm, String source) {
+        this.runThreshold = thresholdNorm;
+        this.runThresholdSource = source;
+        return this;
+    }
+
+    /** @return true when the run's threshold method is fitted per region and must be pooled instead */
+    static boolean poolsThreshold(FiberAnalysisParams p) {
+        return !"existing".equalsIgnoreCase(p.segSource()) && PooledThreshold.needsPooling(p.thresholdMethod());
+    }
+
+    /**
+     * The region read around an annotation: its bounds padded by the zone width.
+     *
+     * @return {@code {x, y, w, h}} in full-resolution pixels
+     */
+    static int[] readBox(ROI roi, ImageServer<BufferedImage> server, double dilationPx) {
+        int x = (int) roi.getBoundsX();
+        int y = (int) roi.getBoundsY();
+        int w = (int) Math.ceil(roi.getBoundsWidth());
+        int h = (int) Math.ceil(roi.getBoundsHeight());
+        int pad = (int) Math.ceil(dilationPx) + 5;
+        int rx = Math.max(0, x - pad);
+        int ry = Math.max(0, y - pad);
+        return new int[] {
+            rx, ry, Math.min(server.getWidth() - rx, w + 2 * pad), Math.min(server.getHeight() - ry, h + 2 * pad)
+        };
+    }
+
+    /**
+     * The analysis regions of some annotations on one image, for pooling a threshold.
+     *
+     * @param p           the run's parameters
+     * @param imageData   the image
+     * @param annotations its annotations in the run
+     * @return one region per annotation with a ROI
+     */
+    public static List<PooledThreshold.ZoneRegion> zoneRegions(
+            FiberAnalysisParams p, ImageData<BufferedImage> imageData, List<PathObject> annotations) {
+        ImageServer<BufferedImage> server = imageData.getServer();
+        double px = resolvePixelSizeUm(p, imageData);
+        double ds = Math.max(1.0, p.analysisDownsample());
+        List<PooledThreshold.ZoneRegion> out = new ArrayList<>();
+        for (PathObject ann : annotations) {
+            ROI roi = ann.getROI();
+            if (roi == null) continue;
+            out.add(new PooledThreshold.ZoneRegion(server, roi, readBox(roi, server, p.borderZoneUm() / px), ds, px));
+        }
+        return out;
+    }
+
+    /** Most sample boxes a run-wide threshold reads. */
+    static final int RUN_POOL_SAMPLES = 64;
+
+    /**
+     * One threshold for every annotation of a run, fitted on their analysis zones.
+     *
+     * @param p        the run's parameters
+     * @param regions  the annotations' regions, from one or more images
+     * @param workDir  scratch directory
+     * @param progress status sink; may be null
+     * @return the pooled threshold
+     * @throws IOException if nothing could be sampled or the task failed
+     */
+    public static PooledThreshold.Result poolForRun(
+            FiberAnalysisParams p,
+            List<PooledThreshold.ZoneRegion> regions,
+            Path workDir,
+            java.util.function.Consumer<String> progress)
+            throws IOException {
+        return PooledThreshold.poolZones(
+                regions, p.zoneMode(), p.borderZoneUm(), segmentationSettings(p), workDir, RUN_POOL_SAMPLES, progress);
+    }
+
+    /** @return how a run-wide threshold was obtained, for the run record */
+    static String describeRunThreshold(PooledThreshold.Result r, int annotations) {
+        return String.format(
+                Locale.ROOT,
+                "%s pooled over %d annotation(s) on %d image(s): %d sample(s) of their analysis zones (%d px)",
+                "triangle".equals(r.method()) ? "Triangle" : "Otsu",
+                annotations,
+                r.images(),
+                r.regions(),
+                r.pixels());
+    }
+
     public FiberAnalysisWorkflow(Object panel) {
         this.panel = panel;
     }
@@ -264,9 +362,45 @@ public class FiberAnalysisWorkflow {
             Path outputRoot = baseRoot.resolve(runFolder);
             try {
                 Files.createDirectories(outputRoot);
+            } catch (IOException e) {
+                logger.warn("Could not create output dir: {}", e.getMessage());
+            }
+
+            // Otsu / triangle fitted once for the whole run, so every
+            // annotation (and, in a batch, every image) is cut at one value.
+            if (runThreshold == null && poolsThreshold(params)) {
+                progress.setMain("Fitting one threshold for the run...", 0, total);
+                try {
+                    PooledThreshold.Result pooled = poolForRun(
+                            params,
+                            zoneRegions(params, imageData, annotations),
+                            outputRoot.resolve("threshold_samples"),
+                            progress::setSub);
+                    runThreshold = pooled.thresholdNorm();
+                    runThresholdSource = describeRunThreshold(pooled, annotations.size());
+                } catch (IOException e) {
+                    logger.error("Could not fit a run-wide threshold", e);
+                    HeadlessFx.runLater(() -> {
+                        progress.close();
+                        Dialogs.showErrorMessage(
+                                "Fiber Analysis",
+                                "Could not fit one threshold for the run: " + e.getMessage()
+                                        + "\nChoose Manual or a project calibration to run without it.");
+                    });
+                    return;
+                }
+            }
+            if (runThreshold != null && poolsThreshold(params)) {
+                logger.info(
+                        "Every annotation cuts at {} ({})",
+                        String.format(Locale.ROOT, "%.5f", runThreshold),
+                        runThresholdSource);
+                writeRunThreshold(outputRoot, params, runThreshold, runThresholdSource);
+            }
+            try {
                 writeParamsFiles(outputRoot, params, paramsHash, runStamp, imageData, qupath, annotations);
             } catch (IOException e) {
-                logger.warn("Could not create output dir or write params: {}", e.getMessage());
+                logger.warn("Could not write params: {}", e.getMessage());
             }
 
             List<PathObject> allWindowDetections = new ArrayList<>();
@@ -437,11 +571,11 @@ public class FiberAnalysisWorkflow {
 
         // Dilated bbox: pad by the border-zone width (converted to pixels) plus a slop.
         double dilationPx = params.borderZoneUm() / pixelSizeUm;
-        int pad = (int) Math.ceil(dilationPx) + 5;
-        int rx = Math.max(0, x - pad);
-        int ry = Math.max(0, y - pad);
-        int rw = Math.min(server.getWidth() - rx, w + 2 * pad);
-        int rh = Math.min(server.getHeight() - ry, h + 2 * pad);
+        int[] box = readBox(roi, server, dilationPx);
+        int rx = box[0];
+        int ry = box[1];
+        int rw = box[2];
+        int rh = box[3];
 
         logger.info(
                 "Annotation {}: roi=({},{}) {}x{}, dilated=({},{}) {}x{}, dilation_px={}",
@@ -699,34 +833,6 @@ public class FiberAnalysisWorkflow {
         // from overlapping tiles sum to the region instead of overshooting it.
         List<TileGrid.Box> ownedBoxes = grid.ownedBoxes();
 
-        // One Otsu / triangle cut for the whole annotation, fitted on its
-        // analysis zone; otherwise each tile fits its own.
-        Double pooledThreshold = null;
-        if (!"existing".equalsIgnoreCase(params.segSource())
-                && PooledThreshold.needsPooling(params.thresholdMethod())) {
-            progress.setSub("Fitting one threshold for the annotation");
-            int regionW =
-                    grid.tiles().stream().mapToInt(b -> b.x() + b.w()).max().orElse(0);
-            int regionH =
-                    grid.tiles().stream().mapToInt(b -> b.y() + b.h()).max().orElse(0);
-            PooledThreshold.Result pooled = PooledThreshold.poolZone(
-                    server,
-                    roi,
-                    params.zoneMode(),
-                    params.borderZoneUm() / (pixelSizeEffUm / ds),
-                    ds,
-                    new int[] {rx, ry, (int) Math.round(regionW * ds), (int) Math.round(regionH * ds)},
-                    pixelSizeEffUm,
-                    segmentationSettings(params),
-                    tilesDir.resolve("threshold"));
-            pooledThreshold = pooled.thresholdNorm();
-            logger.info(
-                    "Annotation {}: every tile cuts at {} ({})",
-                    index,
-                    String.format(Locale.ROOT, "%.5f", pooledThreshold),
-                    PooledThreshold.describe(pooled).replace(" image(s)", " annotation(s)"));
-        }
-
         ProgressEstimator est = new ProgressEstimator(grid.count());
         String runId = "";
         int failed = 0;
@@ -780,10 +886,6 @@ public class FiberAnalysisWorkflow {
                         (int) Math.round(annH / ds),
                         ownedBoxes.get(t));
                 in.put("zone_mask_path", tileZone.toString());
-                if (pooledThreshold != null) {
-                    in.put("threshold_method", "project_otsu");
-                    in.put("project_threshold_norm", pooledThreshold);
-                }
 
                 Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", in);
                 Object json = task.outputs.get("result_json");
@@ -1328,6 +1430,10 @@ public class FiberAnalysisWorkflow {
             // value the Python segmentation module recognises.
             in.put("threshold_method", "project_otsu");
         }
+        if (runThreshold != null && poolsThreshold(p)) {
+            in.put("threshold_method", "project_otsu");
+            in.put("project_threshold_norm", runThreshold);
+        }
 
         // Owned core: when a tiled run sets this, the segmenter counts additive
         // scalars only inside it, so overlapping tiles do not double-count the
@@ -1448,7 +1554,7 @@ public class FiberAnalysisWorkflow {
         }
     }
 
-    private static double resolvePixelSizeUm(FiberAnalysisParams p, ImageData<BufferedImage> imageData) {
+    static double resolvePixelSizeUm(FiberAnalysisParams p, ImageData<BufferedImage> imageData) {
         if (p.useImagePixelSize()) {
             PixelCalibration cal = imageData.getServer().getPixelCalibration();
             if (cal != null && cal.hasPixelSizeMicrons()) {
@@ -1616,6 +1722,24 @@ public class FiberAnalysisWorkflow {
      * @param annotations the input annotations -- their names are baked into
      *                    rerun.groovy so a re-run picks the same set.
      */
+    /** Records the run-wide threshold beside params.json, so the cut a run used is on disk. */
+    private static void writeRunThreshold(Path runDir, FiberAnalysisParams p, double thresholdNorm, String source) {
+        JsonObject o = new JsonObject();
+        o.addProperty("threshold_method", p.thresholdMethod());
+        o.addProperty("threshold_normalised", thresholdNorm);
+        o.addProperty("source", source);
+        try {
+            Files.writeString(
+                    runDir.resolve("threshold.json"),
+                    new com.google.gson.GsonBuilder()
+                            .setPrettyPrinting()
+                            .create()
+                            .toJson(o));
+        } catch (IOException e) {
+            logger.warn("Could not write threshold.json: {}", e.getMessage());
+        }
+    }
+
     static void writeParamsFiles(
             Path runDir,
             FiberAnalysisParams p,

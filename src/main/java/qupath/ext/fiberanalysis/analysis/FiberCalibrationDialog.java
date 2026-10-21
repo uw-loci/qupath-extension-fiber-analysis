@@ -110,17 +110,14 @@ public final class FiberCalibrationDialog {
         VBox box = new VBox(6);
         Label title = new Label("What this does");
         title.setFont(Font.font("System", FontWeight.BOLD, 13));
-        Label body = new Label("Per-annotation Otsu picks a fresh threshold for every region, which makes "
-                + "fiber coverage and density NOT comparable across images: a region with "
-                + "no real collagen will threshold background noise as fiber, and a region "
-                + "with dense bright collagen will set a high threshold that misses dimmer "
-                + "fibers.\n\n"
-                + "Project calibration fixes this by streaming a random subsample of "
-                + "project regions, accumulating a single intensity histogram across all "
-                + "of them, and running Otsu once on that pooled distribution. The "
-                + "resulting threshold is saved as a named JSON file under "
-                + "<project>/fiber-analysis/. Future runs pick it from the main dialog's "
-                + "'Project Otsu (calibrated)' option.");
+        Label body = new Label("An Otsu run fits one threshold for the annotations in that run (every image, in"
+                + " a batch), so one run is comparable within itself. A different run, on other"
+                + " annotations or images, fits its own, and the two are NOT directly comparable.\n\n"
+                + "Project calibration fits one threshold the same way, on a random subsample of"
+                + " project annotations: samples of their analysis zones at the run's analysis"
+                + " downsample, zone and filter settings. It is saved as a named JSON file under"
+                + " <project>/fiber-analysis/, and every run that picks 'Project Otsu (calibrated)'"
+                + " in the main dialog uses that one value.");
         body.setWrapText(true);
         box.getChildren().addAll(title, body);
         return box;
@@ -143,7 +140,7 @@ public final class FiberCalibrationDialog {
                 + "    [Caution] DAB / brown chromogenic: collagen is brown/dark; ALWAYS tick"
                 + " 'Invert intensity' for these. Without invert, calibration will threshold"
                 + " the bright unstained tissue as 'fiber' and report nonsense.\n\n"
-                + "When in doubt: run a regular per-annotation Otsu on a single representative"
+                + "When in doubt: run a regular Otsu on a single representative"
                 + " image first, confirm 'Show fiber mask' overlays the actual fibers, then come"
                 + " back here with the same source-channel + invert settings.");
         body.setWrapText(true);
@@ -215,8 +212,8 @@ public final class FiberCalibrationDialog {
         rollingBallSpinner.setPrefWidth(100);
         rollingBallSpinner.setTooltip(
                 new Tooltip("Optional background-subtract radius in microns. 0 disables. Use ~2x typical fiber"
-                        + " width to flatten uneven illumination before thresholding. Java converts"
-                        + " to pixels per region using the median pixel size across the pool."));
+                        + " width to flatten uneven illumination before thresholding. Converted to"
+                        + " pixels with each image's own pixel size."));
 
         borderZoneSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
                 1.0, 500.0, FiberAnalysisPreferences.borderZoneUmProperty().get(), 5.0));
@@ -298,6 +295,13 @@ public final class FiberCalibrationDialog {
         cfg.invertIntensity = invertCheck.isSelected();
         cfg.rollingBallRadiusUm = rollingBallSpinner.getValue();
         cfg.borderZoneUm = borderZoneSpinner.getValue();
+        // The rest of the run's settings, so the calibration fits what the run will cut.
+        cfg.zoneMode = FiberAnalysisPreferences.zoneModeProperty().get();
+        cfg.analysisDownsample =
+                FiberAnalysisPreferences.analysisDownsampleProperty().get();
+        cfg.sigmaMinUm = FiberAnalysisPreferences.sigmaMinProperty().get();
+        cfg.sigmaMaxUm = FiberAnalysisPreferences.sigmaMaxProperty().get();
+        cfg.sigmaStepUm = FiberAnalysisPreferences.sigmaStepProperty().get();
 
         runBtn.setDisable(true);
         progressBar.setVisible(true);

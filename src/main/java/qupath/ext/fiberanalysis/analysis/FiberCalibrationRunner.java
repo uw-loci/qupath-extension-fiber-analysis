@@ -9,9 +9,7 @@
  */
 package qupath.ext.fiberanalysis.analysis;
 
-import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonObject;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -24,10 +22,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-import org.apposed.appose.Service.Task;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import qupath.ext.fiberanalysis.service.ApposeFiberService;
 import qupath.lib.common.GeneralTools;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
@@ -35,7 +31,6 @@ import qupath.lib.images.servers.PixelCalibration;
 import qupath.lib.objects.PathObject;
 import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
-import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.interfaces.ROI;
 
 /**
@@ -47,21 +42,17 @@ import qupath.lib.roi.interfaces.ROI;
  *       + class filters mirror the batch dialog).</li>
  *   <li>Optionally subsample to {@code sampleSize} annotations (random order
  *       with a recorded seed so the calibration is reproducible).</li>
- *   <li>For each selected annotation, extract the dilated region as a PNG to
- *       a temp directory.</li>
- *   <li>Dispatch the {@code calibrate_threshold.py} Appose task with the list
- *       of PNG paths -- Python accumulates a 256-bin histogram across all
- *       regions, then runs Otsu on the accumulated histogram.</li>
+ *   <li>Pool a threshold over their analysis zones with
+ *       {@link PooledThreshold#poolZones}, the routine an Otsu run uses, at the
+ *       run's analysis downsample and zone settings.</li>
  *   <li>Persist the result to
  *       {@code <project>/fiber-analysis/calibration_<name>.json} so future
  *       runs with {@code threshold_method = "Project Otsu (calibrated)"} read
  *       it back.</li>
  * </ol>
  *
- * <p>Memory: regions are written to disk one at a time and the BufferedImage
- * is released before the next region is read, so peak Java-side RAM is one
- * region. Python keeps a single 256-bin uint64 histogram (constant size
- * regardless of how many regions are streamed).
+ * <p>Memory: samples are written to disk one at a time, at most 1024 px a
+ * side at the analysis downsample. Python keeps one histogram.
  */
 public final class FiberCalibrationRunner {
 
@@ -88,16 +79,14 @@ public final class FiberCalibrationRunner {
         public boolean invertIntensity = false;
         public double rollingBallRadiusUm = 0.0;
         public double borderZoneUm = 50.0;
+        /** The run's zone mode: "whole", "inside", "outside" or "both". */
+        public String zoneMode = "outside";
         /**
-         * Downsample for the pixels the histogram is built from.
-         *
-         * <p>A threshold is a property of the gray-level DISTRIBUTION, not of
-         * resolution, so reading every pixel of a gigapixel annotation to build
-         * a 256-bin histogram is wasted I/O. On a 26-annotation 20x project the
-         * full-resolution read wrote 100-300 MB per region and did not finish
-         * in 50 minutes. 1.0 keeps the original behaviour.
+         * The run's analysis downsample. Samples are read at it because the
+         * ridge filter and rolling ball act at that scale, so a threshold
+         * fitted at another scale is fitted on a different image.
          */
-        public double readDownsample = 1.0;
+        public double analysisDownsample = 1.0;
     }
 
     /** Lightweight progress callback so the dialog can stream "(i/N) ..." updates. */
@@ -157,6 +146,11 @@ public final class FiberCalibrationRunner {
                 if (!needle.isEmpty() && (name == null || !name.toLowerCase().contains(needle))) {
                     continue;
                 }
+                // A channels entry this extension made is derived from another
+                // image, not a source to calibrate on.
+                if (entry.getMetadata().containsKey(DensityChannelAttacher.META_KIND)) {
+                    continue;
+                }
                 ImageData<BufferedImage> data;
                 try {
                     data = entry.readImageData();
@@ -188,68 +182,50 @@ public final class FiberCalibrationRunner {
                     total,
                     project.getImageList().size());
 
-            // Phase 3: extract one region per annotation into the temp dir.
-            List<String> regionPngs = new ArrayList<>();
-            List<String> maskPngs = new ArrayList<>();
-            for (int i = 0; i < total; i++) {
-                if (progress != null && progress.isCancelled()) {
-                    throw new IOException("Calibration cancelled");
+            // Phase 3: fit the threshold the run would: the analysis zone of each
+            // annotation, at the analysis downsample, with the micron settings
+            // converted per image (PooledThreshold.poolZones, the same routine
+            // an Otsu run pools with).
+            double ds = Math.max(1.0, cfg.analysisDownsample);
+            List<PooledThreshold.ZoneRegion> regions = new ArrayList<>();
+            java.util.TreeSet<Double> pixelSizes = new java.util.TreeSet<>();
+            int uncalibrated = 0;
+            for (EntryAnn ea : pool) {
+                ImageServer<BufferedImage> server = ea.data.getServer();
+                PixelCalibration cal = server.getPixelCalibration();
+                if (cal == null || !cal.hasPixelSizeMicrons()) {
+                    uncalibrated++;
+                    continue;
                 }
-                EntryAnn ea = pool.get(i);
-                if (progress != null) {
-                    progress.update("Extracting region " + (i + 1) + " of " + total, i, total);
-                }
-                Path png = extractRegion(ea, cfg.borderZoneUm, cfg.segChannel, tempDir, i, cfg.readDownsample);
-                if (png != null) {
-                    regionPngs.add(png.toAbsolutePath().toString());
-                    Path mask = tempDir.resolve(String.format("mask_%05d.png", i));
-                    maskPngs.add(
-                            Files.isRegularFile(mask) ? mask.toAbsolutePath().toString() : "");
-                }
+                double px = cal.getAveragedPixelSizeMicrons();
+                pixelSizes.add(px);
+                ROI roi = ea.ann.getROI();
+                regions.add(new PooledThreshold.ZoneRegion(
+                        server, roi, FiberAnalysisWorkflow.readBox(roi, server, cfg.borderZoneUm / px), ds, px));
             }
-            if (regionPngs.isEmpty()) {
-                throw new IOException("Could not extract any region PNGs -- check the log for read errors.");
+            if (uncalibrated > 0) {
+                logger.warn(
+                        "Calibration: skipped {} annotation(s) on images with no pixel size; their zone width"
+                                + " and filter scales cannot be converted from microns",
+                        uncalibrated);
             }
-            if (progress != null) progress.update("Computing project threshold...", total, total);
-
-            // Phase 4: dispatch the Appose task. Calibration spans multiple
-            // images and each can have a different pixel size, but Python's
-            // sigma / rolling-ball are pixel-domain. We resolve a single
-            // *median* pixel size across the calibration pool and convert
-            // micron inputs against it -- a sound choice when the pool is
-            // already filtered to one image cohort (which the user is
-            // expected to do via the image-name + class filters; the
-            // calibration dialog tells them so explicitly).
-            double medianPxUm = medianPixelSizeUm(pool);
-            if (medianPxUm <= 0) medianPxUm = 0.5; // last-ditch fallback
-            Map<String, Object> in = new LinkedHashMap<>();
-            in.put("region_paths", regionPngs);
-            // Index-aligned with region_paths; Python histograms only the
-            // pixels a mask marks as inside the annotation. A missing mask
-            // file means "use the whole region", which keeps older callers
-            // working.
-            in.put("mask_paths", maskPngs);
-            in.put("seg_channel", cfg.segChannel);
-            in.put("ridge_filter", cfg.ridgeFilter.toLowerCase());
-            in.put("sigma_min", cfg.sigmaMinUm / medianPxUm);
-            in.put("sigma_max", cfg.sigmaMaxUm / medianPxUm);
-            in.put("sigma_step", cfg.sigmaStepUm / medianPxUm);
-            in.put("invert_intensity", cfg.invertIntensity);
-            in.put("rolling_ball_radius", (int) Math.max(0, Math.round(cfg.rollingBallRadiusUm / medianPxUm)));
-            in.put("method", "otsu");
-
-            Task task = ApposeFiberService.getInstance().runTask("calibrate_threshold", in);
-            Object outJson = task.outputs.get("result_json");
-            if (outJson == null) throw new IOException("calibrate_threshold returned no result_json");
-            JsonObject result = new Gson().fromJson(String.valueOf(outJson), JsonObject.class);
-            if (result.has("error") && !result.get("error").isJsonNull()) {
-                throw new IOException(
-                        "Calibration Python error: " + result.get("error").getAsString());
+            if (regions.isEmpty()) {
+                throw new IOException("No image in the calibration pool has a pixel size. Set the pixel size"
+                        + " (Image > Set pixel size) and run the calibration again.");
             }
+            int maxSamples = Math.max(16, Math.min(256, 4 * regions.size()));
+            PooledThreshold.Result pooled = PooledThreshold.poolZones(
+                    regions,
+                    cfg.zoneMode,
+                    cfg.borderZoneUm,
+                    settings(cfg),
+                    tempDir,
+                    maxSamples,
+                    progress == null ? null : msg -> progress.update(msg, 0, total));
 
-            double thr = result.get("threshold_normalised").getAsDouble();
-            int regionsUsed = result.get("n_regions_used").getAsInt();
-            long pixelsUsed = result.get("n_pixels_total").getAsLong();
+            double thr = pooled.thresholdNorm();
+            int regionsUsed = pooled.regions();
+            long pixelsUsed = pooled.pixels();
 
             // Phase 5: write calibration_<name>.json.
             Path calFile = faDir.resolve("calibration_" + safeName + ".json");
@@ -276,22 +252,15 @@ public final class FiberCalibrationRunner {
             params.put("sigma_step_um", cfg.sigmaStepUm);
             params.put("invert_intensity", cfg.invertIntensity);
             params.put("rolling_ball_radius_um", cfg.rollingBallRadiusUm);
-            params.put("median_pixel_size_um_used", medianPxUm);
+            params.put("pixel_sizes_um", new ArrayList<>(pixelSizes));
+            params.put("analysis_downsample", ds);
             params.put("border_zone_um", cfg.borderZoneUm);
+            params.put("zone_mode", cfg.zoneMode);
             payload.put("calibration_params", params);
             // Keep the histogram so a downstream tool can plot/inspect it.
-            if (result.has("histogram_counts")) {
-                var counts = result.getAsJsonArray("histogram_counts");
-                payload.put(
-                        "histogram_bins",
-                        result.has("histogram_bins")
-                                ? result.get("histogram_bins").getAsInt()
-                                : counts.size());
-                List<Long> hist = new ArrayList<>(counts.size());
-                for (var el : counts) {
-                    hist.add(el.getAsLong());
-                }
-                payload.put("histogram_counts", hist);
+            if (!pooled.histogram().isEmpty()) {
+                payload.put("histogram_bins", pooled.histogram().size());
+                payload.put("histogram_counts", pooled.histogram());
             }
             Files.writeString(
                     calFile,
@@ -378,83 +347,49 @@ public final class FiberCalibrationRunner {
         }
     }
 
-    /**
-     * Extracts one annotation's dilated region as a PNG. Returns null on
-     * failure so the calibration can continue across the rest of the pool.
-     *
-     * <p>{@code readDownsample} subsamples the pixels fed to the histogram.
-     * The threshold it yields is in the image's own gray levels either way --
-     * downsampling changes which pixels are counted, not what a count means.
-     */
-    private static Path extractRegion(
-            EntryAnn ea, double borderZoneUm, String segChannel, Path tempDir, int index, double readDownsample) {
-        try {
-            ImageServer<BufferedImage> server = ea.data.getServer();
-            ROI roi = ea.ann.getROI();
-            double px = 0.5;
-            try {
-                PixelCalibration cal = server.getPixelCalibration();
-                if (cal != null && cal.hasPixelSizeMicrons()) {
-                    px = cal.getAveragedPixelSizeMicrons();
-                }
-            } catch (Exception ignored) {
-                // fall back to 0.5
+    /** The settings {@link PooledThreshold} pools under, from a calibration config. */
+    private static PooledThreshold.Settings settings(CalibrationConfig cfg) {
+        return new PooledThreshold.Settings() {
+            @Override
+            public String thresholdMethod() {
+                return "otsu";
             }
-            double dilationPx = borderZoneUm / Math.max(px, 1e-6);
-            int pad = (int) Math.ceil(dilationPx) + 5;
-            int x = (int) roi.getBoundsX();
-            int y = (int) roi.getBoundsY();
-            int w = (int) Math.ceil(roi.getBoundsWidth());
-            int h = (int) Math.ceil(roi.getBoundsHeight());
-            int rx = Math.max(0, x - pad);
-            int ry = Math.max(0, y - pad);
-            int rw = Math.min(server.getWidth() - rx, w + 2 * pad);
-            int rh = Math.min(server.getHeight() - ry, h + 2 * pad);
-            if (rw <= 0 || rh <= 0) return null;
-            double rds = readDownsample > 0 ? readDownsample : 1.0;
-            RegionRequest req = RegionRequest.createInstance(server.getPath(), rds, rx, ry, rw, rh);
-            Path out = tempDir.resolve(String.format("region_%05d.png", index));
-            SourceChannel.WrittenSize size = SourceChannel.writeRegionPng(server, req, segChannel, out);
 
-            // Mask the region to the annotation before it reaches the
-            // histogram. The region is the annotation's BOUNDING BOX plus a
-            // pad, so on anything that is not a filled rectangle it carries
-            // pixels the user never selected. On acquired-area annotations
-            // that is unacquired black: it made up 55.8% of the pooled
-            // histogram and Otsu split background-from-tissue instead of
-            // collagen-from-tissue, putting the threshold below 99.4% of the
-            // real pixels.
-            Path maskOut = tempDir.resolve(String.format("mask_%05d.png", index));
-            FiberAnalysisWorkflow.rasterisePolygonMask(roi, rx, ry, size.width(), size.height(), rds, maskOut);
-            return out;
-        } catch (Exception ex) {
-            logger.warn("Region extraction failed for annotation {}: {}", index, ex.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * Computes the median pixel size (um/px) across a calibration pool. The
-     * calibration pool typically spans one image cohort with consistent
-     * pixel size, but a median tolerates outliers from images that lack
-     * calibration metadata. Returns 0 if no pool entry exposes a pixel size.
-     */
-    private static double medianPixelSizeUm(java.util.List<EntryAnn> pool) {
-        java.util.List<Double> sizes = new java.util.ArrayList<>();
-        for (EntryAnn ea : pool) {
-            try {
-                ImageServer<BufferedImage> server = ea.data.getServer();
-                PixelCalibration cal = server.getPixelCalibration();
-                if (cal != null && cal.hasPixelSizeMicrons()) {
-                    sizes.add(cal.getAveragedPixelSizeMicrons());
-                }
-            } catch (Exception ignored) {
-                // skip; we'll fall back if everything fails
+            @Override
+            public String segChannel() {
+                return cfg.segChannel;
             }
-        }
-        if (sizes.isEmpty()) return 0.0;
-        java.util.Collections.sort(sizes);
-        return sizes.get(sizes.size() / 2);
+
+            @Override
+            public String ridgeFilter() {
+                return cfg.ridgeFilter;
+            }
+
+            @Override
+            public double sigmaMinUm() {
+                return cfg.sigmaMinUm;
+            }
+
+            @Override
+            public double sigmaMaxUm() {
+                return cfg.sigmaMaxUm;
+            }
+
+            @Override
+            public double sigmaStepUm() {
+                return cfg.sigmaStepUm;
+            }
+
+            @Override
+            public boolean invertIntensity() {
+                return cfg.invertIntensity;
+            }
+
+            @Override
+            public double rollingBallRadiusUm() {
+                return cfg.rollingBallRadiusUm;
+            }
+        };
     }
 
     private static final class EntryAnn {

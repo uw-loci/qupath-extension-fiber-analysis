@@ -152,6 +152,11 @@ public final class SourceChannel {
             BufferedImage single = extractBand(region, band, server.getPixelType());
             if (single != null) {
                 toWrite = single;
+            } else if (server.getPixelType() != PixelType.UINT8) {
+                throw new IOException("Fiber analysis reads 8- and 16-bit images; "
+                        + server.getMetadata().getName()
+                        + " is " + server.getPixelType() + ". Convert it to 16-bit, or analyse the image it was"
+                        + " made from.");
             } else {
                 logger.warn(
                         "Cannot extract band {} of pixel type {} as a single-band PNG; sending the whole region,"

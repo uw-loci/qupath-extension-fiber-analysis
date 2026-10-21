@@ -28,6 +28,16 @@ Inputs (injected by Appose as Python variables)
   invert_intensity    : bool       -- True for DAB / dark-fiber-on-bright-bg
   rolling_ball_radius : int        -- background-subtract radius in px (0=off)
   method              : str        -- 'otsu' (default) | 'triangle'
+  region_pixel_um     : list[float] -- optional, index-aligned with region_paths:
+                                      each PNG's pixel size (um/px, at the
+                                      downsample it was read at). With it, the
+                                      *_um inputs below are converted per
+                                      region, so images of different pixel
+                                      sizes are filtered at the same physical
+                                      scale.
+  sigma_min_um, sigma_max_um, sigma_step_um, rolling_ball_um : float
+                                      -- the micron settings region_pixel_um
+                                      converts; ignored without it.
 
 Outputs
 -------
@@ -113,6 +123,11 @@ try:
     sstep = float(_opt("sigma_step", 1.0))
     invert = bool(_opt("invert_intensity", False))
     rb_radius = int(_opt("rolling_ball_radius", 0))
+    region_px = list(_opt("region_pixel_um", []) or [])
+    um = {
+        k: _opt(k, None)
+        for k in ("sigma_min_um", "sigma_max_um", "sigma_step_um", "rolling_ball_um")
+    }
 
     # Accumulated histogram across all sampled regions. uint64 to
     # tolerate >4 billion pixels (50 MP * 1000 regions easily).
@@ -136,6 +151,13 @@ try:
             else:
                 logger.warning("Skipping %s: unexpected shape %s", p, arr.shape)
                 continue
+
+            if idx < len(region_px) and region_px[idx] and um["sigma_min_um"] is not None:
+                px = float(region_px[idx])
+                smin = float(um["sigma_min_um"]) / px
+                smax = float(um["sigma_max_um"]) / px
+                sstep = float(um["sigma_step_um"]) / px
+                rb_radius = max(0, int(round(float(um["rolling_ball_um"] or 0.0) / px)))
 
             scalar = seg.pick_channel(rgb, chan)
             response = rf in seg._RIDGE_FILTERS

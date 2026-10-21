@@ -111,3 +111,25 @@ def test_an_unknown_method_is_refused(tmp_path):
     # Errors come back in the result, as the Java side reads them.
     out = _run(tmp_path, [_bimodal16(1)], method="mean")
     assert "otsu' or 'triangle" in out.get("error", "")
+
+
+def test_micron_settings_are_converted_per_region(tmp_path):
+    # Two regions at different pixel sizes, with a 4 um rolling ball: the
+    # coarse one (2 um/px) must be flattened with a 2 px ball and the fine one
+    # (0.5 um/px) with an 8 px ball, each on its own image.
+    ims = [_bimodal16(1), _bimodal16(2)]
+    per_region = _run(
+        tmp_path,
+        ims,
+        region_pixel_um=[2.0, 0.5],
+        sigma_min_um=1.0,
+        sigma_max_um=4.0,
+        sigma_step_um=1.0,
+        rolling_ball_um=4.0,
+    )
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    a = _run(tmp_path / "a", [ims[0]], rolling_ball_radius=2)
+    b = _run(tmp_path / "b", [ims[1]], rolling_ball_radius=8)
+    pooled = np.array(a["histogram_counts"]) + np.array(b["histogram_counts"])
+    assert per_region["histogram_counts"] == pooled.tolist()

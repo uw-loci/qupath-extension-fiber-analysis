@@ -62,8 +62,10 @@ public final class PooledThreshold {
      * @param images        images sampled
      * @param regions       sample tiles used
      * @param pixels        pixels in the pooled histogram
+     * @param histogram     the pooled histogram's counts, on the channel's full scale
      */
-    public record Result(double thresholdNorm, String method, int images, int regions, long pixels) {}
+    public record Result(
+            double thresholdNorm, String method, int images, int regions, long pixels, List<Long> histogram) {}
 
     /**
      * Sample boxes for one image: one per grid cell, centred in it.
@@ -111,13 +113,13 @@ public final class PooledThreshold {
             try (ImageServer<BufferedImage> server = data.getServer()) {
                 var cal = server.getPixelCalibration();
                 if (cal == null || !cal.hasPixelSizeMicrons()) continue;
-                pixelSizes.add(cal.getAveragedPixelSizeMicrons());
                 int k = 0;
                 for (int[] b : sampleBoxes(server.getWidth(), server.getHeight(), GRID, SAMPLE_PX)) {
                     Path png = workDir.resolve(String.format("pool_%03d_%02d.png", images, k++));
                     RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, b[0], b[1], b[2], b[3]);
                     SourceChannel.writeRegionPng(server, req, spec.segChannel(), png);
                     pngs.add(png.toString());
+                    pixelSizes.add(cal.getAveragedPixelSizeMicrons());
                 }
                 images++;
             } catch (Exception e) {
@@ -126,60 +128,81 @@ public final class PooledThreshold {
             }
         }
         if (pngs.isEmpty()) throw new IOException("No calibrated image could be sampled for a run-wide threshold");
-
-        double[] px =
-                pixelSizes.stream().mapToDouble(Double::doubleValue).sorted().toArray();
-        return poolSamples(pngs, List.of(), px[px.length / 2], spec, images);
+        return poolSamples(pngs, List.of(), pixelSizes, spec, images);
     }
 
     /**
-     * One threshold for a whole annotation that is analysed in tiles, fitted
-     * on its analysis zone. Without it every tile fits its own Otsu or
-     * triangle cut, so one annotation is segmented at several thresholds.
+     * One annotation's analysis region, as the pooling reads it.
      *
-     * @param server        the image
-     * @param roi           the annotation
-     * @param zoneMode      "whole", "inside", "outside" or "both"
-     * @param borderPx      zone width, full-resolution pixels
-     * @param downsample    the analysis downsample; samples are read at it
-     * @param readBox       {@code {x, y, w, h}} the annotation's read region, full-resolution pixels
-     * @param pixelSizeUm   pixel size at the analysis downsample
-     * @param spec          the segmentation settings
-     * @param workDir       scratch directory for the sample PNGs
+     * @param server      the image
+     * @param roi         the annotation
+     * @param readBox     {@code {x, y, w, h}} the region read around it, full-resolution pixels
+     * @param downsample  the analysis downsample
+     * @param pixelSizeUm the image's full-resolution pixel size
+     */
+    public record ZoneRegion(
+            ImageServer<BufferedImage> server, ROI roi, int[] readBox, double downsample, double pixelSizeUm) {}
+
+    /**
+     * One threshold for every annotation of a run, fitted on samples of their
+     * analysis zones at the analysis downsample, with the micron settings
+     * converted per region. Used by annotation runs (one image or a batch)
+     * and by project calibration, so all three fit the same thing.
+     *
+     * @param regions    the annotations' regions
+     * @param zoneMode   "whole", "inside", "outside" or "both"
+     * @param borderUm   zone width, microns
+     * @param spec       the segmentation settings
+     * @param workDir    scratch directory for the sample PNGs
+     * @param maxSamples most sample boxes in all; regions are taken evenly when there are more
+     * @param progress   status sink; may be null
      * @return the pooled threshold
      * @throws IOException if nothing could be sampled or the task failed
      */
-    public static Result poolZone(
-            ImageServer<BufferedImage> server,
-            ROI roi,
+    public static Result poolZones(
+            List<ZoneRegion> regions,
             String zoneMode,
-            double borderPx,
-            double downsample,
-            int[] readBox,
-            double pixelSizeUm,
+            double borderUm,
             Settings spec,
-            Path workDir)
+            Path workDir,
+            int maxSamples,
+            Consumer<String> progress)
             throws IOException {
         Files.createDirectories(workDir);
-        ROI zoneRoi = AnalysisZone.roi(roi, zoneMode, borderPx);
-        Geometry zone = zoneRoi.getGeometry();
-        int side = (int) Math.round(SAMPLE_PX * downsample);
+        List<ZoneRegion> chosen = regions;
+        if (regions.size() > maxSamples) {
+            chosen = new ArrayList<>();
+            for (int i = 0; i < maxSamples; i++)
+                chosen.add(regions.get((int) ((i + 0.5) * regions.size() / maxSamples)));
+        }
+        int perRegion = Math.max(1, Math.min(GRID * GRID, maxSamples / Math.max(1, chosen.size())));
         List<String> pngs = new ArrayList<>();
         List<String> masks = new ArrayList<>();
+        List<Double> pixelSizes = new ArrayList<>();
+        java.util.Set<String> images = new java.util.HashSet<>();
         int k = 0;
-        for (int[] b : zoneBoxes(readBox, zone, side, GRID * GRID)) {
-            Path png = workDir.resolve(String.format(java.util.Locale.ROOT, "zone_%02d.png", k));
-            Path mask = workDir.resolve(String.format(java.util.Locale.ROOT, "zone_%02d_mask.png", k++));
-            RegionRequest req = RegionRequest.createInstance(server.getPath(), downsample, b[0], b[1], b[2], b[3]);
-            SourceChannel.WrittenSize size = SourceChannel.writeRegionPng(server, req, spec.segChannel(), png);
-            FiberAnalysisWorkflow.rasterisePolygonMask(
-                    zoneRoi, b[0], b[1], size.width(), size.height(), downsample, mask);
-            pngs.add(png.toString());
-            masks.add(mask.toString());
+        for (int r = 0; r < chosen.size(); r++) {
+            ZoneRegion z = chosen.get(r);
+            if (progress != null)
+                progress.accept("Sampling for a run-wide threshold: region " + (r + 1) + " of " + chosen.size());
+            ROI zoneRoi = AnalysisZone.roi(z.roi(), zoneMode, borderUm / z.pixelSizeUm());
+            int side = (int) Math.round(SAMPLE_PX * z.downsample());
+            for (int[] b : zoneBoxes(z.readBox(), zoneRoi.getGeometry(), side, perRegion)) {
+                Path png = workDir.resolve(String.format(java.util.Locale.ROOT, "zone_%04d.png", k));
+                Path mask = workDir.resolve(String.format(java.util.Locale.ROOT, "zone_%04d_mask.png", k++));
+                RegionRequest req =
+                        RegionRequest.createInstance(z.server().getPath(), z.downsample(), b[0], b[1], b[2], b[3]);
+                SourceChannel.WrittenSize size = SourceChannel.writeRegionPng(z.server(), req, spec.segChannel(), png);
+                FiberAnalysisWorkflow.rasterisePolygonMask(
+                        zoneRoi, b[0], b[1], size.width(), size.height(), z.downsample(), mask);
+                pngs.add(png.toString());
+                masks.add(mask.toString());
+                pixelSizes.add(z.pixelSizeUm() * z.downsample());
+                images.add(z.server().getPath());
+            }
         }
-        if (pngs.isEmpty())
-            throw new IOException("The annotation's analysis zone is empty; nothing to fit a threshold on");
-        return poolSamples(pngs, masks, pixelSizeUm, spec, 1);
+        if (pngs.isEmpty()) throw new IOException("The analysis zones are empty; nothing to fit a threshold on");
+        return poolSamples(pngs, masks, pixelSizes, spec, images.size());
     }
 
     /**
@@ -211,18 +234,29 @@ public final class PooledThreshold {
         return out;
     }
 
-    private static Result poolSamples(List<String> pngs, List<String> masks, double pxUm, Settings spec, int images)
+    /** Pools sample PNGs, each with its own pixel size (um/px as read). */
+    private static Result poolSamples(
+            List<String> pngs, List<String> masks, List<Double> pixelSizes, Settings spec, int images)
             throws IOException {
+        double[] sorted =
+                pixelSizes.stream().mapToDouble(Double::doubleValue).sorted().toArray();
+        double medianPx = sorted[sorted.length / 2];
         Map<String, Object> in = new HashMap<>();
         in.put("region_paths", pngs);
         in.put("mask_paths", new ArrayList<>(masks));
+        in.put("region_pixel_um", new ArrayList<>(pixelSizes));
         in.put("seg_channel", spec.segChannel());
         in.put("ridge_filter", spec.ridgeFilter().toLowerCase(java.util.Locale.ROOT));
-        in.put("sigma_min", spec.sigmaMinUm() / pxUm);
-        in.put("sigma_max", spec.sigmaMaxUm() / pxUm);
-        in.put("sigma_step", spec.sigmaStepUm() / pxUm);
+        in.put("sigma_min_um", spec.sigmaMinUm());
+        in.put("sigma_max_um", spec.sigmaMaxUm());
+        in.put("sigma_step_um", spec.sigmaStepUm());
+        in.put("rolling_ball_um", spec.rollingBallRadiusUm());
+        // Pixel values for a region with no size of its own; every region has one here.
+        in.put("sigma_min", spec.sigmaMinUm() / medianPx);
+        in.put("sigma_max", spec.sigmaMaxUm() / medianPx);
+        in.put("sigma_step", spec.sigmaStepUm() / medianPx);
         in.put("invert_intensity", spec.invertIntensity());
-        in.put("rolling_ball_radius", (int) Math.max(0, Math.round(spec.rollingBallRadiusUm() / pxUm)));
+        in.put("rolling_ball_radius", (int) Math.max(0, Math.round(spec.rollingBallRadiusUm() / medianPx)));
         in.put("method", method(spec.thresholdMethod()));
         Task task;
         try {
@@ -235,12 +269,17 @@ public final class PooledThreshold {
         JsonObject r = JsonParser.parseString(out.toString()).getAsJsonObject();
         if (r.has("error"))
             throw new IOException("calibrate_threshold: " + r.get("error").getAsString());
+        List<Long> histogram = new ArrayList<>();
+        if (r.has("histogram_counts")) {
+            for (var el : r.getAsJsonArray("histogram_counts")) histogram.add(el.getAsLong());
+        }
         Result res = new Result(
                 r.get("threshold_normalised").getAsDouble(),
                 method(spec.thresholdMethod()),
                 images,
                 r.get("n_regions_used").getAsInt(),
-                r.get("n_pixels_total").getAsLong());
+                r.get("n_pixels_total").getAsLong(),
+                List.copyOf(histogram));
         logger.info(
                 "Run-wide {} threshold {} from {} sample tile(s) over {} image(s), {} px",
                 res.method(),

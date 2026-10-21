@@ -762,7 +762,7 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.thresholdMethodProperty().get());
         applyTooltip(
                 thresholdMethodCombo,
-                "Otsu adapts per annotation; Triangle suits skewed histograms; Manual uses the cutoff below. Project Otsu applies one threshold project-wide, so images compare.");
+                "Otsu and Triangle are fitted once for all the annotations in the run, on their analysis zones; Triangle suits skewed histograms. Manual uses the cutoff below. Project Otsu applies one saved threshold, so separate runs compare.");
         internalGrid.add(new Label("Threshold method:"), 0, row);
         internalGrid.add(thresholdMethodCombo, 1, row);
         row++;

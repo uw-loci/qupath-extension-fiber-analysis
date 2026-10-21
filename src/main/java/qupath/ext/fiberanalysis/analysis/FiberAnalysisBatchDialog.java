@@ -42,6 +42,7 @@ import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.fiberanalysis.service.ApposeFiberService;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.images.ImageData;
@@ -195,11 +196,11 @@ public final class FiberAnalysisBatchDialog {
                 + " -fx-background-radius: 4; -fx-padding: 8;");
         Label title = new Label("Calibrate threshold across this project (recommended)");
         title.setStyle("-fx-font-weight: bold;");
-        Label body = new Label("Per-annotation Otsu gives every region a different threshold, so fiber coverage"
-                + " / ridge count / HDM are NOT directly comparable across images. Run"
-                + " calibration once to compute a single project-wide threshold from a"
-                + " random subsample of regions. Required for cross-image density-map"
-                + " workflows.");
+        Label body = new Label("With Otsu or Triangle, a batch fits one threshold for every annotation on every"
+                + " selected image, so this batch is comparable within itself. Another batch, on"
+                + " other images, fits its own. Calibrate once to save a project-wide threshold"
+                + " that every run and density map can reuse, so results from different runs"
+                + " compare.");
         body.setWrapText(true);
         body.setStyle("-fx-font-size: 11px;");
 
@@ -384,6 +385,41 @@ public final class FiberAnalysisBatchDialog {
                     int ok = 0;
                     int skipped = 0;
                     int failed = 0;
+                    // Otsu / triangle: one cut for every annotation on every image.
+                    Double batchThreshold = null;
+                    String batchThresholdSource = null;
+                    if (FiberAnalysisWorkflow.poolsThreshold(params)) {
+                        try {
+                            ApposeFiberService.getInstance().initialize(msg -> {});
+                            List<PooledThreshold.ZoneRegion> regions = new ArrayList<>();
+                            int nAnn = 0;
+                            for (ProjectImageEntry<BufferedImage> entry : entries) {
+                                ImageData<BufferedImage> data = entry.readImageData();
+                                List<PathObject> anns = resolveAnnotations(params, data);
+                                nAnn += anns.size();
+                                regions.addAll(FiberAnalysisWorkflow.zoneRegions(params, data, anns));
+                            }
+                            if (!regions.isEmpty()) {
+                                Path work = Files.createTempDirectory("fiber-batch-threshold");
+                                PooledThreshold.Result pooled =
+                                        FiberAnalysisWorkflow.poolForRun(params, regions, work, null);
+                                batchThreshold = pooled.thresholdNorm();
+                                batchThresholdSource = FiberAnalysisWorkflow.describeRunThreshold(pooled, nAnn);
+                                logger.info(
+                                        "Batch: every image cuts at {} ({})",
+                                        String.format(java.util.Locale.ROOT, "%.5f", batchThreshold),
+                                        batchThresholdSource);
+                            }
+                        } catch (Exception ex) {
+                            logger.error("Batch: could not fit one threshold for the run", ex);
+                            String msg = ex.getMessage();
+                            Platform.runLater(() -> Dialogs.showErrorMessage(
+                                    "Fiber Analysis Batch",
+                                    "Could not fit one threshold for the batch: " + msg
+                                            + "\nChoose Manual or a project calibration to run without it."));
+                            return;
+                        }
+                    }
                     for (int i = 0; i < entries.size(); i++) {
                         ProjectImageEntry<BufferedImage> entry = entries.get(i);
                         String name = entry.getImageName();
@@ -400,8 +436,9 @@ public final class FiberAnalysisBatchDialog {
                             // returns the worker Thread so the batch can join it instead of
                             // racing the next image's readImageData against the previous
                             // image's Appose call.
-                            Thread worker = new FiberAnalysisWorkflow(resultPanel)
-                                    .runForAnnotations(params, annotations, data, gui);
+                            FiberAnalysisWorkflow workflow = new FiberAnalysisWorkflow(resultPanel);
+                            if (batchThreshold != null) workflow.withRunThreshold(batchThreshold, batchThresholdSource);
+                            Thread worker = workflow.runForAnnotations(params, annotations, data, gui);
                             if (worker != null) {
                                 worker.join();
                             }

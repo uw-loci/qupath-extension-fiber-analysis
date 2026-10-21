@@ -249,7 +249,7 @@ Per analysis, the files land as follows:
 
 | Analysis | Output dir | Files |
 |---|---|---|
-| Per-annotation fiber analysis | `<base>/YYYYMMDD_HHMMSS_<hash>/` | `params.json`, `params.txt`, `rerun.groovy` |
+| Per-annotation fiber analysis | `<base>/YYYYMMDD_HHMMSS_<hash>/` | `params.json`, `params.txt`, `rerun.groovy`, and with Otsu or Triangle `threshold.json` (the one cut every annotation in the run used) |
 | Project density map | `<project>/fiber-analysis/density-maps/` | `<image>_density_params.json`, `<image>_density_params.txt`, `<image>_density_rerun.groovy` (one set per image) |
 | Project calibration | `<project>/fiber-analysis/` | `calibration_<name>_params.txt`, `calibration_<name>_rerun.groovy` (the existing `calibration_<name>.json` is itself the params record the rerun reads) |
 

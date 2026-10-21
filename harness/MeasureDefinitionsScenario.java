@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import javafx.application.Platform;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisParams;
+import qupath.ext.fiberanalysis.analysis.FiberCalibrationRunner;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisWorkflow;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.lib.gui.QuPathGUI;
@@ -113,6 +114,7 @@ public final class MeasureDefinitionsScenario {
         }
         check(results.size() == anns.size(), "one results.json per annotation (" + results.size() + ")");
         JsonObject summary = new JsonObject();
+        java.util.Set<Double> cuts = new java.util.TreeSet<>();
         for (Path r : results) {
             String ann = r.getParent().getFileName().toString();
             JsonObject res = JsonParser.parseString(Files.readString(r)).getAsJsonObject();
@@ -129,6 +131,10 @@ public final class MeasureDefinitionsScenario {
             double fiberInZone = num(flat.get("fiber_in_zone_pixels"));
             double zonePx = num(flat.get("zone_pixels"));
             check(Math.abs(hdm - fiberInZone / zonePx) < 1e-9, ann + ": HDM is fiber in zone / zone pixels");
+            double cut = tiled
+                    ? num(flat.get("parameters.project_threshold_norm"))
+                    : num(res.getAsJsonObject("parameters").get("project_threshold_norm"));
+            cuts.add(cut);
             note(String.format(
                     "%s: gap width mean %.2f um, max %.2f um; HDM %.4f; fiber in zone %.0f of %.0f px",
                     ann, gapMean, gapMax, hdm, fiberInZone, zonePx));
@@ -173,6 +179,45 @@ public final class MeasureDefinitionsScenario {
             a.addProperty("hdm_edge_windows", edgeAbove);
             summary.add(ann, a);
         }
+        Path thresholdJson;
+        try (Stream<Path> s = Files.walk(outDir)) {
+            thresholdJson = s.filter(p -> p.getFileName().toString().equals("threshold.json"))
+                    .findFirst()
+                    .orElse(null);
+        }
+        double runCut = thresholdJson == null
+                ? Double.NaN
+                : JsonParser.parseString(Files.readString(thresholdJson))
+                        .getAsJsonObject()
+                        .get("threshold_normalised")
+                        .getAsDouble();
+        note("run-wide threshold " + runCut + "; annotations cut at " + cuts);
+        check(cuts.size() == 1 && Math.abs(cuts.iterator().next() - runCut) < 1e-12,
+                "every annotation cuts at the one run-wide threshold recorded in threshold.json");
+        summary.addProperty("run_threshold", runCut);
+
+        if (System.getProperty("fiber.harness.calibrate") != null) {
+            var cfg = new FiberCalibrationRunner.CalibrationConfig();
+            cfg.calibrationName = "harness";
+            cfg.sampleSize = 0;
+            cfg.segChannel = params.internalChannel();
+            cfg.ridgeFilter = params.ridgeFilter();
+            cfg.borderZoneUm = params.borderZoneUm();
+            cfg.zoneMode = params.zoneMode();
+            cfg.analysisDownsample = params.analysisDownsample();
+            var cal = FiberCalibrationRunner.run(project, cfg, null);
+            JsonObject calJson = JsonParser.parseString(Files.readString(cal.calibrationFile)).getAsJsonObject();
+            JsonObject calParams = calJson.getAsJsonObject("calibration_params");
+            note(String.format(
+                    "calibration: %.5f from %d sample(s); params %s",
+                    cal.thresholdNormalised, cal.regionsUsed, calParams));
+            check(Math.abs(cal.thresholdNormalised - runCut) / runCut < 0.05,
+                    "a calibration on the same annotations lands within 5% of the run-wide threshold");
+            check(calParams.has("zone_mode") && calParams.has("analysis_downsample") && calParams.has("pixel_sizes_um")
+                            && !calParams.has("median_pixel_size_um_used"),
+                    "the calibration records the zone, downsample and per-image pixel sizes it fitted with");
+        }
+
         Files.writeString(outDir.resolve("summary.json"), summary.toString());
         note("summary: " + outDir.resolve("summary.json"));
     }
