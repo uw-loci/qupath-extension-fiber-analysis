@@ -123,6 +123,8 @@ public final class FiberDensityMapDialog {
 
         rows = FXCollections.observableArrayList();
         for (ProjectImageEntry<BufferedImage> entry : project.getImageList()) {
+            // A channels entry this extension made holds maps (32-bit float), not a source image.
+            if (DensityChannelAttacher.isChannelsEntry(entry)) continue;
             rows.add(new ImageRow(entry));
         }
 
@@ -157,7 +159,8 @@ public final class FiberDensityMapDialog {
         Label hdr = new Label("Images");
         hdr.setFont(Font.font("System", FontWeight.BOLD, 13));
         Label sub = new Label("Select the project images to compute a density map for. "
-                + "Type / dimensions / calibration populate in the background.");
+                + "Type / dimensions / pixel size populate in the background. Entries holding fiber"
+                + " channels are not listed.");
         sub.setStyle("-fx-text-fill: #555; -fx-font-size: 11px;");
         sub.setWrapText(true);
 

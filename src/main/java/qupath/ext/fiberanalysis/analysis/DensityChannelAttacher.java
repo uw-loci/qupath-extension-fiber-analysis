@@ -44,6 +44,15 @@ public final class DensityChannelAttacher {
 
     /** Metadata key: what the fiber extension added to this entry. */
     public static final String META_KIND = "Fiber analysis";
+
+    /**
+     * @param entry a project entry
+     * @return true when it is a channels entry this extension made (its maps are 32-bit float, and it is
+     *     derived from another image rather than a source to analyse)
+     */
+    public static boolean isChannelsEntry(ProjectImageEntry<?> entry) {
+        return entry != null && entry.getMetadata().containsKey(META_KIND);
+    }
     /** Metadata key: the project image the channels were added to. */
     public static final String META_SOURCE = "Fiber source image";
     /** Metadata key: the map file the channels come from. */

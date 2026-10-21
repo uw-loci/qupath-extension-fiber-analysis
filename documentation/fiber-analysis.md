@@ -271,7 +271,10 @@ Three ways to use a map:
   0-255, so it looks like the original; the map channels start hidden. Adding
   the same map again refreshes that entry instead of making another, and
   re-running the map refreshes it too. The entry reads the map file when it
-  opens, so it needs this extension installed and the map file kept.
+  opens, so it needs this extension installed and the map file kept. Channels
+  entries are left out of the density-map image list (and skipped if a script
+  passes one): they hold maps, not a source image, and their 32-bit float
+  pixels are not yet supported as input.
 
   Before 2026-10-19 this attached the channels to the open image instead, and
   values were stored in the image's own pixel type: on an 8-bit or 16-bit image

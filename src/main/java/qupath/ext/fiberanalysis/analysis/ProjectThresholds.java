@@ -77,7 +77,7 @@ final class ProjectThresholds {
         Map<String, String> out = new LinkedHashMap<>();
         if (project == null) return out;
         for (ProjectImageEntry<BufferedImage> e : project.getImageList()) {
-            if (exclude.contains(e) || e.getMetadata().containsKey(DensityChannelAttacher.META_KIND)) continue;
+            if (exclude.contains(e) || DensityChannelAttacher.isChannelsEntry(e)) continue;
             String v = e.getMetadata().get(key);
             if (v != null && !v.isBlank()) out.put(e.getImageName(), v);
         }

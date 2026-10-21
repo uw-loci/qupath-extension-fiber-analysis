@@ -92,11 +92,19 @@ public final class FiberDensityMapWorkflow {
      */
     public Thread runForEntries(
             DensityMapJobSpec spec,
-            List<ProjectImageEntry<BufferedImage>> entries,
+            List<ProjectImageEntry<BufferedImage>> requested,
             Project<BufferedImage> project,
             QuPathGUI qupath,
             Runnable onComplete) {
-        if (entries == null || entries.isEmpty()) {
+        final List<ProjectImageEntry<BufferedImage>> entries = new ArrayList<>();
+        if (requested != null) {
+            for (var e : requested) {
+                if (DensityChannelAttacher.isChannelsEntry(e))
+                    logger.warn("Skipping '{}': it holds fiber channels, not a source image", e.getImageName());
+                else entries.add(e);
+            }
+        }
+        if (entries.isEmpty()) {
             if (HeadlessFx.isReady()) Dialogs.showWarningNotification("Fiber density map", "No images selected.");
             else logger.warn("Fiber density map: no images selected (headless).");
             return null;

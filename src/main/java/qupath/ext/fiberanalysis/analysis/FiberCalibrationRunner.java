@@ -153,7 +153,7 @@ public final class FiberCalibrationRunner {
                 }
                 // A channels entry this extension made is derived from another
                 // image, not a source to calibrate on.
-                if (entry.getMetadata().containsKey(DensityChannelAttacher.META_KIND)) {
+                if (DensityChannelAttacher.isChannelsEntry(entry)) {
                     continue;
                 }
                 ImageData<BufferedImage> data;
