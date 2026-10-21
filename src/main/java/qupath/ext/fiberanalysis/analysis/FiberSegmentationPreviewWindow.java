@@ -93,7 +93,7 @@ final class FiberSegmentationPreviewWindow {
     private static final String MARKER_CLASS_NAME = "Fiber-Preview-Region";
 
     /** Style of the threshold line when the preview's cut is not the run's. */
-    private static final String DIFFERS_STYLE = "-fx-text-fill: #b35900; -fx-font-weight: bold;";
+    private static final String DIFFERS_STYLE = "-fx-text-fill: #e07a10; -fx-font-weight: bold;";
 
     /**
      * What a run with the dialog's current settings would do.
@@ -195,6 +195,9 @@ final class FiberSegmentationPreviewWindow {
         statusLabel.setWrapText(true);
         statusLabel.setMaxWidth(Double.MAX_VALUE);
 
+        // Wrapped labels in a fixed-height window are otherwise cut to one line with "...".
+        for (Label l : List.of(regionLabel, paramsLabel, thresholdLabel, statusLabel))
+            l.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
         VBox infoBox = new VBox(3, regionLabel, paramsLabel, thresholdLabel, statusLabel);
         infoBox.setMaxWidth(Double.MAX_VALUE);
 
@@ -267,7 +270,7 @@ final class FiberSegmentationPreviewWindow {
         sizeChoice.valueProperty().addListener(autoListener);
         for (Observable trigger : triggers) trigger.addListener(autoListener);
 
-        stage.setScene(new Scene(root, 560, 680));
+        stage.setScene(new Scene(root, 560, 760));
         stage.setOnHidden(e -> {
             for (Observable trigger : triggers) trigger.removeListener(autoListener);
             // A refresh still in flight would put the marker back.

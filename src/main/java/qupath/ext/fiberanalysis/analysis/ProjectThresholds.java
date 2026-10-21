@@ -100,9 +100,11 @@ final class ProjectThresholds {
         if (project == null || entries.isEmpty()) return;
         java.util.List<String> names =
                 entries.stream().map(ProjectImageEntry::getImageName).toList();
-        String warning = ThresholdIdentity.incomparableWarning(others(project, java.util.List.of(), key), names);
+        var labels = others(project, java.util.List.of(), key);
+        String warning = ThresholdIdentity.incomparableWarning(labels, names, true);
         if (warning == null) return;
         logger.warn("{}", warning);
-        if (HeadlessFx.isReady()) HeadlessFx.runLater(() -> Dialogs.showWarningNotification(title, warning));
+        String brief = ThresholdIdentity.incomparableWarning(labels, names, false);
+        if (HeadlessFx.isReady()) HeadlessFx.runLater(() -> Dialogs.showWarningNotification(title, brief));
     }
 }

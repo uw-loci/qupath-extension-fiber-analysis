@@ -276,9 +276,12 @@ public record ThresholdIdentity(
      *
      * @param labels  every image entry's recorded label, by entry name
      * @param thisRun the entries the run that just finished covered
+     * @param full    true to say how each group's cut was obtained (for the log); false for a short
+     *                form that fits a notification
      * @return a warning naming each group and its images, or null when they all compare
      */
-    public static String incomparableWarning(Map<String, String> labels, java.util.Collection<String> thisRun) {
+    public static String incomparableWarning(
+            Map<String, String> labels, java.util.Collection<String> thisRun, boolean full) {
         Map<String, List<String>> groups = groups(labels);
         if (groups.size() <= 1 || thisRun.isEmpty()) return null;
         StringBuilder sb = new StringBuilder();
@@ -295,13 +298,17 @@ public record ThresholdIdentity(
             String what = t == null
                     ? g.getKey()
                     : t.cut() + (t.pixelText().isEmpty() ? "" : " at " + t.pixelText() + " um/px") + ", settings "
-                            + t.settings() + " (" + t.source() + ")";
+                            + t.settings() + (full ? " (" + t.source() + ")" : "");
             boolean mine = g.getValue().stream().anyMatch(thisRun::contains);
             sb.append("\n  ")
                     .append(what)
                     .append(mine ? " [this run]" : "")
                     .append(": ")
-                    .append(nameList(g.getValue(), 3));
+                    .append(nameList(g.getValue(), full ? 3 : 2));
+        }
+        if (!full) {
+            sb.append("\nRun them together, or use one project calibration. Details are in the log.");
+            return sb.toString();
         }
         sb.append("\nTo compare them, run them together (a batch can analyse images of different pixel sizes")
                 .append(" at one common size), or use one project calibration.");

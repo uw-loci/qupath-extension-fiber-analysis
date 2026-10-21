@@ -165,8 +165,9 @@ The line is written to:
   `_density_params.json` (`thresholdIdentity`).
 
 After a run, the extension compares the lines recorded on every image of the
-project. When they fall into more than one group it shows a warning naming
-each group and its images, and marks the run that just finished, for example:
+project. When they fall into more than one group it shows a short notification
+naming each group's cut, pixel size and images, and marking the run that just
+finished. The log has the full text, which also says how each cut was obtained:
 
 ```
 Results in this project were cut at 2 different thresholds or pixel sizes, so they are not all comparable:

@@ -329,7 +329,7 @@ public final class FiberWindowTrainDialog {
         }
         sb.append('\n').append(report.summary());
         String scale = pixelSizeProblem(images);
-        if (scale != null) sb.append("\n[BLOCK] ").append(scale);
+        if (scale != null) sb.append("\n\n[BLOCK] ").append(scale);
         return sb.toString();
     }
 
@@ -346,13 +346,13 @@ public final class FiberWindowTrainDialog {
                     r.entry.getImageName(), r.pixelSizeUm()));
         var check = qupath.ext.fiberanalysis.analysis.PixelSizeCheck.of(scales, 1.0);
         if (!check.uncalibrated().isEmpty()) {
-            return "No pixel size on " + String.join(", ", check.uncalibrated())
-                    + ": window sizes are in microns. Set it (Image > Set pixel size) or leave the image out.";
+            return "No pixel size on " + String.join(", ", check.uncalibrated()) + "; window sizes are in microns."
+                    + "\n  -> Set it (Image > Set pixel size), or leave the image out.";
         }
         if (check.mixed()) {
             return "The training images have different pixel sizes:\n" + check.describe()
-                    + "\nA model's features are measured in pixels, and Apply refuses an image more than 2% off"
-                    + " the training pixel size. Train on images of one pixel size.";
+                    + "\n  -> Train on images of one pixel size. A model's features are measured in pixels, and"
+                    + " Apply refuses an image more than 2% off the training pixel size.";
         }
         return null;
     }

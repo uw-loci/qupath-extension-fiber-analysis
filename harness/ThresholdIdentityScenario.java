@@ -181,7 +181,7 @@ public final class ThresholdIdentityScenario {
         String local = waitForLabel(pr, "Cut:", "preview square only", 120);
         note("preview, unticked: " + local);
         Label localLabel = label(pr, "Cut:");
-        check(local != null && !local.contains(runCut) && onFx(() -> localLabel.getStyle().contains("b35900")),
+        check(local != null && !local.contains(runCut) && onFx(() -> localLabel.getStyle().contains("e07a10")),
                 "fitted on the preview square, the cut differs and is flagged");
 
         ComboBox<String> method = null;

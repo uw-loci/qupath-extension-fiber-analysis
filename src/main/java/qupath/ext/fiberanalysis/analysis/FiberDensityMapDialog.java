@@ -183,7 +183,7 @@ public final class FiberDensityMapDialog {
         dimCol.setCellValueFactory(new PropertyValueFactory<>("dimensionsText"));
         dimCol.setPrefWidth(120);
 
-        TableColumn<ImageRow, String> calCol = new TableColumn<>("Calibrated");
+        TableColumn<ImageRow, String> calCol = new TableColumn<>("Pixel size");
         calCol.setCellValueFactory(new PropertyValueFactory<>("calibrationText"));
         calCol.setCellFactory(c -> new TableCell<>() {
             @Override
@@ -199,7 +199,7 @@ public final class FiberDensityMapDialog {
         });
         calCol.setPrefWidth(110);
 
-        imageTable.getColumns().addAll(selCol, nameCol, typeCol, dimCol, calCol);
+        imageTable.getColumns().addAll(selCol, nameCol, calCol, typeCol, dimCol);
         imageTable.setEditable(true);
         VBox.setVgrow(imageTable, Priority.ALWAYS);
 
@@ -239,6 +239,8 @@ public final class FiberDensityMapDialog {
 
         validationBanner = new Label("");
         validationBanner.setWrapText(true);
+        // The banner backgrounds are always light; the theme's text colour is near-white in the dark theme.
+        validationBanner.setStyle("-fx-text-fill: #1f1f1f;");
         validationBox = new VBox(validationBanner);
         validationBox.setPadding(new Insets(8));
         validationBox.setStyle(emptyBannerStyle());

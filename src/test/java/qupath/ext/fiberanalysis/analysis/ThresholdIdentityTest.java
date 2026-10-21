@@ -116,12 +116,18 @@ class ThresholdIdentityTest {
         Map<String, String> labels = new LinkedHashMap<>();
         labels.put("img1", otsu(0.0833740234375, "batch A").label());
         labels.put("img2", otsu(0.0833740234375, "batch A").label());
-        assertThat(ThresholdIdentity.incomparableWarning(labels, List.of("img1")))
+        assertThat(ThresholdIdentity.incomparableWarning(labels, List.of("img1"), true))
                 .isNull();
         labels.put("old1", otsu(0.0763, "run B").label());
         labels.put("old2", otsu(0.0763, "run B").label());
         labels.put("coarse", otsu(0.0833740234375, "batch A", "None", 0, 0.3464).label());
-        String w = ThresholdIdentity.incomparableWarning(labels, List.of("img1", "img2"));
+        String w = ThresholdIdentity.incomparableWarning(labels, List.of("img1", "img2"), true);
+        // The notification form drops how each cut was obtained, so it fits on screen.
+        String brief = ThresholdIdentity.incomparableWarning(labels, List.of("img1", "img2"), false);
+        assertThat(brief)
+                .doesNotContain("(run B)")
+                .contains("[this run]: img1, img2")
+                .endsWith("Details are in the log.");
         assertThat(w).startsWith("Results in this project were cut at 3 different thresholds or pixel sizes");
         assertThat(w).contains("Otsu 0.08337 at 0.1732 um/px").contains("[this run]: img1, img2");
         assertThat(w).contains("Otsu 0.07630 at 0.1732 um/px").contains("(run B): old1, old2");

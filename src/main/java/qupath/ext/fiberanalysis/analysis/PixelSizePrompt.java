@@ -99,17 +99,30 @@ public final class PixelSizePrompt {
                 new ButtonType(commonOffered ? "Each at its own size" : "Run anyway", ButtonBar.ButtonData.OTHER);
         Label body = new Label(text);
         body.setWrapText(true);
-        body.setMaxWidth(560);
+        body.setPrefWidth(560);
+        // Without this a wrapped label in a dialog collapses to one truncated line.
+        body.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
         var builder = Dialogs.builder()
                 .title(title)
                 .owner(owner)
                 .content(body)
-                .width(600)
+                .prefWidth(600)
                 .resizable();
         builder = commonOffered
                 ? builder.buttons(common, own, ButtonType.CANCEL)
                 : builder.buttons(own, ButtonType.CANCEL);
-        var answer = builder.showAndWait().orElse(ButtonType.CANCEL);
+        var dialog = builder.build();
+        // ButtonBar gives every button the widest one's width by default and then truncates
+        // "Analyse all at ... um/px"; let each size to its own text.
+        for (ButtonType bt : dialog.getDialogPane().getButtonTypes()) {
+            var node = dialog.getDialogPane().lookupButton(bt);
+            if (node != null) {
+                ButtonBar.setButtonUniformSize(node, false);
+                if (node instanceof javafx.scene.control.Button b)
+                    b.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+            }
+        }
+        var answer = dialog.showAndWait().orElse(ButtonType.CANCEL);
         if (answer == common) return Choice.COMMON;
         if (answer == own) return Choice.OWN;
         return Choice.CANCEL;
