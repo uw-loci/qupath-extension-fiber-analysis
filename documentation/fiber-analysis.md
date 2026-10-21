@@ -133,22 +133,23 @@ place.
 ## Which threshold a result was cut at
 
 Fiber coverage, skeleton length and every other fiber measurement depend on
-the threshold the mask was cut at, so two results are comparable only when
-they were cut at the same value with the same segmentation settings. Every
-result records that in one line:
+the threshold the mask was cut at and on the pixel size the image was analysed
+at, so two results are comparable only when both match. Every result records
+them in one line:
 
 ```
-Otsu 0.08337 | Otsu pooled over 2 annotation(s) on 1 image(s): 21 sample(s) of their analysis zones (7595099 px), run 20261021_113342_9afbe194 | settings 7a3ec246
+Otsu 0.08337 | Otsu pooled over 2 annotation(s) on 1 image(s): 21 sample(s) of their analysis zones (7595099 px), run 20261021_121322_9afbe194 | settings d176f3aa at 0.1725 um/px
 ```
 
 The first part is the cut: the method and value (a fraction of the channel's
 full scale, `gray level N` for a Manual cut, or `response N` with a ridge
 filter). The second says how it was obtained: pooled in which run or batch,
 `calibration '<name>'`, or `set by hand`. The third is a fingerprint of the
-settings that decide what the cut means: source channel, ridge filter and its
-sigmas, invert, rolling ball, minimum fiber area and analysis downsample. Two
-results with the same cut and fingerprint are comparable, however the cut was
-obtained.
+settings that decide what the cut means (source channel, ridge filter and its
+sigmas, invert, rolling ball, minimum fiber area) and the pixel size the image
+was analysed at: its own pixel size times the analysis downsample. Two results
+are comparable when the cut and fingerprint match and the pixel sizes are
+within 2%, however the cut was obtained.
 
 The line is written to:
 
@@ -163,19 +164,52 @@ The line is written to:
 - a density or classifier map's file description (a `Threshold:` line) and
   `_density_params.json` (`thresholdIdentity`).
 
-After a run, the extension compares the new line with the one recorded on every
-other image of the project. When any differ it shows a warning naming them, for
-example:
+After a run, the extension compares the lines recorded on every image of the
+project. When they fall into more than one group it shows a warning naming
+each group and its images, and marks the run that just finished, for example:
 
 ```
-1 other image(s) in this project were cut at a different threshold, so their results are not comparable with these:
-  Otsu 0.09620 (pooled over 1 annotation(s) on 1 image(s), run old): earlier run
-Run them together, or use one project calibration, to compare them.
+Results in this project were cut at 2 different thresholds or pixel sizes, so they are not all comparable:
+  Otsu 0.08337 at 0.1725 um/px, settings d176f3aa (Otsu pooled over 2 annotation(s) ..., run 20261021_121322_9afbe194) [this run]: liver_L002
+  Otsu 0.09620 at 0.345 um/px, settings d176f3aa (pooled over 1 annotation(s) on 1 image(s), run 20261020_090000_1a2b3c4d): coarse copy
+To compare them, run them together (a batch can analyse images of different pixel sizes at one common size), or use one project calibration.
 ```
 
-A batch run makes this comparison once, at the end, against the images it did
-not cover. To make a whole project comparable, run it as one batch, or
-calibrate once and use **Project Otsu (calibrated)** everywhere.
+A batch run makes this comparison once, at its end. To make a whole project
+comparable, run it as one batch, or calibrate once and use **Project Otsu
+(calibrated)** everywhere.
+
+## Images of different pixel sizes
+
+Fine fibers merge at a coarse pixel size, so coverage, skeleton length, branch
+counts and gap widths shift with resolution even when every setting is in
+microns. Texture shifts further: its GLCM distances become whole-pixel offsets,
+and the default 0.1, 0.2 and 0.3 um become 1 and 2 px at 0.17 um/px but only 1
+px at 0.35 um/px. So every run over several images checks their pixel sizes
+first (sizes within 2% count as the same):
+
+- **Batch runs** ask what to do when the images differ:
+  - **Analyse all at X um/px** brings every image to the coarsest one, using a
+    larger analysis downsample on the finer images. Their results then compare,
+    and each run folder's `run_notes.txt` records the common size and the
+    downsample used on that image.
+  - **Each at its own size** keeps the finer images' detail, but their numbers
+    do not compare with the coarser ones. If texture is on and its pixel
+    offsets would differ between the images, texture is left out of the whole
+    batch, and `run_notes.txt` says why.
+  - **Cancel** runs nothing.
+- **Project calibration** asks the same question and records the choice in
+  the calibration file (`common_pixel_um`, or `mixed_pixel_sizes`).
+- **Project density map** reads every image at full resolution, so it cannot
+  bring them to one size. Its dialog shows each image's pixel size, the banner
+  warns when they differ, and Run asks for confirmation.
+- **The window classifier** will not train on images of different pixel sizes,
+  or on an image with no pixel size: its features are measured in pixels, and
+  Apply already refuses an image more than 2% off the training pixel size.
+
+Images with no pixel size use the **pixel-size override** in a batch run, and
+the question names them; set their pixel size (Image > Set pixel size) to
+include them properly.
 
 ## Project density map (whole-slide)
 

@@ -87,14 +87,14 @@ class PooledThresholdTest {
         assertThat(pooled.projectThresholdNorm).isEqualTo(0.123);
         assertThat(pooled.toOrderedMap()).containsEntry("thresholdSource", "Otsu pooled over 3 image(s)");
         // The map records the cut as an Otsu one, not a calibration, and a replay keeps it so.
-        assertThat(ThresholdIdentity.of(pooled).cut()).isEqualTo("Otsu 0.1230");
+        assertThat(ThresholdIdentity.of(pooled, 0.5).cut()).isEqualTo("Otsu 0.1230");
         assertThat(pooled.toOrderedMap()).containsEntry("fittedMethod", spec.thresholdMethod);
         java.io.File json = java.io.File.createTempFile("density_params", ".json");
         json.deleteOnExit();
         java.nio.file.Files.writeString(json.toPath(), new com.google.gson.Gson().toJson(pooled.toOrderedMap()));
         var replayed = FiberDensityMapWorkflow.DensityMapJobSpec.fromJson(json);
-        assertThat(ThresholdIdentity.of(replayed).label())
-                .isEqualTo(ThresholdIdentity.of(pooled).label());
+        assertThat(ThresholdIdentity.of(replayed, 0.5).label())
+                .isEqualTo(ThresholdIdentity.of(pooled, 0.5).label());
         // Everything else is carried over untouched.
         var a = new java.util.LinkedHashMap<>(spec.toOrderedMap());
         var b = new java.util.LinkedHashMap<>(pooled.toOrderedMap());

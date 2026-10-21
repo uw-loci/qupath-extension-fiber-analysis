@@ -67,10 +67,10 @@ final class ProjectThresholds {
 
     /**
      * @param project the project
-     * @param exclude entries to leave out (the ones just recorded)
+     * @param exclude entries to leave out
      * @param key     metadata key
-     * @return other image entries' recorded labels by entry name; channels entries this extension
-     *     made are left out, since they copy their source's metadata
+     * @return image entries' recorded labels by entry name; channels entries this extension made are
+     *     left out, since they copy their source's metadata
      */
     static Map<String, String> others(
             Project<BufferedImage> project, Collection<ProjectImageEntry<BufferedImage>> exclude, String key) {
@@ -85,22 +85,22 @@ final class ProjectThresholds {
     }
 
     /**
-     * Logs and shows a warning when other images in the project were cut at another threshold.
+     * Logs and shows a warning when the results recorded across the project are not all comparable.
      *
      * @param project the project, or null
-     * @param entries the entries this run covered
-     * @param id      their threshold
-     * @param key     metadata key the others are read from
+     * @param entries the entries the run that just finished covered
+     * @param key     {@link ThresholdIdentity#META_ANNOTATIONS} or {@link ThresholdIdentity#META_DENSITY}
      * @param title   notification title
      */
     static void warnIfDiffers(
             Project<BufferedImage> project,
             Collection<ProjectImageEntry<BufferedImage>> entries,
-            ThresholdIdentity id,
             String key,
             String title) {
-        if (project == null || id == null || entries.isEmpty()) return;
-        String warning = ThresholdIdentity.mismatchWarning(id, others(project, entries, key));
+        if (project == null || entries.isEmpty()) return;
+        java.util.List<String> names =
+                entries.stream().map(ProjectImageEntry::getImageName).toList();
+        String warning = ThresholdIdentity.incomparableWarning(others(project, java.util.List.of(), key), names);
         if (warning == null) return;
         logger.warn("{}", warning);
         if (HeadlessFx.isReady()) HeadlessFx.runLater(() -> Dialogs.showWarningNotification(title, warning));

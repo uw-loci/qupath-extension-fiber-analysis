@@ -425,7 +425,8 @@ public final class FiberWindowApplyDialog {
                             pixelSizeUm(),
                             region.getX(),
                             region.getY(),
-                            seg.thresholdIdentity(thresholdSource(model)).label());
+                            seg.thresholdIdentity(thresholdSource(model), pixelSizeUm())
+                                    .label());
                     log.append("Probability map: ").append(sidecar).append('\n');
                     var colors = WindowClassifierWorkflow.probabilityChannelColors(result.classNames());
                     if (attachCheck.isSelected()) {

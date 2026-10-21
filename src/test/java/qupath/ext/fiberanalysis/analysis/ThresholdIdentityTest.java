@@ -17,30 +17,39 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * One line says which threshold a result was cut at. Two results are comparable when the cut and
- * the segmentation settings match, however the cut was obtained.
+ * One line says which threshold a result was cut at and at what pixel size. Two results compare
+ * when the cut and settings match and the pixel sizes are within 2%, however the cut was obtained.
  */
 class ThresholdIdentityTest {
 
-    private static ThresholdIdentity otsu(double cut, String source, String ridge, double rb) {
-        return ThresholdIdentity.of("Otsu", 128, 0.1, cut, source, "Raw intensity", ridge, 1, 4, 1, false, rb, 1, 1);
+    private static ThresholdIdentity otsu(double cut, String source, String ridge, double rb, double px) {
+        return ThresholdIdentity.of("Otsu", 128, 0.1, cut, source, "Raw intensity", ridge, 1, 4, 1, false, rb, 1, px);
+    }
+
+    private static ThresholdIdentity otsu(double cut, String source) {
+        return otsu(cut, source, "None", 0, 0.1732);
     }
 
     @Test
     void theLabelReadsAndParsesBack() {
-        var id = otsu(0.0833740234375, "pooled over 2 annotation(s) on 1 image(s), run 20261021_101500", "None", 0);
+        var id = otsu(0.0833740234375, "pooled over 2 annotation(s) on 1 image(s), run 20261021_101500");
         assertThat(id.label()).startsWith("Otsu 0.08337 | pooled over 2 annotation(s)");
-        assertThat(id.label()).contains("| settings ");
+        assertThat(id.label()).endsWith(" at 0.1732 um/px");
         var back = ThresholdIdentity.parse(id.label());
         assertThat(back).isNotNull();
         assertThat(back.key()).isEqualTo(id.key());
-        assertThat(back.settings()).isEqualTo(id.settings());
+        assertThat(back.pixelUm()).isEqualTo(0.1732);
         assertThat(back.source()).isEqualTo(id.source());
+        assertThat(back.comparableWith(id)).isTrue();
+        // A line without a pixel size (a spec not tied to one image) still parses.
+        var noPx = otsu(0.08337, "x", "None", 0, Double.NaN);
+        assertThat(noPx.label()).doesNotContain("um/px");
+        assertThat(ThresholdIdentity.parse(noPx.label()).comparableWith(id)).isTrue();
     }
 
     @Test
     void theSameCutObtainedTwoWaysIsComparable() {
-        var pooled = otsu(0.08337, "pooled, run A", "None", 0);
+        var pooled = otsu(0.08337, "pooled, run A");
         var calibrated = ThresholdIdentity.of(
                 "Project Otsu (calibrated)",
                 128,
@@ -55,72 +64,88 @@ class ThresholdIdentityTest {
                 false,
                 0,
                 1,
-                1);
+                0.1732);
         assertThat(calibrated.method()).isEqualTo("Calibrated");
-        assertThat(calibrated.key()).isEqualTo(pooled.key());
+        assertThat(calibrated.comparableWith(pooled)).isTrue();
     }
 
     @Test
-    void otherSettingsOrAnotherCutAreNotComparable() {
-        var a = otsu(0.08337, "run A", "None", 0);
-        assertThat(otsu(0.0763, "run B", "None", 0).key()).isNotEqualTo(a.key());
-        assertThat(otsu(0.08337, "run B", "None", 10).key()).isNotEqualTo(a.key());
-        // Sigmas only matter with a ridge filter.
-        var sato = otsu(0.036, "run C", "Sato", 0);
+    void otherSettingsAnotherCutOrAnotherPixelSizeAreNotComparable() {
+        var a = otsu(0.08337, "run A");
+        assertThat(otsu(0.0763, "run B").comparableWith(a)).isFalse();
+        assertThat(otsu(0.08337, "run B", "None", 10, 0.1732).comparableWith(a)).isFalse();
+        assertThat(otsu(0.08337, "run B", "None", 0, 0.3464).comparableWith(a)).isFalse();
+        // Within 2% is the same pixel size.
+        assertThat(otsu(0.08337, "run B", "None", 0, 0.175).comparableWith(a)).isTrue();
+        var sato = otsu(0.036, "run C", "Sato", 0, 0.1732);
         assertThat(sato.unit()).isEqualTo("response");
         assertThat(sato.cut()).isEqualTo("Otsu response 0.03600");
+        // Sigmas only matter with a ridge filter.
         assertThat(ThresholdIdentity.of(
-                                "Otsu", 128, 0.1, 0.08337, "run A", "Raw intensity", "None", 2, 8, 2, false, 0, 1, 1)
-                        .key())
-                .isEqualTo(a.key());
+                                "Otsu",
+                                128,
+                                0.1,
+                                0.08337,
+                                "run A",
+                                "Raw intensity",
+                                "None",
+                                2,
+                                8,
+                                2,
+                                false,
+                                0,
+                                1,
+                                0.1732)
+                        .comparableWith(a))
+                .isTrue();
     }
 
     @Test
     void manualCutsReadInTheirOwnUnits() {
         var gray =
-                ThresholdIdentity.of("Manual", 30, 0.1, null, null, "Raw intensity", "None", 1, 4, 1, false, 0, 1, 1);
+                ThresholdIdentity.of("Manual", 30, 0.1, null, null, "Raw intensity", "None", 1, 4, 1, false, 0, 1, 0.5);
         assertThat(gray.label()).startsWith("Manual gray level 30 | set by hand | settings ");
-        var resp =
-                ThresholdIdentity.of("Manual", 30, 0.25, null, null, "Raw intensity", "Sato", 1, 4, 1, false, 0, 1, 1);
+        var resp = ThresholdIdentity.of(
+                "Manual", 30, 0.25, null, null, "Raw intensity", "Sato", 1, 4, 1, false, 0, 1, 0.5);
         assertThat(resp.cut()).isEqualTo("Manual response 0.2500");
-        assertThat(ThresholdIdentity.parse(gray.label()).key()).isEqualTo(gray.key());
+        assertThat(ThresholdIdentity.parse(gray.label()).comparableWith(gray)).isTrue();
     }
 
     @Test
-    void theWarningNamesTheImagesCutDifferently() {
-        var mine = otsu(0.0833740234375, "batch A", "None", 0);
-        Map<String, String> others = new LinkedHashMap<>();
-        others.put("img1", otsu(0.0833740234375, "batch A", "None", 0).label());
-        assertThat(ThresholdIdentity.mismatchWarning(mine, others)).isNull();
-        others.put("img2", otsu(0.0763, "run B", "None", 0).label());
-        others.put("img3", otsu(0.0763, "run B", "None", 0).label());
-        others.put("img4", otsu(0.08337, "run C", "None", 10).label());
-        String w = ThresholdIdentity.mismatchWarning(mine, others);
-        assertThat(w).startsWith("3 other image(s)");
-        assertThat(w).contains("Otsu 0.07630 (run B): img2, img3");
-        assertThat(w).contains("with other segmentation settings: img4");
-        assertThat(w).doesNotContain("img1");
+    void theWarningNamesEachGroupAndMarksThisRun() {
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put("img1", otsu(0.0833740234375, "batch A").label());
+        labels.put("img2", otsu(0.0833740234375, "batch A").label());
+        assertThat(ThresholdIdentity.incomparableWarning(labels, List.of("img1")))
+                .isNull();
+        labels.put("old1", otsu(0.0763, "run B").label());
+        labels.put("old2", otsu(0.0763, "run B").label());
+        labels.put("coarse", otsu(0.0833740234375, "batch A", "None", 0, 0.3464).label());
+        String w = ThresholdIdentity.incomparableWarning(labels, List.of("img1", "img2"));
+        assertThat(w).startsWith("Results in this project were cut at 3 different thresholds or pixel sizes");
+        assertThat(w).contains("Otsu 0.08337 at 0.1732 um/px").contains("[this run]: img1, img2");
+        assertThat(w).contains("Otsu 0.07630 at 0.1732 um/px").contains("(run B): old1, old2");
+        assertThat(w).contains("at 0.3464 um/px").contains(": coarse");
     }
 
     @Test
     void groupsPutTheLargestFirst() {
         Map<String, String> m = new LinkedHashMap<>();
-        m.put("a", otsu(0.1, "x", "None", 0).label());
-        m.put("b", otsu(0.2, "y", "None", 0).label());
-        m.put("c", otsu(0.2, "z", "None", 0).label());
+        m.put("a", otsu(0.1, "x").label());
+        m.put("b", otsu(0.2, "y").label());
+        m.put("c", otsu(0.2, "z").label());
         var g = ThresholdIdentity.groups(m);
         assertThat(g.values().iterator().next()).isEqualTo(List.of("b", "c"));
     }
 
     @Test
     void theMapFileCarriesTheThreshold() {
-        var id = otsu(0.08337, "pooled over 3 image(s), density run 20261021_1015", "None", 0);
+        var id = otsu(0.08337, "pooled over 3 image(s), density run 20261021_1015");
         var info =
                 new DensityMapInfo(DensityLattice.blocks(4, 4, 10), 40, 40, 0.5, false, "img", id.label(), List.of());
         String desc = SidecarDescription.format(info, DensityChannelSpec.defaultChannels());
         assertThat(desc).contains("\nThreshold: Otsu 0.08337 | pooled over 3 image(s)");
         assertThat(SidecarDescription.parseInfo(desc).threshold()).isEqualTo(id.label());
-        // Maps written before the threshold was recorded parse with none.
         var old = new DensityMapInfo(DensityLattice.blocks(4, 4, 10), 40, 40, 0.5, false, "img", null, List.of());
         assertThat(SidecarDescription.parseInfo(SidecarDescription.format(old, DensityChannelSpec.defaultChannels()))
                         .threshold())

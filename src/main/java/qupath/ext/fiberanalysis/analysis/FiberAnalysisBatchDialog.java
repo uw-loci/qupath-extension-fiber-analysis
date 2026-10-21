@@ -19,7 +19,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
-import javafx.application.Platform;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -382,35 +381,117 @@ public final class FiberAnalysisBatchDialog {
     }
 
     private void runBatch(FiberAnalysisParams params, List<ProjectImageEntry<BufferedImage>> entries) {
+        javafx.stage.Window owner = gui == null ? null : gui.getStage();
+        runBatch(
+                gui,
+                resultPanel,
+                params,
+                entries,
+                (check, ownNote) -> PixelSizePrompt.ask(owner, "Fiber Analysis Batch", check, true, ownNote));
+    }
+
+    /**
+     * Runs one parameter set over several images, one after another, with one threshold and, when the
+     * images' pixel sizes differ, the user's choice of a common analysed pixel size.
+     *
+     * @param gui      the QuPath window, or null
+     * @param panel    results panel, or null
+     * @param params   the run's parameters
+     * @param entries  the images
+     * @param chooser  asked when the pixel sizes differ: the check and what "own size" would also
+     *                 change (or null); returns the choice
+     * @return the batch thread
+     */
+    public static Thread runBatch(
+            QuPathGUI gui,
+            FiberAnalysisPanel panel,
+            FiberAnalysisParams params,
+            List<ProjectImageEntry<BufferedImage>> entries,
+            java.util.function.BiFunction<PixelSizeCheck, String, PixelSizePrompt.Choice> chooser) {
         Thread t = new Thread(
                 () -> {
                     int ok = 0;
                     int skipped = 0;
                     int failed = 0;
+                    String batchStamp = java.time.LocalDateTime.now()
+                            .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+
+                    // Pixel sizes first: they decide each image's downsample, and so
+                    // the regions the threshold is pooled over.
+                    List<PixelSizeCheck.Image> scales = new ArrayList<>();
+                    java.util.Map<ProjectImageEntry<BufferedImage>, Double> ownPx = new java.util.HashMap<>();
+                    for (ProjectImageEntry<BufferedImage> entry : entries) {
+                        try {
+                            ImageData<BufferedImage> data = entry.readImageData();
+                            if (resolveAnnotations(params, data).isEmpty()) continue;
+                            double px =
+                                    params.useImagePixelSize() ? calibratedPixelUm(data) : params.pixelSizeOverrideUm();
+                            ownPx.put(entry, px);
+                            scales.add(new PixelSizeCheck.Image(entry.getImageName(), px));
+                        } catch (IOException ioe) {
+                            logger.error("Batch: could not read '{}': {}", entry.getImageName(), ioe.getMessage());
+                        }
+                    }
+                    PixelSizeCheck check = PixelSizeCheck.of(scales, params.analysisDownsample());
+                    FiberAnalysisParams runParams = params;
+                    List<String> notes = new ArrayList<>();
+                    boolean common = false;
+                    if (check.mixed()) {
+                        String textureProblem = params.textureEnabled()
+                                ? PixelSizeCheck.offsetProblem(
+                                        params.glcmDistancesUm(), check.analysedPixelSizes(false), "GLCM distances")
+                                : null;
+                        String ownNote = textureProblem == null
+                                ? null
+                                : "Each at its own size leaves texture out: " + textureProblem
+                                        + " Texture measured at different pixel offsets is not comparable.";
+                        PixelSizePrompt.Choice choice = chooser.apply(check, ownNote);
+                        logger.info("Batch: images have different pixel sizes; chose {}\n{}", choice, check.describe());
+                        if (choice == PixelSizePrompt.Choice.CANCEL) {
+                            HeadlessFx.runLater(() -> Dialogs.showInfoNotification(
+                                    "Fiber Analysis Batch", "Batch cancelled: the images have different pixel sizes."));
+                            return;
+                        }
+                        common = choice == PixelSizePrompt.Choice.COMMON;
+                        if (!common) {
+                            notes.add("The images of batch " + batchStamp + " were analysed at their own pixel sizes,"
+                                    + " so their results are not comparable across sizes:\n" + check.describe());
+                            if (textureProblem != null) {
+                                runParams = params.withTextureEnabled(false);
+                                notes.add("Texture was left out: " + textureProblem
+                                        + " Texture measured at different pixel offsets is not comparable.");
+                            }
+                        }
+                    }
+                    final boolean commonF = common;
+                    final FiberAnalysisParams baseF = runParams;
+                    java.util.function.Function<ProjectImageEntry<BufferedImage>, FiberAnalysisParams> paramsFor =
+                            e -> commonF
+                                    ? baseF.withAnalysisDownsample(
+                                            check.downsampleFor(ownPx.getOrDefault(e, Double.NaN)))
+                                    : baseF;
+
                     // Otsu / triangle: one cut for every annotation on every image.
                     Double batchThreshold = null;
                     String batchThresholdSource = null;
-                    if (FiberAnalysisWorkflow.poolsThreshold(params)) {
+                    if (FiberAnalysisWorkflow.poolsThreshold(runParams)) {
                         try {
                             ApposeFiberService.getInstance().initialize(msg -> {});
                             List<PooledThreshold.ZoneRegion> regions = new ArrayList<>();
                             int nAnn = 0;
                             for (ProjectImageEntry<BufferedImage> entry : entries) {
                                 ImageData<BufferedImage> data = entry.readImageData();
-                                List<PathObject> anns = resolveAnnotations(params, data);
+                                List<PathObject> anns = resolveAnnotations(runParams, data);
                                 nAnn += anns.size();
-                                regions.addAll(FiberAnalysisWorkflow.zoneRegions(params, data, anns));
+                                regions.addAll(FiberAnalysisWorkflow.zoneRegions(paramsFor.apply(entry), data, anns));
                             }
                             if (!regions.isEmpty()) {
                                 Path work = Files.createTempDirectory("fiber-batch-threshold");
                                 PooledThreshold.Result pooled =
-                                        FiberAnalysisWorkflow.poolForRun(params, regions, work, null);
+                                        FiberAnalysisWorkflow.poolForRun(runParams, regions, work, null);
                                 batchThreshold = pooled.thresholdNorm();
                                 batchThresholdSource = FiberAnalysisWorkflow.describeRunThreshold(pooled, nAnn)
-                                        + ", batch "
-                                        + java.time.LocalDateTime.now()
-                                                .format(java.time.format.DateTimeFormatter.ofPattern(
-                                                        "yyyyMMdd_HHmmss"));
+                                        + ", batch " + batchStamp;
                                 logger.info(
                                         "Batch: every image cuts at {} ({})",
                                         String.format(java.util.Locale.ROOT, "%.5f", batchThreshold),
@@ -419,7 +500,7 @@ public final class FiberAnalysisBatchDialog {
                         } catch (Exception ex) {
                             logger.error("Batch: could not fit one threshold for the run", ex);
                             String msg = ex.getMessage();
-                            Platform.runLater(() -> Dialogs.showErrorMessage(
+                            HeadlessFx.runLater(() -> Dialogs.showErrorMessage(
                                     "Fiber Analysis Batch",
                                     "Could not fit one threshold for the batch: " + msg
                                             + "\nChoose Manual or a project calibration to run without it."));
@@ -433,20 +514,34 @@ public final class FiberAnalysisBatchDialog {
                         logger.info("Batch [{}/{}]: {}", i + 1, entries.size(), name);
                         try {
                             ImageData<BufferedImage> data = entry.readImageData();
-                            List<PathObject> annotations = resolveAnnotations(params, data);
+                            List<PathObject> annotations = resolveAnnotations(runParams, data);
                             if (annotations.isEmpty()) {
                                 logger.info("Skipping '{}': no matching annotations", name);
                                 skipped++;
                                 continue;
                             }
+                            FiberAnalysisParams imageParams = paramsFor.apply(entry);
+                            List<String> imageNotes = new ArrayList<>(notes);
+                            if (commonF) {
+                                imageNotes.add(String.format(
+                                        java.util.Locale.ROOT,
+                                        "Analysed at the common pixel size %s um/px of batch %s: analysis downsample"
+                                                + " %s on this image (its own pixel size %s um/px), so it compares"
+                                                + " with the batch's other images.",
+                                        PixelSizeCheck.um(check.commonPixelUm()),
+                                        batchStamp,
+                                        PixelSizeCheck.um(imageParams.analysisDownsample()),
+                                        PixelSizeCheck.um(ownPx.getOrDefault(entry, Double.NaN))));
+                            }
                             // Block on this image's run before advancing -- runForAnnotations
                             // returns the worker Thread so the batch can join it instead of
                             // racing the next image's readImageData against the previous
                             // image's Appose call.
-                            FiberAnalysisWorkflow workflow =
-                                    new FiberAnalysisWorkflow(resultPanel).withoutProjectThresholdCheck();
+                            FiberAnalysisWorkflow workflow = new FiberAnalysisWorkflow(panel)
+                                    .withoutProjectThresholdCheck()
+                                    .withRunNotes(imageNotes);
                             if (batchThreshold != null) workflow.withRunThreshold(batchThreshold, batchThresholdSource);
-                            Thread worker = workflow.runForAnnotations(params, annotations, data, gui);
+                            Thread worker = workflow.runForAnnotations(imageParams, annotations, data, gui);
                             if (worker != null) {
                                 worker.join();
                             }
@@ -465,28 +560,28 @@ public final class FiberAnalysisBatchDialog {
                             logger.error("Batch entry '{}' failed", name, ex);
                         }
                     }
-                    // One comparison for the whole batch, against images it did not cover.
-                    FiberAnalysisWorkflow idSource = new FiberAnalysisWorkflow(null);
-                    if (batchThreshold != null) idSource.withRunThreshold(batchThreshold, batchThresholdSource);
-                    ThresholdIdentity batchId = idSource.runIdentity(params, "");
-                    if (batchId != null && !ran.isEmpty() && gui != null && gui.getProject() != null) {
-                        ProjectThresholds.warnIfDiffers(
-                                gui.getProject(),
-                                ran,
-                                batchId,
-                                ThresholdIdentity.META_ANNOTATIONS,
-                                "Fiber Analysis Batch");
-                    }
+                    // One comparison for the whole batch, with every other image's record.
+                    Project<BufferedImage> project =
+                            gui != null ? gui.getProject() : qupath.lib.scripting.QP.getProject();
+                    ProjectThresholds.warnIfDiffers(
+                            project, ran, ThresholdIdentity.META_ANNOTATIONS, "Fiber Analysis Batch");
                     final int okF = ok;
                     final int skipF = skipped;
                     final int failF = failed;
-                    Platform.runLater(() -> Dialogs.showInfoNotification(
+                    HeadlessFx.runLater(() -> Dialogs.showInfoNotification(
                             "Fiber Analysis Batch",
                             String.format("Done. ran=%d, skipped=%d, failed=%d", okF, skipF, failF)));
                 },
                 "FiberAnalysisBatch");
         t.setDaemon(true);
         t.start();
+        return t;
+    }
+
+    /** @return the image's own pixel size, or NaN when it has none */
+    private static double calibratedPixelUm(ImageData<BufferedImage> data) {
+        var cal = data.getServer().getPixelCalibration();
+        return cal != null && cal.hasPixelSizeMicrons() ? cal.getAveragedPixelSizeMicrons() : Double.NaN;
     }
 
     private static List<PathObject> resolveAnnotations(FiberAnalysisParams params, ImageData<BufferedImage> data) {

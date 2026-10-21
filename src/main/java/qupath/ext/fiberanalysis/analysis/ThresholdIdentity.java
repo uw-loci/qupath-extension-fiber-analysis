@@ -19,12 +19,14 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Which threshold a set of results was cut at, as one line every output carries: the map file,
- * the run record, project entry metadata and each detection. Two results with the same
- * {@link #key()} were segmented the same way; two with different keys are not comparable.
+ * Which threshold a set of results was cut at, and at what pixel size, as one line every output
+ * carries: the map file, the run record, project entry metadata and each detection. Two results
+ * are comparable when the cut and the segmentation settings match and they were analysed at the
+ * same pixel size (within 2%), however the cut was obtained.
  *
- * <p>The line reads {@code <cut> | <source> | settings <fingerprint>}, for example
- * {@code Otsu 0.08337 | pooled over 2 annotation(s) on 1 image(s), run 20261021_101500 | settings 1a2b3c4d}.
+ * <p>The line reads {@code <cut> | <source> | settings <fingerprint> at <pixel size> um/px}, for example
+ * {@code Otsu 0.08337 | pooled over 2 annotation(s) on 1 image(s), run 20261021_101500 | settings 1a2b3c4d
+ * at 0.1732 um/px}.
  *
  * @param method   Manual, Otsu, Triangle or Calibrated
  * @param unit     "gray level" for a Manual cut without a ridge filter, "response" with a ridge filter,
@@ -32,8 +34,10 @@ import java.util.Map;
  * @param value    the cut in that unit
  * @param source   how it was obtained
  * @param settings fingerprint of the segmentation settings the cut applies to
+ * @param pixelUm  the pixel size the image was analysed at (its own times the downsample), NaN if unknown
  */
-public record ThresholdIdentity(String method, String unit, double value, String source, String settings) {
+public record ThresholdIdentity(
+        String method, String unit, double value, String source, String settings, double pixelUm) {
 
     /** Project entry metadata key for the threshold of the latest annotation run on an image. */
     public static final String META_ANNOTATIONS = "Fiber threshold (annotations)";
@@ -47,7 +51,13 @@ public record ThresholdIdentity(String method, String unit, double value, String
     /** Map-file description line prefix. */
     static final String DESCRIPTION_PREFIX = "Threshold:";
 
+    /** Pixel sizes within this ratio count as the same. */
+    public static final double PIXEL_TOLERANCE = 1.02;
+
     private static final String SEP = " | ";
+
+    private static final java.util.regex.Pattern SETTINGS =
+            java.util.regex.Pattern.compile("settings (\\w+)(?: at ([0-9.eE+-]+) um/px)?");
 
     /**
      * @param thresholdMethod      the method as the dialog or a spec names it
@@ -64,7 +74,7 @@ public record ThresholdIdentity(String method, String unit, double value, String
      * @param invert               intensity inverted
      * @param rollingBallUm        rolling-ball radius, 0 for none
      * @param minFiberAreaUm2      smallest fiber kept
-     * @param downsample           analysis downsample
+     * @param pixelUm              analysed pixel size, NaN if unknown
      * @return the identity
      */
     public static ThresholdIdentity of(
@@ -81,41 +91,34 @@ public record ThresholdIdentity(String method, String unit, double value, String
             boolean invert,
             double rollingBallUm,
             double minFiberAreaUm2,
-            double downsample) {
+            double pixelUm) {
         boolean ridge = ridgeOn(ridgeFilter);
         String m = thresholdMethod == null ? "" : thresholdMethod.trim().toLowerCase(Locale.ROOT);
         String settings = fingerprint(
-                channel,
-                ridgeFilter,
-                sigmaMinUm,
-                sigmaMaxUm,
-                sigmaStepUm,
-                invert,
-                rollingBallUm,
-                minFiberAreaUm2,
-                downsample);
+                channel, ridgeFilter, sigmaMinUm, sigmaMaxUm, sigmaStepUm, invert, rollingBallUm, minFiberAreaUm2);
         String unit = ridge ? "response" : "";
         if ("manual".equals(m)) {
             return ridge
-                    ? new ThresholdIdentity("Manual", "response", manualResponse, "set by hand", settings)
-                    : new ThresholdIdentity("Manual", "gray level", manualGray, "set by hand", settings);
+                    ? new ThresholdIdentity("Manual", "response", manualResponse, "set by hand", settings, pixelUm)
+                    : new ThresholdIdentity("Manual", "gray level", manualGray, "set by hand", settings, pixelUm);
         }
         String method = m.startsWith("project") || m.contains("calibrated")
                 ? "Calibrated"
                 : "triangle".equals(m) ? "Triangle" : "Otsu";
         if (resolvedNorm == null) {
-            return new ThresholdIdentity(method, unit, Double.NaN, "fitted per region", settings);
+            return new ThresholdIdentity(method, unit, Double.NaN, "fitted per region", settings, pixelUm);
         }
-        return new ThresholdIdentity(method, unit, resolvedNorm, source == null ? "" : source, settings);
+        return new ThresholdIdentity(method, unit, resolvedNorm, source == null ? "" : source, settings, pixelUm);
     }
 
     /**
      * @param p            an annotation run's parameters
      * @param resolvedNorm the cut a pooled or calibrated method resolved to, or null for Manual
      * @param source       how it was obtained
+     * @param pixelUm      the image's analysed pixel size (its own times the analysis downsample)
      * @return the run's identity
      */
-    public static ThresholdIdentity of(FiberAnalysisParams p, Double resolvedNorm, String source) {
+    public static ThresholdIdentity of(FiberAnalysisParams p, Double resolvedNorm, String source, double pixelUm) {
         return of(
                 p.thresholdMethod(),
                 p.manualThreshold(),
@@ -130,14 +133,15 @@ public record ThresholdIdentity(String method, String unit, double value, String
                 p.invertIntensity(),
                 p.rollingBallRadiusUm(),
                 p.minFiberAreaUm2(),
-                Math.max(1.0, p.analysisDownsample()));
+                pixelUm);
     }
 
     /**
-     * @param s a density-map run's spec, after any pooling
+     * @param s       a density-map run's spec, after any pooling
+     * @param pixelUm the image's pixel size (maps are read at full resolution), NaN if not for one image
      * @return its identity
      */
-    public static ThresholdIdentity of(FiberDensityMapWorkflow.DensityMapJobSpec s) {
+    public static ThresholdIdentity of(FiberDensityMapWorkflow.DensityMapJobSpec s, double pixelUm) {
         return of(
                 s.fittedMethod,
                 s.manualThreshold,
@@ -152,7 +156,7 @@ public record ThresholdIdentity(String method, String unit, double value, String
                 s.invertIntensity,
                 s.rollingBallRadiusUm,
                 s.minFiberAreaUm2,
-                1.0);
+                pixelUm);
     }
 
     /** @return the cut as it reads, e.g. {@code Otsu response 0.0360} */
@@ -167,14 +171,35 @@ public record ThresholdIdentity(String method, String unit, double value, String
         return Double.isNaN(value) ? "?" : String.format(Locale.ROOT, "%.4g", value);
     }
 
-    /** @return the one-line form every output records */
-    public String label() {
-        return cut() + SEP + source + SEP + "settings " + settings;
+    /** @return the pixel size as the label prints it, or "" when unknown */
+    private String pixelText() {
+        return Double.isFinite(pixelUm) && pixelUm > 0 ? PixelSizeCheck.um(pixelUm) : "";
     }
 
-    /** @return what two comparable results share: the cut and the settings, not how it was obtained */
+    /** @return the one-line form every output records */
+    public String label() {
+        String px = pixelText();
+        return cut() + SEP + source + SEP + "settings " + settings + (px.isEmpty() ? "" : " at " + px + " um/px");
+    }
+
+    /** @return the cut and the settings; the pixel size is compared separately, with a tolerance */
     public String key() {
         return unit + ":" + valueText() + ":" + settings;
+    }
+
+    /**
+     * @param other another identity
+     * @return true when the two results can be compared: same cut, same settings, pixel sizes within
+     *     {@link #PIXEL_TOLERANCE} (or either unknown)
+     */
+    public boolean comparableWith(ThresholdIdentity other) {
+        return other != null && key().equals(other.key()) && samePixelSize(pixelUm, other.pixelUm);
+    }
+
+    /** @return true when two pixel sizes are within {@link #PIXEL_TOLERANCE}, or either is unknown */
+    public static boolean samePixelSize(double a, double b) {
+        if (!(a > 0) || !(b > 0)) return true;
+        return Math.max(a, b) / Math.min(a, b) <= PIXEL_TOLERANCE;
     }
 
     @Override
@@ -184,90 +209,102 @@ public record ThresholdIdentity(String method, String unit, double value, String
 
     /**
      * @param label a line written by {@link #label()}
-     * @return its comparison key, or null when the line is not one
-     */
-    public static String keyOf(String label) {
-        ThresholdIdentity t = parse(label);
-        return t == null ? null : t.key();
-    }
-
-    /**
-     * @param label a line written by {@link #label()}
      * @return the identity, or null when the line is not one
      */
     public static ThresholdIdentity parse(String label) {
         if (label == null) return null;
         String[] parts = label.trim().split(java.util.regex.Pattern.quote(SEP), -1);
-        if (parts.length != 3 || !parts[2].startsWith("settings ")) return null;
+        if (parts.length != 3) return null;
+        java.util.regex.Matcher sm = SETTINGS.matcher(parts[2].trim());
+        if (!sm.matches()) return null;
         String[] cut = parts[0].trim().split(" ");
         if (cut.length < 2) return null;
         String method = cut[0];
         String unit = String.join(" ", java.util.Arrays.copyOfRange(cut, 1, cut.length - 1));
         double value;
+        double px;
         try {
             value = "?".equals(cut[cut.length - 1]) ? Double.NaN : Double.parseDouble(cut[cut.length - 1]);
+            px = sm.group(2) == null ? Double.NaN : Double.parseDouble(sm.group(2));
         } catch (NumberFormatException e) {
             return null;
         }
-        return new ThresholdIdentity(method, unit, value, parts[1], parts[2].substring("settings ".length()));
+        return new ThresholdIdentity(method, unit, value, parts[1], sm.group(1), px);
     }
 
     /**
-     * Groups entries by the threshold recorded under a metadata key.
+     * Groups entries whose results can be compared with each other.
      *
      * @param labels entry name to recorded label, entries without one left out
-     * @return label to the entries cut at it, largest group first
+     * @return one label per group (its first member's) to the entries in it, largest group first
      */
     public static Map<String, List<String>> groups(Map<String, String> labels) {
-        Map<String, List<String>> byKey = new LinkedHashMap<>();
-        Map<String, String> labelOfKey = new LinkedHashMap<>();
+        List<Map.Entry<String, ThresholdIdentity>> parsed = new ArrayList<>();
+        Map<String, List<String>> unparsed = new LinkedHashMap<>();
         for (var e : labels.entrySet()) {
-            String k = keyOf(e.getValue());
-            if (k == null) k = e.getValue();
-            labelOfKey.putIfAbsent(k, e.getValue());
-            byKey.computeIfAbsent(k, x -> new ArrayList<>()).add(e.getKey());
+            ThresholdIdentity t = parse(e.getValue());
+            if (t == null)
+                unparsed.computeIfAbsent(e.getValue(), x -> new ArrayList<>()).add(e.getKey());
+            else parsed.add(Map.entry(e.getKey(), t));
+        }
+        parsed.sort((a, b) -> {
+            int c = a.getValue().key().compareTo(b.getValue().key());
+            return c != 0 ? c : Double.compare(px(a.getValue()), px(b.getValue()));
+        });
+        List<Map.Entry<ThresholdIdentity, List<String>>> found = new ArrayList<>();
+        for (var e : parsed) {
+            Map.Entry<ThresholdIdentity, List<String>> last = found.isEmpty() ? null : found.get(found.size() - 1);
+            if (last != null && last.getKey().comparableWith(e.getValue()))
+                last.getValue().add(e.getKey());
+            else found.add(Map.entry(e.getValue(), new ArrayList<>(List.of(e.getKey()))));
         }
         Map<String, List<String>> out = new LinkedHashMap<>();
-        byKey.entrySet().stream()
+        found.stream()
                 .sorted((a, b) ->
                         Integer.compare(b.getValue().size(), a.getValue().size()))
-                .forEach(e -> out.put(labelOfKey.get(e.getKey()), e.getValue()));
+                .forEach(g -> out.put(g.getKey().label(), g.getValue()));
+        out.putAll(unparsed);
         return out;
     }
 
+    private static double px(ThresholdIdentity t) {
+        return t.pixelUm > 0 ? t.pixelUm : 0;
+    }
+
     /**
-     * Says when other images in a project were cut at a different threshold than this one.
+     * Says when the results recorded across a project are not all comparable.
      *
-     * @param mine   this result's identity
-     * @param others other entries' recorded labels under the same key, by entry name
-     * @return a warning naming how many images differ and how, or null when all match
+     * @param labels  every image entry's recorded label, by entry name
+     * @param thisRun the entries the run that just finished covered
+     * @return a warning naming each group and its images, or null when they all compare
      */
-    public static String mismatchWarning(ThresholdIdentity mine, Map<String, String> others) {
-        Map<String, String> differ = new LinkedHashMap<>();
-        for (var e : others.entrySet()) {
-            String k = keyOf(e.getValue());
-            if (!mine.key().equals(k)) differ.put(e.getKey(), e.getValue());
-        }
-        if (differ.isEmpty()) return null;
+    public static String incomparableWarning(Map<String, String> labels, java.util.Collection<String> thisRun) {
+        Map<String, List<String>> groups = groups(labels);
+        if (groups.size() <= 1 || thisRun.isEmpty()) return null;
         StringBuilder sb = new StringBuilder();
-        sb.append(differ.size())
-                .append(" other image(s) in this project were cut at a different threshold, so their results are")
-                .append(" not comparable with these:");
+        sb.append("Results in this project were cut at ")
+                .append(groups.size())
+                .append(" different thresholds or pixel sizes, so they are not all comparable:");
         int shown = 0;
-        for (var g : groups(differ).entrySet()) {
-            if (shown++ == 3) {
+        for (var g : groups.entrySet()) {
+            if (shown++ == 4) {
                 sb.append("\n  ...");
                 break;
             }
             ThresholdIdentity t = parse(g.getKey());
-            String why = t == null
+            String what = t == null
                     ? g.getKey()
-                    : t.settings().equals(mine.settings())
-                            ? t.cut() + " (" + t.source() + ")"
-                            : t.cut() + " with other segmentation settings";
-            sb.append("\n  ").append(why).append(": ").append(nameList(g.getValue(), 3));
+                    : t.cut() + (t.pixelText().isEmpty() ? "" : " at " + t.pixelText() + " um/px") + ", settings "
+                            + t.settings() + " (" + t.source() + ")";
+            boolean mine = g.getValue().stream().anyMatch(thisRun::contains);
+            sb.append("\n  ")
+                    .append(what)
+                    .append(mine ? " [this run]" : "")
+                    .append(": ")
+                    .append(nameList(g.getValue(), 3));
         }
-        sb.append("\nRun them together, or use one project calibration, to compare them.");
+        sb.append("\nTo compare them, run them together (a batch can analyse images of different pixel sizes")
+                .append(" at one common size), or use one project calibration.");
         return sb.toString();
     }
 
@@ -289,19 +326,17 @@ public record ThresholdIdentity(String method, String unit, double value, String
             double sigmaStepUm,
             boolean invert,
             double rollingBallUm,
-            double minFiberAreaUm2,
-            double downsample) {
+            double minFiberAreaUm2) {
         boolean ridge = ridgeOn(ridgeFilter);
         String canon = String.format(
                 Locale.ROOT,
-                "channel=%s;ridge=%s;sigmas=%s;invert=%b;rb=%.6g;minarea=%.6g;ds=%.6g",
+                "channel=%s;ridge=%s;sigmas=%s;invert=%b;rb=%.6g;minarea=%.6g",
                 channel == null ? "" : channel.trim(),
                 ridge ? ridgeFilter.trim().toLowerCase(Locale.ROOT) : "none",
                 ridge ? String.format(Locale.ROOT, "%.6g,%.6g,%.6g", sigmaMinUm, sigmaMaxUm, sigmaStepUm) : "",
                 invert,
                 rollingBallUm,
-                minFiberAreaUm2,
-                downsample);
+                minFiberAreaUm2);
         try {
             byte[] h = MessageDigest.getInstance("SHA-256").digest(canon.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder();

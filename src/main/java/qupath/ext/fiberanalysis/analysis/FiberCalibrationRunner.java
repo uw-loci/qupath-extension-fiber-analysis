@@ -87,6 +87,11 @@ public final class FiberCalibrationRunner {
          * fitted at another scale is fitted on a different image.
          */
         public double analysisDownsample = 1.0;
+        /**
+         * Asked when the pooled images have different pixel sizes, with the check (and no extra
+         * note); null analyses each at its own size.
+         */
+        public java.util.function.BiFunction<PixelSizeCheck, String, PixelSizePrompt.Choice> onMixedPixelSizes;
     }
 
     /** Lightweight progress callback so the dialog can stream "(i/N) ..." updates. */
@@ -187,6 +192,25 @@ public final class FiberCalibrationRunner {
             // converted per image (PooledThreshold.poolZones, the same routine
             // an Otsu run pools with).
             double ds = Math.max(1.0, cfg.analysisDownsample);
+            Map<String, PixelSizeCheck.Image> scales = new LinkedHashMap<>();
+            for (EntryAnn ea : pool) {
+                PixelCalibration cal = ea.data.getServer().getPixelCalibration();
+                if (cal != null && cal.hasPixelSizeMicrons())
+                    scales.putIfAbsent(
+                            ea.entry.getImageName(),
+                            new PixelSizeCheck.Image(ea.entry.getImageName(), cal.getAveragedPixelSizeMicrons()));
+            }
+            PixelSizeCheck check = PixelSizeCheck.of(new ArrayList<>(scales.values()), ds);
+            boolean common = false;
+            if (check.mixed()) {
+                PixelSizePrompt.Choice choice = cfg.onMixedPixelSizes == null
+                        ? PixelSizePrompt.Choice.OWN
+                        : cfg.onMixedPixelSizes.apply(check, null);
+                logger.info("Calibration: images have different pixel sizes; chose {}\n{}", choice, check.describe());
+                if (choice == PixelSizePrompt.Choice.CANCEL)
+                    throw new IOException("Calibration cancelled: the images have different pixel sizes.");
+                common = choice == PixelSizePrompt.Choice.COMMON;
+            }
             List<PooledThreshold.ZoneRegion> regions = new ArrayList<>();
             java.util.TreeSet<Double> pixelSizes = new java.util.TreeSet<>();
             int uncalibrated = 0;
@@ -201,7 +225,11 @@ public final class FiberCalibrationRunner {
                 pixelSizes.add(px);
                 ROI roi = ea.ann.getROI();
                 regions.add(new PooledThreshold.ZoneRegion(
-                        server, roi, FiberAnalysisWorkflow.readBox(roi, server, cfg.borderZoneUm / px), ds, px));
+                        server,
+                        roi,
+                        FiberAnalysisWorkflow.readBox(roi, server, cfg.borderZoneUm / px),
+                        common ? check.downsampleFor(px) : ds,
+                        px));
             }
             if (uncalibrated > 0) {
                 logger.warn(
@@ -254,6 +282,9 @@ public final class FiberCalibrationRunner {
             params.put("rolling_ball_radius_um", cfg.rollingBallRadiusUm);
             params.put("pixel_sizes_um", new ArrayList<>(pixelSizes));
             params.put("analysis_downsample", ds);
+            // Fitted at one common pixel size, or each image at its own.
+            if (common) params.put("common_pixel_um", check.commonPixelUm());
+            else if (check.mixed()) params.put("mixed_pixel_sizes", true);
             params.put("border_zone_um", cfg.borderZoneUm);
             params.put("zone_mode", cfg.zoneMode);
             // Ridge responses are on a fixed scale (1.0 = a full-contrast fiber).

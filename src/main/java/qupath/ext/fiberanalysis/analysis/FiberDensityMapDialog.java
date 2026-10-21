@@ -417,6 +417,17 @@ public final class FiberDensityMapDialog {
         }
         List<ImageRow> picked = pickedRows();
         if (picked.isEmpty()) return;
+        PixelSizeCheck sizes = pixelSizes(picked);
+        if (sizes.mixed()
+                && PixelSizePrompt.ask(
+                                runBtn.getScene() == null
+                                        ? null
+                                        : runBtn.getScene().getWindow(),
+                                "Fiber density map",
+                                sizes,
+                                false,
+                                null)
+                        == PixelSizePrompt.Choice.CANCEL) return;
 
         List<ProjectImageEntry<BufferedImage>> entries = new ArrayList<>(picked.size());
         for (ImageRow r : picked) entries.add(r.entry);
@@ -592,10 +603,26 @@ public final class FiberDensityMapDialog {
         }
 
         String n = picked.size() + " image" + (picked.size() == 1 ? "" : "s");
+        PixelSizeCheck check = pixelSizes(picked);
+        if (check.mixed()) {
+            return ValidationResult.warn("Ready to run on " + n + ", but they have different pixel sizes:\n"
+                    + check.describe() + "\n" + PixelSizePrompt.WHY
+                    + " The density map reads each image at full resolution, so it cannot bring them to one size.");
+        }
         return ValidationResult.ok(
                 channelsMode
                         ? "Ready to run on " + n + ". Each also gets a new project entry with its density channels."
                         : "Ready to run on " + n + ". The images are not changed.");
+    }
+
+    /** @return the selected images' pixel sizes */
+    static PixelSizeCheck pixelSizes(List<ImageRow> picked) {
+        List<PixelSizeCheck.Image> images = new ArrayList<>();
+        for (ImageRow r : picked) {
+            ImageMeta m = r.getMeta();
+            images.add(new PixelSizeCheck.Image(r.getName(), m == null ? Double.NaN : m.pixelUm));
+        }
+        return PixelSizeCheck.of(images, 1.0);
     }
 
     private void applyValidation(ValidationResult v) {
@@ -876,7 +903,8 @@ public final class FiberDensityMapDialog {
                     server.isRGB(),
                     md.getWidth(),
                     md.getHeight(),
-                    cal != null && cal.hasPixelSizeMicrons());
+                    cal != null && cal.hasPixelSizeMicrons(),
+                    cal != null && cal.hasPixelSizeMicrons() ? cal.getAveragedPixelSizeMicrons() : Double.NaN);
         } catch (Exception ex) {
             logger.warn("Could not read meta for entry {}: {}", entry.getImageName(), ex.getMessage());
             return ImageMeta.unknown();
@@ -977,7 +1005,7 @@ public final class FiberDensityMapDialog {
             } else {
                 pixelTypeText.set(m.isRGB ? "uint8 RGB" : (m.pixelType != null ? m.pixelType.toString() : "?"));
                 dimensionsText.set(String.format("%d x %d", m.width, m.height));
-                calibrationText.set(m.hasPixelCalibration ? "Yes" : "No");
+                calibrationText.set(m.hasPixelCalibration ? PixelSizeCheck.um(m.pixelUm) + " um/px" : "No");
             }
         }
     }
@@ -989,16 +1017,25 @@ public final class FiberDensityMapDialog {
         public final int width;
         public final int height;
         public final boolean hasPixelCalibration;
+        /** Pixel size in microns, NaN when the image has none. */
+        public final double pixelUm;
 
-        public ImageMeta(PixelType pixelType, boolean isRGB, int width, int height, boolean hasPixelCalibration) {
+        public ImageMeta(
+                PixelType pixelType,
+                boolean isRGB,
+                int width,
+                int height,
+                boolean hasPixelCalibration,
+                double pixelUm) {
             this.pixelType = pixelType;
             this.isRGB = isRGB;
             this.width = width;
             this.height = height;
             this.hasPixelCalibration = hasPixelCalibration;
+            this.pixelUm = pixelUm;
         }
 
-        public static final ImageMeta UNKNOWN = new ImageMeta(null, false, 0, 0, false);
+        public static final ImageMeta UNKNOWN = new ImageMeta(null, false, 0, 0, false, Double.NaN);
 
         public static ImageMeta unknown() {
             return UNKNOWN;

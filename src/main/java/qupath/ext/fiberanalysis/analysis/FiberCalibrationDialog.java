@@ -302,6 +302,10 @@ public final class FiberCalibrationDialog {
         cfg.sigmaMinUm = FiberAnalysisPreferences.sigmaMinProperty().get();
         cfg.sigmaMaxUm = FiberAnalysisPreferences.sigmaMaxProperty().get();
         cfg.sigmaStepUm = FiberAnalysisPreferences.sigmaStepProperty().get();
+        javafx.stage.Window owner =
+                runBtn.getScene() == null ? null : runBtn.getScene().getWindow();
+        cfg.onMixedPixelSizes =
+                (check, note) -> PixelSizePrompt.ask(owner, "Fiber Analysis -- Calibration", check, true, note);
 
         runBtn.setDisable(true);
         progressBar.setVisible(true);

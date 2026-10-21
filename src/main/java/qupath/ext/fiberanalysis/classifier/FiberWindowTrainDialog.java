@@ -328,7 +328,33 @@ public final class FiberWindowTrainDialog {
                     t.groups()));
         }
         sb.append('\n').append(report.summary());
+        String scale = pixelSizeProblem(images);
+        if (scale != null) sb.append("\n[BLOCK] ").append(scale);
         return sb.toString();
+    }
+
+    /**
+     * A model's windows, GLCM offsets and box sizes are pixels, and Apply refuses an image more than
+     * 2% off the training pixel size, so the training images must share one.
+     *
+     * @return why the images cannot be trained on together, or null
+     */
+    private static String pixelSizeProblem(List<ImageRow> images) {
+        List<qupath.ext.fiberanalysis.analysis.PixelSizeCheck.Image> scales = new ArrayList<>();
+        for (ImageRow r : images)
+            scales.add(new qupath.ext.fiberanalysis.analysis.PixelSizeCheck.Image(
+                    r.entry.getImageName(), r.pixelSizeUm()));
+        var check = qupath.ext.fiberanalysis.analysis.PixelSizeCheck.of(scales, 1.0);
+        if (!check.uncalibrated().isEmpty()) {
+            return "No pixel size on " + String.join(", ", check.uncalibrated())
+                    + ": window sizes are in microns. Set it (Image > Set pixel size) or leave the image out.";
+        }
+        if (check.mixed()) {
+            return "The training images have different pixel sizes:\n" + check.describe()
+                    + "\nA model's features are measured in pixels, and Apply refuses an image more than 2% off"
+                    + " the training pixel size. Train on images of one pixel size.";
+        }
+        return null;
     }
 
     // ---------- run ----------
@@ -513,12 +539,13 @@ public final class FiberWindowTrainDialog {
             this.classNames = classNames;
         }
 
+        /** @return the image's pixel size in microns, NaN when it has none or cannot be read */
         double pixelSizeUm() {
             try {
                 var cal = entry.readImageData().getServer().getPixelCalibration();
-                return cal != null && cal.hasPixelSizeMicrons() ? cal.getAveragedPixelSizeMicrons() : 1.0;
+                return cal != null && cal.hasPixelSizeMicrons() ? cal.getAveragedPixelSizeMicrons() : Double.NaN;
             } catch (Exception ex) {
-                return 1.0;
+                return Double.NaN;
             }
         }
 

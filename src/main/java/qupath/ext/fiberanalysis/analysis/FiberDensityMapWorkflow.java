@@ -184,7 +184,7 @@ public final class FiberDensityMapWorkflow {
                 }
             }
 
-            ThresholdIdentity identity = ThresholdIdentity.of(runSpec);
+            ThresholdIdentity identity = ThresholdIdentity.of(runSpec, Double.NaN);
             logger.info("Threshold: {}", identity.label());
             List<ProjectImageEntry<BufferedImage>> made = new ArrayList<>();
             int total = entries.size();
@@ -212,8 +212,7 @@ public final class FiberDensityMapWorkflow {
                             "Fiber density map", "Image \"" + name + "\" failed: " + msg));
                 }
             }
-            ProjectThresholds.warnIfDiffers(
-                    project, made, identity, ThresholdIdentity.META_DENSITY, "Fiber density map");
+            ProjectThresholds.warnIfDiffers(project, made, ThresholdIdentity.META_DENSITY, "Fiber density map");
             final int okF = ok;
             final int failedF = failed;
             HeadlessFx.runLater(() -> {
@@ -414,7 +413,7 @@ public final class FiberDensityMapWorkflow {
         // source image, so readers draw it at any zoom.
         String safeName = sanitize(entry.getImageName());
         Path outPath = outRoot.resolve(safeName + "_density.ome.tif");
-        ThresholdIdentity identity = ThresholdIdentity.of(spec);
+        ThresholdIdentity identity = ThresholdIdentity.of(spec, pxUm);
         DensityTiffWriter.write(
                 outPath.toString(),
                 new DensityMapInfo(
@@ -928,7 +927,7 @@ public final class FiberDensityMapWorkflow {
             m.put("pixelStepUm", pixelStepUm);
             if (thresholdSource != null) m.put("thresholdSource", thresholdSource);
             m.put("fittedMethod", fittedMethod);
-            m.put("thresholdIdentity", ThresholdIdentity.of(this).label());
+            m.put("thresholdIdentity", ThresholdIdentity.of(this, Double.NaN).label());
             m.put("includeObjectDensity", includeObjectDensity);
             m.put("objectDensityClasses", objectDensityClasses);
             m.put("includePixelPositivity", includePixelPositivity);

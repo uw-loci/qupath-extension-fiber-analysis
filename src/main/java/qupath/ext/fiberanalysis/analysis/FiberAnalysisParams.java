@@ -128,6 +128,42 @@ public record FiberAnalysisParams(
         boolean collagenObjects) {
 
     /**
+     * @param downsample the analysis downsample
+     * @return these parameters at that downsample
+     */
+    public FiberAnalysisParams withAnalysisDownsample(double downsample) {
+        return with("analysisDownsample", downsample);
+    }
+
+    /**
+     * @param on whether texture (GLCM) is computed
+     * @return these parameters with texture on or off
+     */
+    public FiberAnalysisParams withTextureEnabled(boolean on) {
+        return with("textureEnabled", on);
+    }
+
+    /** A copy with one component replaced, through the canonical constructor. */
+    private FiberAnalysisParams with(String component, Object value) {
+        var comps = FiberAnalysisParams.class.getRecordComponents();
+        Object[] args = new Object[comps.length];
+        Class<?>[] types = new Class<?>[comps.length];
+        boolean found = false;
+        try {
+            for (int k = 0; k < comps.length; k++) {
+                types[k] = comps[k].getType();
+                boolean match = comps[k].getName().equals(component);
+                found |= match;
+                args[k] = match ? value : comps[k].getAccessor().invoke(this);
+            }
+            if (!found) throw new IllegalArgumentException("No component " + component);
+            return FiberAnalysisParams.class.getDeclaredConstructor(types).newInstance(args);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Could not copy FiberAnalysisParams", e);
+        }
+    }
+
+    /**
      * Builds a {@link FiberAnalysisParams} populated from current preference values.
      */
     public static FiberAnalysisParams fromPreferences() {

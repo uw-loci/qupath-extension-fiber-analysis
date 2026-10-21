@@ -105,6 +105,9 @@ public class FiberAnalysisWorkflow {
     /** The project at launch; the worker thread cannot ask QP for it. */
     private volatile Project<BufferedImage> projectAtLaunch;
 
+    /** Notes recorded with the run. */
+    private volatile List<String> runNotes = List.of();
+
     /** False when a batch compares thresholds across the project once, at its end. */
     private volatile boolean checkProjectThresholds = true;
 
@@ -179,6 +182,18 @@ public class FiberAnalysisWorkflow {
     public FiberAnalysisWorkflow withRunThreshold(double thresholdNorm, String source) {
         this.runThreshold = thresholdNorm;
         this.runThresholdSource = source;
+        return this;
+    }
+
+    /**
+     * Notes to record with the run (written to {@code run_notes.txt} and logged), such as a batch's
+     * pixel-size decision.
+     *
+     * @param notes the notes
+     * @return this workflow
+     */
+    public FiberAnalysisWorkflow withRunNotes(List<String> notes) {
+        this.runNotes = List.copyOf(notes);
         return this;
     }
 
@@ -416,7 +431,18 @@ public class FiberAnalysisWorkflow {
                         String.format(Locale.ROOT, "%.5f", runThreshold),
                         runThresholdSource);
             }
-            ThresholdIdentity identity = runIdentity(params, pooledHere ? ", run " + runFolder : "");
+            if (!runNotes.isEmpty()) {
+                for (String note : runNotes) logger.info("Run note: {}", note);
+                try {
+                    Files.writeString(outputRoot.resolve("run_notes.txt"), String.join("\n\n", runNotes) + "\n");
+                } catch (IOException e) {
+                    logger.warn("Could not write run_notes.txt: {}", e.getMessage());
+                }
+            }
+            ThresholdIdentity identity = runIdentity(
+                    params,
+                    pooledHere ? ", run " + runFolder : "",
+                    pixelSizeUm * Math.max(1.0, params.analysisDownsample()));
             if (identity != null) {
                 logger.info("Threshold: {}", identity.label());
                 writeThresholdRecord(outputRoot, params, identity);
@@ -547,11 +573,7 @@ public class FiberAnalysisWorkflow {
                 ProjectThresholds.record(projectAtLaunch, List.of(entry), ThresholdIdentity.META_ANNOTATIONS, identity);
                 if (checkProjectThresholds)
                     ProjectThresholds.warnIfDiffers(
-                            projectAtLaunch,
-                            List.of(entry),
-                            identity,
-                            ThresholdIdentity.META_ANNOTATIONS,
-                            "Fiber Analysis");
+                            projectAtLaunch, List.of(entry), ThresholdIdentity.META_ANNOTATIONS, "Fiber Analysis");
             }
 
             // Tell the panel we are done (status line flips to "complete in X s").
@@ -1844,22 +1866,24 @@ public class FiberAnalysisWorkflow {
      *
      * @param p         the run's parameters
      * @param runSuffix appended to a pooled source (the run folder when this run pooled it)
+     * @param pixelUm   the image's analysed pixel size
      * @return the identity, or null for an existing mask
      */
-    ThresholdIdentity runIdentity(FiberAnalysisParams p, String runSuffix) {
+    ThresholdIdentity runIdentity(FiberAnalysisParams p, String runSuffix, double pixelUm) {
         if ("existing".equalsIgnoreCase(p.segSource())) return null;
         if (poolsThreshold(p)) {
             return ThresholdIdentity.of(
-                    p, runThreshold, (runThresholdSource == null ? "" : runThresholdSource) + runSuffix);
+                    p, runThreshold, (runThresholdSource == null ? "" : runThresholdSource) + runSuffix, pixelUm);
         }
         if ("Project Otsu (calibrated)".equals(p.thresholdMethod())) {
             Path projDir = projectDirAtLaunch != null ? projectDirAtLaunch : resolveProjectDir();
             return ThresholdIdentity.of(
                     p,
                     loadCalibratedThreshold(p.projectCalibrationName(), projDir),
-                    "calibration '" + p.projectCalibrationName() + "'");
+                    "calibration '" + p.projectCalibrationName() + "'",
+                    pixelUm);
         }
-        return ThresholdIdentity.of(p, null, null);
+        return ThresholdIdentity.of(p, null, null, pixelUm);
     }
 
     /** Records the run's threshold beside params.json, so the cut a run used is on disk. */
@@ -1872,6 +1896,7 @@ public class FiberAnalysisWorkflow {
         o.addProperty("unit", id.unit().isEmpty() ? "fraction of full scale" : id.unit());
         o.addProperty("source", id.source());
         o.addProperty("settings_fingerprint", id.settings());
+        if (id.pixelUm() > 0) o.addProperty("analysed_pixel_um", id.pixelUm());
         JsonObject settings = new JsonObject();
         settings.addProperty("channel", p.internalChannel());
         settings.addProperty("ridge_filter", p.ridgeFilter());
@@ -2483,6 +2508,27 @@ public class FiberAnalysisWorkflow {
                 logger.info("Fiber Analysis (headless mode -- progress logged below).");
                 return;
             }
+            // A Stage can only be built on the FX thread; a batch calls in from its own.
+            if (javafx.application.Platform.isFxApplicationThread()) {
+                build(owner);
+            } else {
+                java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(() -> {
+                    build(owner);
+                    return null;
+                });
+                javafx.application.Platform.runLater(task);
+                try {
+                    task.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while opening the progress window", e);
+                } catch (java.util.concurrent.ExecutionException e) {
+                    throw new IllegalStateException("Could not open the progress window", e.getCause());
+                }
+            }
+        }
+
+        private void build(Window owner) {
             this.mainLabel = new Label("Starting...");
             this.mainBar = new ProgressBar(0);
             this.subLabel = new Label("");

@@ -61,10 +61,11 @@ public record SegmentationSpec(
         implements PooledThreshold.Settings {
 
     /**
-     * @param source how a pooled or calibrated threshold was obtained
+     * @param source  how a pooled or calibrated threshold was obtained
+     * @param pixelUm the pixel size the image was analysed at
      * @return the threshold this spec cuts at, for map files and objects
      */
-    public qupath.ext.fiberanalysis.analysis.ThresholdIdentity thresholdIdentity(String source) {
+    public qupath.ext.fiberanalysis.analysis.ThresholdIdentity thresholdIdentity(String source, double pixelUm) {
         return qupath.ext.fiberanalysis.analysis.ThresholdIdentity.of(
                 thresholdMethod,
                 manualThreshold,
@@ -79,7 +80,7 @@ public record SegmentationSpec(
                 invertIntensity,
                 rollingBallRadiusUm,
                 minFiberAreaUm2,
-                1.0);
+                pixelUm);
     }
 
     /**
