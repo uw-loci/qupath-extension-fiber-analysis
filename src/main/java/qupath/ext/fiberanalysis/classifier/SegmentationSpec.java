@@ -35,6 +35,7 @@ import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
  * @param segChannel           which scalar the threshold is taken on
  * @param thresholdMethod      otsu / triangle / manual / project_otsu
  * @param manualThreshold      cut-off in the source image's own gray levels
+ * @param manualResponseThreshold Manual cut on the ridge response (0-1), used instead with a ridge filter
  * @param projectThresholdNorm project-calibrated threshold in [0, 1], or null
  * @param ridgeFilter          none / frangi / sato / meijering
  * @param sigmaMinUm           smallest ridge scale
@@ -48,6 +49,7 @@ public record SegmentationSpec(
         String segChannel,
         String thresholdMethod,
         int manualThreshold,
+        double manualResponseThreshold,
         Double projectThresholdNorm,
         String ridgeFilter,
         double sigmaMinUm,
@@ -88,6 +90,7 @@ public record SegmentationSpec(
                 FiberAnalysisPreferences.internalChannelProperty().get(),
                 method,
                 FiberAnalysisPreferences.manualThresholdProperty().get(),
+                FiberAnalysisPreferences.manualResponseThresholdProperty().get(),
                 projectThresholdNorm,
                 FiberAnalysisPreferences.ridgeFilterProperty().get(),
                 FiberAnalysisPreferences.sigmaMinProperty().get(),
@@ -107,7 +110,9 @@ public record SegmentationSpec(
             return String.format(Locale.ROOT, "project-calibrated (%.4f)", projectThresholdNorm);
         }
         if ("manual".equalsIgnoreCase(thresholdMethod)) {
-            return "manual (" + manualThreshold + ")";
+            return ridgeFilterOn()
+                    ? String.format(Locale.ROOT, "manual (ridge response %.3g)", manualResponseThreshold)
+                    : "manual (" + manualThreshold + ")";
         }
         if (PooledThreshold.needsPooling(thresholdMethod)) {
             return thresholdMethod + ", pooled once over the training images";
@@ -133,6 +138,7 @@ public record SegmentationSpec(
                 segChannel,
                 "project_otsu",
                 manualThreshold,
+                manualResponseThreshold,
                 thresholdNorm,
                 ridgeFilter,
                 sigmaMinUm,
@@ -149,6 +155,7 @@ public record SegmentationSpec(
         m.put("seg_channel", segChannel);
         m.put("threshold_method", thresholdMethod);
         m.put("manual_threshold", manualThreshold);
+        m.put("manual_response_threshold", manualResponseThreshold);
         m.put("project_threshold_norm", projectThresholdNorm);
         m.put("ridge_filter", ridgeFilter);
         m.put("sigma_min_um", sigmaMinUm);
@@ -157,6 +164,8 @@ public record SegmentationSpec(
         m.put("min_fiber_area_um2", minFiberAreaUm2);
         m.put("invert_intensity", invertIntensity);
         m.put("rolling_ball_radius_um", rollingBallRadiusUm);
+        // Ridge responses are on a fixed scale (1.0 = a full-contrast fiber).
+        m.put("response_scale", "absolute");
         return m;
     }
 
@@ -171,6 +180,9 @@ public record SegmentationSpec(
                 str(m, "seg_channel"),
                 str(m, "threshold_method"),
                 (int) num(m, "manual_threshold"),
+                m.get("manual_response_threshold") instanceof Number r
+                        ? r.doubleValue()
+                        : FiberAnalysisPreferences.DEFAULT_MANUAL_RESPONSE_THRESHOLD,
                 norm instanceof Number n ? n.doubleValue() : null,
                 str(m, "ridge_filter"),
                 num(m, "sigma_min_um"),
@@ -179,6 +191,25 @@ public record SegmentationSpec(
                 num(m, "min_fiber_area_um2"),
                 Boolean.parseBoolean(String.valueOf(m.get("invert_intensity"))),
                 num(m, "rolling_ball_radius_um"));
+    }
+
+    /**
+     * @param m a stored segmentation map
+     * @return why a model with these settings cannot be applied any more, or null
+     */
+    public static String staleScaleProblem(Map<?, ?> m) {
+        Object rf = m.get("ridge_filter");
+        boolean ridge = rf != null && !"none".equalsIgnoreCase(String.valueOf(rf));
+        if (ridge && !m.containsKey("response_scale")) {
+            return "Trained with a ridge filter before ridge responses had a fixed scale; its threshold does"
+                    + " not apply to today's segmentation. Train the model again.";
+        }
+        return null;
+    }
+
+    /** @return true when a ridge filter is on, so thresholds apply to its response */
+    public boolean ridgeFilterOn() {
+        return ridgeFilter != null && !"none".equalsIgnoreCase(ridgeFilter);
     }
 
     private static String str(Map<?, ?> m, String k) {
@@ -208,6 +239,7 @@ public record SegmentationSpec(
         in.put("seg_channel", segChannel);
         in.put("threshold_method", thresholdMethod);
         in.put("manual_threshold", manualThreshold);
+        in.put("manual_response_threshold", manualResponseThreshold);
         in.put("ridge_filter", ridgeFilter);
         in.put("sigma_min", sigmaMinUm / pixelSizeUm);
         in.put("sigma_max", sigmaMaxUm / pixelSizeUm);
@@ -240,6 +272,9 @@ public record SegmentationSpec(
                 minFiberAreaUm2,
                 invertIntensity,
                 rollingBallRadiusUm);
+        if (ridgeFilterOn() && "manual".equalsIgnoreCase(thresholdMethod)) {
+            canonical += String.format(Locale.ROOT, "|r%.6g", manualResponseThreshold);
+        }
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] digest = md.digest(canonical.getBytes(StandardCharsets.UTF_8));

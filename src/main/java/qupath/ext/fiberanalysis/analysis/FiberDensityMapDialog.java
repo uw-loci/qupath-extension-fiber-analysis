@@ -451,6 +451,7 @@ public final class FiberDensityMapDialog {
                 FiberAnalysisPreferences.internalChannelProperty().get(),
                 thrMethod,
                 FiberAnalysisPreferences.manualThresholdProperty().get(),
+                FiberAnalysisPreferences.manualResponseThresholdProperty().get(),
                 FiberAnalysisPreferences.ridgeFilterProperty().get(),
                 FiberAnalysisPreferences.sigmaMinProperty().get(),
                 FiberAnalysisPreferences.sigmaMaxProperty().get(),

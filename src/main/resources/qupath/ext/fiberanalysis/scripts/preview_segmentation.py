@@ -10,7 +10,10 @@ Inputs (injected by Appose as Python variables):
     seg_channel           : str        same as the main run
     threshold_method      : str        'otsu' | 'triangle' | 'manual' | 'project_otsu'
     manual_threshold      : int        cut-off in the source image's own gray levels
-                                        (only used when threshold_method == 'manual')
+                                        (only used when threshold_method == 'manual'
+                                        and there is no ridge filter)
+    manual_response_threshold: float   Manual cut on the ridge response's
+                                        absolute scale, when a ridge filter is on
     project_threshold_norm: float|None [0,1] calibrated threshold (only used when
                                         threshold_method == 'project_otsu')
     ridge_filter          : str        'none' | 'frangi' | 'sato' | 'meijering'
@@ -74,6 +77,7 @@ try:
         channel=str(seg_channel),
         threshold_method=str(threshold_method).lower(),
         manual_threshold=int(manual_threshold),
+        manual_response_threshold=float(_opt("manual_response_threshold", 0.1)),
         ridge_filter=str(ridge_filter).lower(),
         sigma_min=float(sigma_min),
         sigma_max=float(sigma_max),

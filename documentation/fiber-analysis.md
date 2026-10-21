@@ -442,7 +442,11 @@ extension made.
 Optionally a **ridge filter** (Frangi, Sato, or
 Meijering from scikit-image) runs first across a configurable
 **sigma range** (default 1-4 um, step 1 um) to enhance line-like
-structures before the threshold. The thresholded mask is then
+structures before the threshold. Its response is on a fixed 0-1 scale,
+the same in every region (see the limits below). scikit-image's Frangi
+and Meijering rescale to each image by default; here Frangi's sensitivity
+is fixed from a full-contrast reference fiber, and Meijering is computed
+without the per-image division. The thresholded mask is then
 cleaned: `binary_closing` to bridge 1-px gaps, then
 `remove_small_objects` at the **Min fiber area** (default 1.0 um2).
 The clean mask is the fiber segmentation.
@@ -484,11 +488,19 @@ across the thinnest fibres.
 
 Two limits worth knowing before choosing Manual:
 
-- A **ridge filter changes what the number means.** A vesselness
-  response carries no image units, so with Frangi / Sato / Meijering
-  selected the manual value is read as that same fraction of full
-  scale (4500 of 65535 = 6.9%) of the response's own range. Otsu and
-  Triangle are unaffected either way.
+- A **ridge filter changes what the number means.** With Frangi, Sato or
+  Meijering selected, every threshold applies to the filter's response,
+  and the Manual control becomes **Response cutoff (0-1)**. The response
+  is on one fixed scale in every region and image: 1.0 is the response of
+  a fiber at full contrast (as bright as the image format allows) at the
+  smallest sigma, so with Sato or Meijering a fiber at 30% contrast
+  responds at about 0.3 (Frangi responds less to faint fibers: about
+  0.19). Check a cutoff with **Preview segmentation**, or let Otsu pick
+  one. A saved calibration applies only when it was fitted with the same
+  source channel, ridge filter, sigmas, invert and rolling-ball settings;
+  the dialog says when it was not, and a run refuses it. Calibrations
+  and window classifiers made with a ridge filter before fiberlib 0.4.1
+  were on a per-region scale and must be made again.
 - On a multi-channel image, **name a channel to keep 16-bit
   precision.** Regions are handed to Python as PNG, and PIL has no
   16-bit colour mode, so a multi-band 16-bit region would be truncated

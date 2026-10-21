@@ -256,6 +256,10 @@ public final class FiberWindowApplyDialog {
         // mismatch while the user can still change it, not to replace the
         // Python-side refusal.
         problems.removeIf(p -> p.startsWith("Feature set") || p.startsWith("Same features"));
+        if (model.geometry().get("segmentation") instanceof Map<?, ?> seg) {
+            String stale = SegmentationSpec.staleScaleProblem(seg);
+            if (stale != null) problems.add(0, stale);
+        }
         compatibilityLabel.setText(problems.isEmpty() ? "" : String.join("\n", problems));
         overrideCheck.setDisable(problems.isEmpty());
         acknowledgeCheck.setDisable(!model.provisional());
@@ -366,6 +370,10 @@ public final class FiberWindowApplyDialog {
         try {
             ImageData<BufferedImage> data = gui.getImageData();
             RegionRequest region = scopeRegion();
+            if (model.geometry().get("segmentation") instanceof Map<?, ?> stored) {
+                String stale = SegmentationSpec.staleScaleProblem(stored);
+                if (stale != null) throw new java.io.IOException(stale);
+            }
             var seg = segmentationFor(model);
             var request = new WindowClassifierWorkflow.Request(
                     WindowFeatureMatrix.Spec.defaults(

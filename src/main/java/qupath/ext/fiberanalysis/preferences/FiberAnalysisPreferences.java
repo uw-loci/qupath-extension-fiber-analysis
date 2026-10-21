@@ -65,6 +65,10 @@ public class FiberAnalysisPreferences {
     public static final String DEFAULT_INTERNAL_CHANNEL = "Raw intensity";
     public static final String DEFAULT_THRESHOLD_METHOD = "Otsu";
     public static final int DEFAULT_MANUAL_THRESHOLD = 128;
+
+    /** Manual cut on a ridge filter's response: 0-1, where 1 is a full-contrast fiber. */
+    public static final double DEFAULT_MANUAL_RESPONSE_THRESHOLD = 0.1;
+
     public static final String DEFAULT_RIDGE_FILTER = "None";
     // All spatial inputs are in microns. The Python pipeline still needs
     // pixel-domain values for sigma / area / box-size; Java converts at the
@@ -158,6 +162,7 @@ public class FiberAnalysisPreferences {
     private static StringProperty internalChannel;
     private static StringProperty thresholdMethod;
     private static IntegerProperty manualThreshold;
+    private static DoubleProperty manualResponseThreshold;
     private static StringProperty ridgeFilter;
     private static DoubleProperty sigmaMin;
     private static DoubleProperty sigmaMax;
@@ -244,6 +249,8 @@ public class FiberAnalysisPreferences {
         internalChannel = PathPrefs.createPersistentPreference(PREFIX + "internalChannel", DEFAULT_INTERNAL_CHANNEL);
         thresholdMethod = PathPrefs.createPersistentPreference(PREFIX + "thresholdMethod", DEFAULT_THRESHOLD_METHOD);
         manualThreshold = PathPrefs.createPersistentPreference(PREFIX + "manualThreshold", DEFAULT_MANUAL_THRESHOLD);
+        manualResponseThreshold = PathPrefs.createPersistentPreference(
+                PREFIX + "manualResponseThreshold", DEFAULT_MANUAL_RESPONSE_THRESHOLD);
         ridgeFilter = PathPrefs.createPersistentPreference(PREFIX + "ridgeFilter", DEFAULT_RIDGE_FILTER);
         // New pref keys (sigmaMinUm etc.) because we switched units; legacy
         // keys (sigmaMin in px) would otherwise silently be re-interpreted as
@@ -358,6 +365,11 @@ public class FiberAnalysisPreferences {
 
     public static IntegerProperty manualThresholdProperty() {
         return manualThreshold;
+    }
+
+    /** @return the Manual cut used when a ridge filter is on, on the response's 0-1 scale */
+    public static DoubleProperty manualResponseThresholdProperty() {
+        return manualResponseThreshold;
     }
 
     public static StringProperty ridgeFilterProperty() {

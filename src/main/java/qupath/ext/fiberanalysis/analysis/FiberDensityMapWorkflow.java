@@ -452,6 +452,7 @@ public final class FiberDensityMapWorkflow {
         in.put("seg_channel", spec.segChannel);
         in.put("threshold_method", spec.thresholdMethod);
         in.put("manual_threshold", spec.manualThreshold);
+        in.put("manual_response_threshold", spec.manualResponseThreshold);
         in.put("ridge_filter", spec.ridgeFilter);
         in.put("sigma_min", spec.sigmaMinUm / pixelSizeUm);
         in.put("sigma_max", spec.sigmaMaxUm / pixelSizeUm);
@@ -677,6 +678,9 @@ public final class FiberDensityMapWorkflow {
         public final String segChannel;
         public final String thresholdMethod;
         public final int manualThreshold;
+        /** Manual cut on the ridge response (0-1), used instead of {@link #manualThreshold} with a ridge filter. */
+        public final double manualResponseThreshold;
+
         public final String ridgeFilter;
         public final double sigmaMinUm;
         public final double sigmaMaxUm;
@@ -739,6 +743,7 @@ public final class FiberDensityMapWorkflow {
                 String segChannel,
                 String thresholdMethod,
                 int manualThreshold,
+                double manualResponseThreshold,
                 String ridgeFilter,
                 double sigmaMinUm,
                 double sigmaMaxUm,
@@ -759,6 +764,7 @@ public final class FiberDensityMapWorkflow {
             this.segChannel = segChannel;
             this.thresholdMethod = thresholdMethod;
             this.manualThreshold = manualThreshold;
+            this.manualResponseThreshold = manualResponseThreshold;
             this.ridgeFilter = ridgeFilter;
             this.sigmaMinUm = sigmaMinUm;
             this.sigmaMaxUm = sigmaMaxUm;
@@ -806,6 +812,7 @@ public final class FiberDensityMapWorkflow {
             this.segChannel = o.segChannel;
             this.thresholdMethod = "project_otsu";
             this.manualThreshold = o.manualThreshold;
+            this.manualResponseThreshold = o.manualResponseThreshold;
             this.ridgeFilter = o.ridgeFilter;
             this.sigmaMinUm = o.sigmaMinUm;
             this.sigmaMaxUm = o.sigmaMaxUm;
@@ -878,6 +885,7 @@ public final class FiberDensityMapWorkflow {
             m.put("segChannel", segChannel);
             m.put("thresholdMethod", thresholdMethod);
             m.put("manualThreshold", manualThreshold);
+            m.put("manualResponseThreshold", manualResponseThreshold);
             m.put("ridgeFilter", ridgeFilter);
             m.put("sigmaMinUm", sigmaMinUm);
             m.put("sigmaMaxUm", sigmaMaxUm);
@@ -937,6 +945,11 @@ public final class FiberDensityMapWorkflow {
                     jstring(p, "segChannel", "Raw intensity"),
                     jstring(p, "thresholdMethod", "Otsu"),
                     jint(p, "manualThreshold", 128),
+                    jdouble(
+                            p,
+                            "manualResponseThreshold",
+                            qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences
+                                    .DEFAULT_MANUAL_RESPONSE_THRESHOLD),
                     jstring(p, "ridgeFilter", "None"),
                     jdouble(p, "sigmaMinUm", 1.0),
                     jdouble(p, "sigmaMaxUm", 4.0),

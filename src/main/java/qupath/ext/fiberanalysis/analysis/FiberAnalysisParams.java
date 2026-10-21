@@ -43,6 +43,9 @@ public record FiberAnalysisParams(
         String internalChannel,
         String thresholdMethod, // "Otsu" | "Triangle" | "Manual" | "Project Otsu (calibrated)"
         int manualThreshold,
+        // Manual cut on the ridge response (0-1, 1 = a full-contrast fiber),
+        // used instead of manualThreshold when a ridge filter is on.
+        double manualResponseThreshold,
         String ridgeFilter, // "None" | "Frangi" | "Sato" | "Meijering"
         // sigma values are in microns; Java converts to pixels per-image
         // using the image's measured pixel size before passing to Python.
@@ -142,6 +145,7 @@ public record FiberAnalysisParams(
                 FiberAnalysisPreferences.internalChannelProperty().get(),
                 FiberAnalysisPreferences.thresholdMethodProperty().get(),
                 FiberAnalysisPreferences.manualThresholdProperty().get(),
+                FiberAnalysisPreferences.manualResponseThresholdProperty().get(),
                 FiberAnalysisPreferences.ridgeFilterProperty().get(),
                 FiberAnalysisPreferences.sigmaMinProperty().get(),
                 FiberAnalysisPreferences.sigmaMaxProperty().get(),

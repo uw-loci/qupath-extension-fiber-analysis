@@ -94,6 +94,8 @@ public final class MeasureDefinitionsScenario {
         FiberAnalysisPreferences.straightnessEnabledProperty().set(true);
         FiberAnalysisPreferences.textureEnabledProperty().set(true);
         FiberAnalysisPreferences.outputDirProperty().set(outDir.toString());
+        // -Dfiber.harness.ridge=Sato runs the same checks with a ridge filter.
+        FiberAnalysisPreferences.ridgeFilterProperty().set(System.getProperty("fiber.harness.ridge", "None"));
         var params = FiberAnalysisParams.fromPreferences();
 
         var entry = project.getImageList().get(0);

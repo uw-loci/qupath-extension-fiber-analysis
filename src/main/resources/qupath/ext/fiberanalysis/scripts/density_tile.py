@@ -40,7 +40,11 @@ Inputs (Appose 0.10+ injected as variables):
     seg_channel              : str   'Value (HSV)', 'Raw intensity', etc.
     threshold_method         : str   'otsu' | 'triangle' | 'manual' | 'project_otsu'
     manual_threshold         : int   cut-off in the source image's own gray
-                                     levels (used only when method == 'manual')
+                                     levels (used only when method == 'manual'
+                                     and there is no ridge filter)
+    manual_response_threshold: float  Manual cut on the ridge response's
+                                     absolute scale (1.0 = a full-contrast
+                                     fiber), when a ridge filter is on
     project_threshold_norm   : float|None   threshold in normalised [0,1] space
                                               for the project_otsu method
     ridge_filter             : str   'none' | 'frangi' | 'sato' | 'meijering'
@@ -324,6 +328,7 @@ try:
     seg_chan = str(seg_channel)
     thr_method = str(threshold_method).lower()
     manual_thr = int(manual_threshold)
+    manual_resp = float(opt_get("manual_response_threshold", 0.1))
     rf = str(ridge_filter).lower()
     smin = float(sigma_min)
     smax = float(sigma_max)
@@ -361,6 +366,7 @@ try:
         channel=seg_chan,
         threshold_method=thr_method,
         manual_threshold=manual_thr,
+        manual_response_threshold=manual_resp,
         ridge_filter=rf,
         sigma_min=smin,
         sigma_max=smax,

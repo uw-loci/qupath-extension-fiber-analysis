@@ -42,6 +42,7 @@ import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
@@ -327,6 +328,7 @@ public final class FiberAnalysisBatchDialog {
                 base.internalChannel(),
                 base.thresholdMethod(),
                 base.manualThreshold(),
+                base.manualResponseThreshold(),
                 base.ridgeFilter(),
                 base.sigmaMinUm(),
                 base.sigmaMaxUm(),
@@ -510,6 +512,7 @@ public final class FiberAnalysisBatchDialog {
                 str(obj, "internalChannel", "Value (HSV)"),
                 str(obj, "thresholdMethod", "Otsu"),
                 (int) num(obj, "manualThreshold", 128),
+                num(obj, "manualResponseThreshold", FiberAnalysisPreferences.DEFAULT_MANUAL_RESPONSE_THRESHOLD),
                 str(obj, "ridgeFilter", "None"),
                 num(obj, "sigmaMinUm", 1.0),
                 num(obj, "sigmaMaxUm", 4.0),

@@ -99,6 +99,7 @@ try:
     seg_chan = str(seg_channel)
     thr_method = str(threshold_method).lower()
     manual_thr = int(manual_threshold)
+    manual_resp = float(opt_get("manual_response_threshold", 0.1))
     rf = str(ridge_filter).lower()
     smin = float(sigma_min)
     smax = float(sigma_max)
@@ -131,6 +132,7 @@ try:
         channel=seg_chan,
         threshold_method=thr_method,
         manual_threshold=manual_thr,
+        manual_response_threshold=manual_resp,
         ridge_filter=rf,
         sigma_min=smin,
         sigma_max=smax,

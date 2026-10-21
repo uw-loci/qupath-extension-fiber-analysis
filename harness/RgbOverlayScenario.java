@@ -126,7 +126,7 @@ public final class RgbOverlayScenario {
             // Brightfield: saturation picks out stained tissue on a white
             // background without inverting.
             var spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
-                    WINDOW_UM, OVERLAP, "Saturation (HSV)", "Otsu", 0, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0,
+                    WINDOW_UM, OVERLAP, "Saturation (HSV)", "Otsu", 0, 0.1, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0,
                     null, true, "window", 0.0, false, List.of(), false, List.of());
             long t0 = System.nanoTime();
             Thread t = new FiberDensityMapWorkflow().runForEntries(spec, List.of(entry), project, null);

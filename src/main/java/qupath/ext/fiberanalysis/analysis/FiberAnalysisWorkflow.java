@@ -1385,6 +1385,7 @@ public class FiberAnalysisWorkflow {
         in.put("seg_channel", p.internalChannel());
         in.put("threshold_method", p.thresholdMethod().toLowerCase());
         in.put("manual_threshold", p.manualThreshold());
+        in.put("manual_response_threshold", p.manualResponseThreshold());
         in.put("ridge_filter", p.ridgeFilter().toLowerCase());
         // All spatial inputs are exposed to the user in microns. Convert to
         // pixels here using this image's measured pixel size so the Python
@@ -1425,6 +1426,17 @@ public class FiberAnalysisWorkflow {
                         + " Refusing to fall back to per-region Otsu, which would make the images"
                         + " incomparable without saying so.");
             }
+            String mismatch = calibrationMismatch(
+                    p.projectCalibrationName(),
+                    calProjDir,
+                    p.internalChannel(),
+                    p.ridgeFilter(),
+                    p.invertIntensity(),
+                    p.rollingBallRadiusUm(),
+                    p.sigmaMinUm(),
+                    p.sigmaMaxUm(),
+                    p.sigmaStepUm());
+            if (mismatch != null) throw new IOException(mismatch);
             in.put("project_threshold_norm", thr);
             // Also normalise the threshold_method string into the snake_case
             // value the Python segmentation module recognises.
@@ -1686,6 +1698,81 @@ public class FiberAnalysisWorkflow {
     }
 
     /**
+     * Why a saved calibration does not apply to these settings, or null when it does.
+     * A threshold is a cut on one particular scalar image, so the channel, polarity,
+     * background subtraction and ridge filter it was fitted on must match the run's.
+     *
+     * @param calibrationName calibration to check
+     * @param projDir         project directory
+     * @param channel         the run's source channel
+     * @param ridgeFilter     the run's ridge filter ("None" for none)
+     * @param invert          the run's invert-intensity setting
+     * @param rollingBallUm   the run's rolling-ball radius, microns
+     * @param sigmaMinUm      the run's smallest ridge sigma, microns
+     * @param sigmaMaxUm      the run's largest ridge sigma, microns
+     * @param sigmaStepUm     the run's ridge sigma step, microns
+     * @return a sentence for the user, or null
+     */
+    static String calibrationMismatch(
+            String calibrationName,
+            Path projDir,
+            String channel,
+            String ridgeFilter,
+            boolean invert,
+            double rollingBallUm,
+            double sigmaMinUm,
+            double sigmaMaxUm,
+            double sigmaStepUm) {
+        if (calibrationName == null || calibrationName.isBlank() || projDir == null) return null;
+        JsonObject cp;
+        try {
+            Path calFile = projDir.resolve("fiber-analysis").resolve("calibration_" + calibrationName + ".json");
+            if (!Files.isRegularFile(calFile)) return null;
+            JsonObject obj = new Gson().fromJson(Files.readString(calFile), JsonObject.class);
+            if (obj == null || !obj.has("calibration_params")) return null;
+            cp = obj.getAsJsonObject("calibration_params");
+        } catch (Exception ex) {
+            return null;
+        }
+        List<String> diffs = new ArrayList<>();
+        String calRidge = cp.has("ridge_filter") ? cp.get("ridge_filter").getAsString() : "None";
+        boolean ridgeOn = ridgeFilter != null && !"none".equalsIgnoreCase(ridgeFilter);
+        if (cp.has("seg_channel") && !cp.get("seg_channel").getAsString().equals(channel))
+            diffs.add("source channel " + cp.get("seg_channel").getAsString());
+        if (!calRidge.equalsIgnoreCase(ridgeFilter == null ? "None" : ridgeFilter))
+            diffs.add("ridge filter " + calRidge);
+        if (cp.has("invert_intensity") && cp.get("invert_intensity").getAsBoolean() != invert)
+            diffs.add(invert ? "intensity not inverted" : "intensity inverted");
+        if (cp.has("rolling_ball_radius_um")
+                && Math.abs(cp.get("rolling_ball_radius_um").getAsDouble() - rollingBallUm) > 1e-6)
+            diffs.add("rolling ball " + cp.get("rolling_ball_radius_um").getAsDouble() + " um");
+        if (ridgeOn && calRidge.equalsIgnoreCase(ridgeFilter)) {
+            if (Math.abs(num(cp, "sigma_min_um") - sigmaMinUm) > 1e-6
+                    || Math.abs(num(cp, "sigma_max_um") - sigmaMaxUm) > 1e-6
+                    || Math.abs(num(cp, "sigma_step_um") - sigmaStepUm) > 1e-6) {
+                diffs.add(String.format(
+                        Locale.ROOT,
+                        "sigmas %.2g-%.2g step %.2g um",
+                        num(cp, "sigma_min_um"),
+                        num(cp, "sigma_max_um"),
+                        num(cp, "sigma_step_um")));
+            }
+            if (!cp.has("response_scale")) {
+                return "Calibration '" + calibrationName + "' was made before ridge responses had a fixed scale,"
+                        + " so its threshold does not apply. Calibrate again.";
+            }
+        }
+        if (diffs.isEmpty()) return null;
+        return "Calibration '" + calibrationName + "' was fitted with " + String.join(", ", diffs)
+                + "; its threshold is a cut on a different image. Calibrate again with these settings, or"
+                + " match them.";
+    }
+
+    private static double num(JsonObject o, String key) {
+        return o.has(key) && !o.get(key).isJsonNull() ? o.get(key).getAsDouble() : Double.NaN;
+    }
+
+    /**
      * Resolves the base directory under which the per-run subdirectory is
      * created. Priority:
      * <ol>
@@ -1818,6 +1905,7 @@ public class FiberAnalysisWorkflow {
         m.put("internalChannel", p.internalChannel());
         m.put("thresholdMethod", p.thresholdMethod());
         m.put("manualThreshold", p.manualThreshold());
+        m.put("manualResponseThreshold", p.manualResponseThreshold());
         m.put("ridgeFilter", p.ridgeFilter());
         m.put("sigmaMinUm", p.sigmaMinUm());
         m.put("sigmaMaxUm", p.sigmaMaxUm());
@@ -1942,6 +2030,7 @@ public class FiberAnalysisWorkflow {
         ordered.put("internalChannel", p.internalChannel());
         ordered.put("thresholdMethod", p.thresholdMethod());
         ordered.put("manualThreshold", p.manualThreshold());
+        ordered.put("manualResponseThreshold", p.manualResponseThreshold());
         ordered.put("ridgeFilter", p.ridgeFilter());
         ordered.put("sigmaMinUm", p.sigmaMinUm());
         ordered.put("sigmaMaxUm", p.sigmaMaxUm());

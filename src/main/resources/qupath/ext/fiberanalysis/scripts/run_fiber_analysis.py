@@ -38,6 +38,7 @@ _FORWARD = [
     "seg_channel",
     "threshold_method",
     "manual_threshold",
+    "manual_response_threshold",
     "ridge_filter",
     "sigma_min",
     "sigma_max",

@@ -22,6 +22,15 @@ References used in this module:
         Med Image Anal 2(2).
     Meijering, E. et al. (2004). Design and validation of a tool for neurite
         tracing and analysis. Cytometry Part A 58(2).
+
+Ridge responses are on one absolute scale: 1.0 is the response of a
+full-contrast fiber (a unit-amplitude Gaussian ridge at the smallest sigma).
+scikit-image's Frangi picks its structureness constant from each image and its
+Meijering divides each image's response by its own maximum, which made every
+region's response relative to that region. Here Frangi gets a fixed gamma from
+the reference ridge, Meijering is computed without the per-image division (the
+eigenvalue combination is scikit-image's, BSD-3-Clause), and all three are
+divided by their response on the reference ridge.
 """
 
 import logging
@@ -31,6 +40,7 @@ import numpy as np
 from skimage import filters as skfilters
 from skimage import morphology as skmorph
 from skimage.color import rgb2hsv
+from skimage.feature import hessian_matrix, hessian_matrix_eigvals
 
 logger = logging.getLogger("fiber.segmentation")
 
@@ -163,17 +173,57 @@ def apply_ridge_filter(
     if not sigmas:
         sigmas = [float(sigma_min)]
 
+    ref, c = _reference_ridge(sigmas[0], black_ridges)
     if name == "frangi":
-        return skfilters.frangi(
-            image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges)
+        # gamma from the reference ridge, not from this image's strongest
+        # structure (scikit-image's default).
+        eig = hessian_matrix_eigvals(
+            hessian_matrix(ref, sigmas[0], mode="reflect", use_gaussian_derivatives=True)
         )
-    if name == "sato":
-        return skfilters.sato(
-            image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges)
-        )
-    return skfilters.meijering(
-        image_scalar, sigmas=sigmas, black_ridges=bool(black_ridges)
-    )
+        gamma = float(np.sqrt((eig**2).sum(0))[c, c]) / 2.0
+
+        def run(img):
+            return skfilters.frangi(img, sigmas=sigmas, black_ridges=bool(black_ridges), gamma=gamma)
+
+    elif name == "sato":
+
+        def run(img):
+            return skfilters.sato(img, sigmas=sigmas, black_ridges=bool(black_ridges))
+
+    else:
+
+        def run(img):
+            return _meijering_absolute(img, sigmas, bool(black_ridges))
+
+    scale = float(run(ref)[c, c])
+    if not scale > 0:
+        logger.warning("Ridge filter %s gave no response on the reference ridge; response left unscaled", name)
+        scale = 1.0
+    return np.clip(run(image_scalar) / scale, 0.0, 1.0).astype(np.float32)
+
+
+def _reference_ridge(sigma, black_ridges):
+    """A unit-amplitude Gaussian ridge of width ``sigma`` (dark if ``black_ridges``), and its centre index."""
+    half = int(np.ceil(6.0 * sigma)) + 2
+    x = np.arange(-half, half + 1, dtype=np.float32)
+    ridge = np.tile(np.exp(-(x**2) / (2.0 * sigma * sigma)), (2 * half + 1, 1))
+    return (1.0 - ridge if black_ridges else ridge), half
+
+
+def _meijering_absolute(image, sigmas, black_ridges):
+    """Meijering neuriteness without scikit-image's per-image max normalisation."""
+    img = np.asarray(image, dtype=np.float32)
+    if not black_ridges:
+        img = -img
+    alpha = 1.0 / 3.0  # scikit-image's default for 2-D, 1 / (ndim + 1)
+    mtx = np.array([[1.0, alpha], [alpha, 1.0]], dtype=np.float32)
+    out = np.zeros_like(img)
+    for sigma in sigmas:
+        eig = hessian_matrix_eigvals(hessian_matrix(img, sigma, mode="reflect", use_gaussian_derivatives=True))
+        vals = np.tensordot(mtx, eig, 1)
+        vals = np.take_along_axis(vals, abs(vals).argmax(0)[None], 0).squeeze(0)
+        out = np.maximum(out, np.maximum(vals, 0))
+    return out
 
 
 # ---- thresholding ----------------------------------------------------------
@@ -244,21 +294,17 @@ def threshold_scalar(
 # ---- entry points ----------------------------------------------------------
 
 
-def flatten_background(
-    scalar, invert_intensity=False, rolling_ball_radius=0, rescale=False
-):
+def flatten_background(scalar, invert_intensity=False, rolling_ball_radius=0):
     """Invert (optionally) then subtract local background with a rolling ball.
 
     The one preprocessing rule shared by segmentation and the threshold-free
-    signal channels, so both see the same image.
+    signal channels, so both see the same image. Nothing is rescaled, so the
+    result stays on the input's absolute scale.
 
     Args:
         scalar:              (H, W) float scalar in [0, 1].
         invert_intensity:    flip bright and dark first (DAB-style images).
         rolling_ball_radius: white top-hat disk radius in pixels; 0 disables.
-        rescale:             divide by the max afterwards. Only for a ridge
-                             RESPONSE: on an intensity it would put the gray
-                             levels back on a per-region scale.
 
     Returns:
         (H, W) float array.
@@ -269,10 +315,6 @@ def flatten_background(
             from skimage.morphology import white_tophat, disk
 
             out = white_tophat(out, footprint=disk(int(rolling_ball_radius)))
-            if rescale:
-                m = float(out.max())
-                if m > 1e-12:
-                    out = out / m
         except Exception as exc:
             logger.warning("Rolling-ball failed: %s -- using raw scalar", exc)
     return out
@@ -292,6 +334,7 @@ def segment_internal(
     rolling_ball_radius=0,
     project_threshold_norm=None,
     fit_mask=None,
+    manual_response_threshold=0.1,
 ):
     """Internal fiber segmenter. See module docstring for parameters.
 
@@ -310,11 +353,11 @@ def segment_internal(
 
     Scale contract: with no ridge filter the scalar keeps the source image's
     absolute scale, so ``manual_threshold`` is a gray level in the image's own
-    units and a calibrated threshold is comparable across the project. A ridge
-    filter's response has no image units, so that branch min-max stretches the
-    region and both thresholds become a fraction of the response range. Otsu
-    and triangle are unaffected either way -- a min-max stretch is affine, so
-    it maps their threshold without moving the partition.
+    units. With a ridge filter the scalar is the ridge response on its absolute
+    scale (1.0 = a full-contrast fiber; see :func:`apply_ridge_filter`), and a
+    Manual cut is ``manual_response_threshold`` on that scale. Either way no
+    region is rescaled to its own range, so Manual, calibrated and pooled
+    thresholds mean the same thing in every region and image.
     """
     scalar = pick_channel(image, channel)
     # Ridge polarity: when invert_intensity is True we're segmenting a DAB-
@@ -329,24 +372,22 @@ def segment_internal(
         black_ridges=bool(invert_intensity),
     )
     response = str(ridge_filter or "none").lower() in _RIDGE_FILTERS
-    # One arithmetic rule either way: manual_threshold / manual_full_scale is
-    # the cut on [0,1]. Without a ridge filter that is an absolute gray level;
-    # with one it is that same fraction of the response's own range.
-    manual_full_scale = full_scale(image)
-
-    if response and enhanced.max() > enhanced.min():
-        normed = (enhanced - enhanced.min()) / (enhanced.max() - enhanced.min() + 1e-12)
+    # A Manual cut is a gray level / full scale without a ridge filter, and a
+    # response value with one.
+    if response:
+        manual_cut, manual_full_scale = float(manual_response_threshold), 1.0
     else:
-        normed = enhanced
+        manual_cut, manual_full_scale = manual_threshold, full_scale(image)
 
-    normed = flatten_background(
-        normed, invert_intensity, rolling_ball_radius, rescale=response
-    )
+    # A ridge filter already looks for dark ridges when inverting
+    # (black_ridges), so its response is high on fibers either way; inverting
+    # the response too would make the threshold pick the background.
+    normed = flatten_background(enhanced, invert_intensity and not response, rolling_ball_radius)
 
     mask = threshold_scalar(
         normed,
         threshold_method,
-        manual_threshold,
+        manual_cut,
         project_threshold_norm,
         manual_full_scale,
         fit_mask=fit_mask,

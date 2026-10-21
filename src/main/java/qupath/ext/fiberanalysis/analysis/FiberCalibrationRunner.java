@@ -256,6 +256,8 @@ public final class FiberCalibrationRunner {
             params.put("analysis_downsample", ds);
             params.put("border_zone_um", cfg.borderZoneUm);
             params.put("zone_mode", cfg.zoneMode);
+            // Ridge responses are on a fixed scale (1.0 = a full-contrast fiber).
+            params.put("response_scale", "absolute");
             payload.put("calibration_params", params);
             // Keep the histogram so a downstream tool can plot/inspect it.
             if (!pooled.histogram().isEmpty()) {

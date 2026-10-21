@@ -109,6 +109,8 @@ public final class FiberAnalysisDialog {
     private ComboBox<String> thresholdMethodCombo;
     private Spinner<Integer> manualThresholdSpinner;
     private Label manualThreshLabel;
+    private Spinner<Double> manualResponseSpinner;
+    private Label calibrationWarning;
     private ComboBox<String> ridgeFilterCombo;
     private Spinner<Double> sigmaMinSpinner;
     private Spinner<Double> sigmaMaxSpinner;
@@ -425,8 +427,39 @@ public final class FiberAnalysisDialog {
             factory.setValue(max);
         }
         if (manualThreshLabel != null) {
-            manualThreshLabel.setText("Manual threshold (0-" + max + "):");
+            manualThreshLabel.setText(ridgeFilterOn() ? "Response cutoff (0-1):" : "Manual threshold (0-" + max + "):");
         }
+    }
+
+    /** @return true when a ridge filter is selected, so thresholds apply to its response */
+    private boolean ridgeFilterOn() {
+        return ridgeFilterCombo != null
+                && ridgeFilterCombo.getValue() != null
+                && !"None".equals(ridgeFilterCombo.getValue());
+    }
+
+    /** Shows why the chosen calibration does not fit the current settings, if it does not. */
+    private void refreshCalibrationWarning() {
+        if (calibrationWarning == null || invertIntensityCheck == null || rollingBallSpinner == null) return;
+        String msg = null;
+        if ("Project Otsu (calibrated)".equals(thresholdMethodCombo.getValue())
+                && gui != null
+                && gui.getProject() != null
+                && gui.getProject().getPath() != null) {
+            msg = FiberAnalysisWorkflow.calibrationMismatch(
+                    calibrationCombo.getValue(),
+                    gui.getProject().getPath().getParent(),
+                    internalChannelCombo.getValue(),
+                    ridgeFilterCombo.getValue(),
+                    invertIntensityCheck.isSelected(),
+                    rollingBallSpinner.getValue(),
+                    sigmaMinSpinner.getValue(),
+                    sigmaMaxSpinner.getValue(),
+                    sigmaStepSpinner.getValue());
+        }
+        calibrationWarning.setText(msg == null ? "" : msg);
+        calibrationWarning.setVisible(msg != null);
+        calibrationWarning.setManaged(msg != null);
     }
 
     /**
@@ -786,6 +819,14 @@ public final class FiberAnalysisDialog {
         internalGrid.add(calibrationLabel, 0, row);
         internalGrid.add(calBox, 1, row);
         row++;
+        calibrationWarning = new Label();
+        calibrationWarning.setWrapText(true);
+        calibrationWarning.setMaxWidth(380);
+        calibrationWarning.setStyle("-fx-text-fill: #b3261e; -fx-font-size: 11px;");
+        calibrationWarning.setVisible(false);
+        calibrationWarning.setManaged(false);
+        internalGrid.add(calibrationWarning, 1, row);
+        row++;
         populateCalibrationCombo();
 
         manualThreshLabel = new Label("Manual threshold:");
@@ -798,13 +839,30 @@ public final class FiberAnalysisDialog {
         manualThresholdSpinner.setEditable(true);
         applyTooltip(
                 manualThresholdSpinner,
-                "Pixels at or above this gray level become fiber, in the source image's own units. With a ridge filter on, it is read as that fraction of full scale instead.");
-        refreshManualThresholdRange();
+                "Pixels at or above this gray level become fiber, in the source image's own units,"
+                        + " the same cut in every region and image.");
+        manualResponseSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
+                0.0,
+                1.0,
+                FiberAnalysisPreferences.manualResponseThresholdProperty().get(),
+                0.01));
+        manualResponseSpinner.setEditable(true);
+        applyTooltip(
+                manualResponseSpinner,
+                "With a ridge filter on, the cut is on the filter's response: 1.0 is the response of a"
+                        + " fiber at full contrast (as bright as the image format allows), 0.1 keeps fibers down"
+                        + " to about a tenth of that with Sato or Meijering (Frangi responds less to faint"
+                        + " fibers). The scale is the same in every region and image. Check the value with"
+                        + " Preview segmentation, or let Otsu pick it.");
         BooleanBinding manualDisabled = thresholdMethodCombo.valueProperty().isNotEqualTo("Manual");
         manualThreshLabel.disableProperty().bind(manualDisabled);
         manualThresholdSpinner.disableProperty().bind(manualDisabled);
+        manualResponseSpinner.disableProperty().bind(manualDisabled);
         internalGrid.add(manualThreshLabel, 0, row);
-        internalGrid.add(manualThresholdSpinner, 1, row);
+        javafx.scene.layout.StackPane manualBox =
+                new javafx.scene.layout.StackPane(manualThresholdSpinner, manualResponseSpinner);
+        manualBox.setAlignment(Pos.CENTER_LEFT);
+        internalGrid.add(manualBox, 1, row);
         row++;
 
         ridgeFilterCombo = new ComboBox<>(FXCollections.observableArrayList("None", "Frangi", "Sato", "Meijering"));
@@ -817,6 +875,25 @@ public final class FiberAnalysisDialog {
         internalGrid.add(new Label("Ridge filter:"), 0, row);
         internalGrid.add(ridgeFilterCombo, 1, row);
         row++;
+        Label ridgeNote = new Label("With a ridge filter, thresholds apply to its response, on a fixed 0-1 scale"
+                + " (1 = a fiber at full contrast) that is the same in every region and image. A Manual"
+                + " cut is a response value; check it with Preview segmentation.");
+        ridgeNote.setWrapText(true);
+        ridgeNote.setMaxWidth(380);
+        ridgeNote.setStyle("-fx-font-size: 11px; -fx-opacity: 0.8;");
+        internalGrid.add(ridgeNote, 1, row);
+        row++;
+        // Swap the Manual control and show the note while a ridge filter is on.
+        Runnable ridgeMode = () -> {
+            boolean on = ridgeFilterOn();
+            manualThresholdSpinner.setVisible(!on);
+            manualResponseSpinner.setVisible(on);
+            ridgeNote.setVisible(on);
+            ridgeNote.setManaged(on);
+            refreshManualThresholdRange();
+        };
+        ridgeFilterCombo.valueProperty().addListener((o, a, b) -> ridgeMode.run());
+        ridgeMode.run();
 
         Label sigmaHeader = new Label("Sigma range (um):");
         sigmaHeader.setStyle(INDENT_STYLE);
@@ -914,6 +991,7 @@ public final class FiberAnalysisDialog {
                 internalChannelCombo,
                 thresholdMethodCombo,
                 manualThresholdSpinner,
+                manualResponseSpinner,
                 ridgeFilterCombo,
                 sigmaMinSpinner,
                 sigmaMaxSpinner,
@@ -923,6 +1001,19 @@ public final class FiberAnalysisDialog {
                 rollingBallSpinner,
                 calibrationCombo,
                 borderZoneSpinner));
+        for (var prop : List.of(
+                thresholdMethodCombo.valueProperty(),
+                calibrationCombo.valueProperty(),
+                internalChannelCombo.valueProperty(),
+                ridgeFilterCombo.valueProperty(),
+                invertIntensityCheck.selectedProperty(),
+                rollingBallSpinner.valueProperty(),
+                sigmaMinSpinner.valueProperty(),
+                sigmaMaxSpinner.valueProperty(),
+                sigmaStepSpinner.valueProperty())) {
+            prop.addListener((o, a, b) -> refreshCalibrationWarning());
+        }
+        refreshCalibrationWarning();
         previewBtn.disableProperty().bind(segInternalRadio.selectedProperty().not());
         HBox previewRow = new HBox(previewBtn);
         previewRow.setAlignment(Pos.CENTER_LEFT);
@@ -1697,6 +1788,7 @@ public final class FiberAnalysisDialog {
                 internalChannelCombo.getValue(),
                 thresholdMethodCombo.getValue(),
                 manualThresholdSpinner.getValue(),
+                manualResponseSpinner.getValue(),
                 ridgeFilterCombo.getValue(),
                 sigmaMinSpinner.getValue(),
                 sigmaMaxSpinner.getValue(),
@@ -1776,6 +1868,7 @@ public final class FiberAnalysisDialog {
         FiberAnalysisPreferences.internalChannelProperty().set(internalChannelCombo.getValue());
         FiberAnalysisPreferences.thresholdMethodProperty().set(thresholdMethodCombo.getValue());
         FiberAnalysisPreferences.manualThresholdProperty().set(manualThresholdSpinner.getValue());
+        FiberAnalysisPreferences.manualResponseThresholdProperty().set(manualResponseSpinner.getValue());
         FiberAnalysisPreferences.ridgeFilterProperty().set(ridgeFilterCombo.getValue());
         FiberAnalysisPreferences.sigmaMinProperty().set(sigmaMinSpinner.getValue());
         FiberAnalysisPreferences.sigmaMaxProperty().set(sigmaMaxSpinner.getValue());

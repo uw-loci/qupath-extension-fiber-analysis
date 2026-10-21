@@ -27,7 +27,7 @@ import org.junit.jupiter.api.Test;
 class SegmentationSpecTest {
 
     private static SegmentationSpec otsu() {
-        return new SegmentationSpec("Raw intensity", "otsu", 128, null, "frangi", 1.0, 4.0, 0.5, 2.0, true, 12.5);
+        return new SegmentationSpec("Raw intensity", "otsu", 128, 0.1, null, "frangi", 1.0, 4.0, 0.5, 2.0, true, 12.5);
     }
 
     @Test
@@ -77,5 +77,34 @@ class SegmentationSpecTest {
         assertThatThrownBy(() -> SegmentationSpec.fromMap(m))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("sigma_max_um");
+    }
+
+    @Test
+    void aRidgeModelTrainedBeforeTheFixedResponseScaleIsRefused() {
+        Map<String, Object> m = new LinkedHashMap<>(otsu().toMap());
+        assertThat(m).containsEntry("response_scale", "absolute");
+        assertThat(SegmentationSpec.staleScaleProblem(m)).isNull();
+        m.remove("response_scale");
+        assertThat(SegmentationSpec.staleScaleProblem(m)).contains("Train the model again");
+        // Without a ridge filter the scale never changed.
+        m.put("ridge_filter", "none");
+        assertThat(SegmentationSpec.staleScaleProblem(m)).isNull();
+    }
+
+    @Test
+    void theRidgeResponseCutoffIsStoredAndOldModelsReadTheDefault() {
+        var manual = new SegmentationSpec("Raw intensity", "manual", 128, 0.25, null, "sato", 1, 4, 1, 2, false, 0);
+        var back = SegmentationSpec.fromMap(manual.toMap());
+        assertThat(back.manualResponseThreshold()).isEqualTo(0.25);
+        assertThat(back.thresholdDescription()).isEqualTo("manual (ridge response 0.250)");
+        Map<String, Object> old = new LinkedHashMap<>(manual.toMap());
+        old.remove("manual_response_threshold");
+        assertThat(SegmentationSpec.fromMap(old).manualResponseThreshold()).isEqualTo(0.1);
+        // The cutoff is part of the fingerprint only where it is used.
+        var other = new SegmentationSpec("Raw intensity", "manual", 128, 0.5, null, "sato", 1, 4, 1, 2, false, 0);
+        assertThat(other.hash()).isNotEqualTo(manual.hash());
+        assertThat(new SegmentationSpec("Raw intensity", "otsu", 128, 0.5, null, "sato", 1, 4, 1, 2, false, 0).hash())
+                .isEqualTo(new SegmentationSpec("Raw intensity", "otsu", 128, 0.25, null, "sato", 1, 4, 1, 2, false, 0)
+                        .hash());
     }
 }

@@ -812,7 +812,7 @@ public final class DensityMapTilingScenario {
     private static Path run(Project<BufferedImage> project, ProjectImageEntry<BufferedImage> entry, String mode,
             double stepUm, String threshold) throws Exception {
         var spec = new FiberDensityMapWorkflow.DensityMapJobSpec(
-                WINDOW_UM, OVERLAP, "Raw intensity", threshold, 2000, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0, null,
+                WINDOW_UM, OVERLAP, "Raw intensity", threshold, 2000, 0.1, "none", 1.0, 4.0, 1.0, 1.0, false, 0.0, null,
                 false, mode, stepUm, true, List.of(CLASS), true,
                 List.of(new PixelPositivitySpec(0, "Channel 1", PixelPositivitySpec.OP_GT, POS_THRESHOLD)));
         long t0 = System.nanoTime();

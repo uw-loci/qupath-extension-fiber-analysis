@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -495,3 +495,19 @@ __version__ = "0.4.0"
 #     pool over images of different pixel sizes filters each at the same
 #     physical scale. Used by every pooled threshold, including the run-wide
 #     one annotation runs now fit and project calibration.
+
+# 0.4.1 (2026-10-21):
+#   - segmentation.apply_ridge_filter: responses on one absolute scale, 1.0 =
+#     a full-contrast fiber at the smallest sigma. Frangi gets a fixed gamma
+#     from a reference ridge (scikit-image picked it from each image),
+#     Meijering is computed without scikit-image's per-image max division,
+#     and all three are divided by their reference-ridge response.
+#     segment_internal no longer min-max stretches the response per region,
+#     and a Manual cut with a ridge filter is manual_response_threshold on
+#     that scale. Calibrations and window classifiers made with a ridge filter
+#     before this are refused (no "response_scale" in their record).
+#   - segment_internal / calibrate_threshold: with Invert intensity AND a
+#     ridge filter, the response was inverted a second time (the filter
+#     already looks for dark ridges), so the mask picked the background
+#     (Sato, Meijering) or everything (Frangi). Fixed.
+#   - flatten_background: the rescale option is gone.

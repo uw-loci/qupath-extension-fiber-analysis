@@ -57,7 +57,7 @@ def signal_scalar(image, channel, invert_intensity=False, rolling_ball_radius=0)
     """
     scalar = seg.pick_channel(image, channel)
     out = seg.flatten_background(
-        scalar, invert_intensity, rolling_ball_radius, rescale=False
+        scalar, invert_intensity, rolling_ball_radius
     )
     return np.asarray(out, dtype=np.float64)
 

@@ -66,6 +66,7 @@ class PooledThresholdTest {
                 "Raw intensity",
                 "Otsu",
                 128,
+                0.1,
                 "none",
                 1,
                 4,

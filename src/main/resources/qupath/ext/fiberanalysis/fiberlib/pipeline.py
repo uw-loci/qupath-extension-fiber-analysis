@@ -98,6 +98,7 @@ def analyze(
     seg_channel="Value (HSV)",
     threshold_method="otsu",
     manual_threshold=128,
+    manual_response_threshold=0.1,
     ridge_filter="none",
     sigma_min=1.0,
     sigma_max=4.0,
@@ -250,6 +251,7 @@ def analyze(
     seg_chan = str(seg_channel)
     thr_method = str(threshold_method).lower()
     manual_thr = int(manual_threshold)
+    manual_resp = float(manual_response_threshold)
     rf = str(ridge_filter).lower()
     smin = float(sigma_min)
     smax = float(sigma_max)
@@ -337,7 +339,10 @@ def analyze(
         pe["seg_channel"] = seg_chan
         pe["threshold_method"] = thr_method
         if thr_method == "manual":
-            pe["manual_threshold"] = manual_thr
+            if str(ridge_filter).lower() in seg._RIDGE_FILTERS:
+                pe["manual_response_threshold"] = manual_resp
+            else:
+                pe["manual_threshold"] = manual_thr
         if thr_method == "project_otsu" and project_threshold_norm_v is not None:
             pe["project_threshold_norm"] = project_threshold_norm_v
         if invert_intensity_v:
@@ -477,6 +482,7 @@ def analyze(
             channel=seg_chan,
             threshold_method=thr_method,
             manual_threshold=manual_thr,
+            manual_response_threshold=manual_resp,
             ridge_filter=rf,
             sigma_min=smin,
             sigma_max=smax,

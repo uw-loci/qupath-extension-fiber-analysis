@@ -48,6 +48,7 @@ import javax.imageio.ImageIO;
 import org.apposed.appose.Service.Task;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.common.ColorTools;
@@ -104,6 +105,7 @@ final class FiberSegmentationPreviewWindow {
             ComboBox<String> channelCombo,
             ComboBox<String> thresholdMethodCombo,
             Spinner<Integer> manualThresholdSpinner,
+            Spinner<Double> manualResponseSpinner,
             ComboBox<String> ridgeFilterCombo,
             Spinner<Double> sigmaMinSpinner,
             Spinner<Double> sigmaMaxSpinner,
@@ -236,6 +238,7 @@ final class FiberSegmentationPreviewWindow {
                                 channelCombo,
                                 thresholdMethodCombo,
                                 manualThresholdSpinner,
+                                manualResponseSpinner,
                                 ridgeFilterCombo,
                                 sigmaMinSpinner,
                                 sigmaMaxSpinner,
@@ -270,6 +273,7 @@ final class FiberSegmentationPreviewWindow {
         if (thresholdMethodCombo != null) thresholdMethodCombo.valueProperty().addListener(autoListener);
         if (manualThresholdSpinner != null)
             manualThresholdSpinner.valueProperty().addListener(autoListener);
+        if (manualResponseSpinner != null) manualResponseSpinner.valueProperty().addListener(autoListener);
         if (ridgeFilterCombo != null) ridgeFilterCombo.valueProperty().addListener(autoListener);
         if (sigmaMinSpinner != null) sigmaMinSpinner.valueProperty().addListener(autoListener);
         if (sigmaMaxSpinner != null) sigmaMaxSpinner.valueProperty().addListener(autoListener);
@@ -316,6 +320,7 @@ final class FiberSegmentationPreviewWindow {
             ComboBox<String> channelCombo,
             ComboBox<String> thresholdMethodCombo,
             Spinner<Integer> manualThresholdSpinner,
+            Spinner<Double> manualResponseSpinner,
             ComboBox<String> ridgeFilterCombo,
             Spinner<Double> sigmaMinSpinner,
             Spinner<Double> sigmaMaxSpinner,
@@ -430,6 +435,11 @@ final class FiberSegmentationPreviewWindow {
             String thrCode = "Project Otsu (calibrated)".equals(thrMethod) ? "project_otsu" : thrMethod.toLowerCase();
             in.put("threshold_method", thrCode);
             in.put("manual_threshold", manualThresholdSpinner == null ? 128 : manualThresholdSpinner.getValue());
+            in.put(
+                    "manual_response_threshold",
+                    manualResponseSpinner == null
+                            ? FiberAnalysisPreferences.DEFAULT_MANUAL_RESPONSE_THRESHOLD
+                            : manualResponseSpinner.getValue());
             in.put("ridge_filter", ridgeLabel.toLowerCase());
             in.put("sigma_min", sMin / pxUm);
             in.put("sigma_max", sMax / pxUm);

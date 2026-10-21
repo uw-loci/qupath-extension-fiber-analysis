@@ -166,14 +166,9 @@ try:
                 scalar = seg.apply_ridge_filter(
                     scalar, rf, smin, smax, sstep, black_ridges=invert
                 )
-                # A vesselness response has no image units, so the only stable
-                # histogram range is the region's own. Matches segment_internal.
-                mn = float(scalar.min())
-                mx = float(scalar.max())
-                if mx - mn < 1e-12:
-                    logger.info("Skipping %s: flat response (min==max==%f)", p, mn)
-                    continue
-                normed = (scalar - mn) / (mx - mn + 1e-12)
+                # The response is on its absolute scale (1.0 = a full-contrast
+                # fiber), the same in every region. Matches segment_internal.
+                normed = scalar
             else:
                 # pick_channel already put the scalar on an ABSOLUTE [0,1] by bit
                 # depth. Stretching each region here would give every region its
@@ -183,7 +178,8 @@ try:
                 normed = scalar
 
             # The same invert + rolling-ball step segmentation applies.
-            normed = seg.flatten_background(normed, invert, rb_radius, rescale=response)
+            # Polarity is already in the ridge filter (black_ridges).
+            normed = seg.flatten_background(normed, invert and not response, rb_radius)
 
             # Histogram the normalised scalar into HIST_BINS bins on the
             # [0, 1] range. uint64 increments keep us safe for very large
