@@ -238,3 +238,30 @@ def test_a_crop_outside_the_read_is_refused(tmp_path):
     img = _phantom(64, 64)
     with pytest.raises(AssertionError, match="outside"):
         _run(tmp_path, img, "bad", density_mode="window", crop_x=10, crop_w=64)
+
+
+@pytest.mark.parametrize("mode", ["pixel", "window"])
+def test_a_window_without_fiber_has_no_angle_or_coverage(tmp_path, mode):
+    # One band of fibers on an empty field. The box filter behind pixel mode
+    # leaves ~1e-16 in empty windows; through fiberlib 0.4.2 that counted as
+    # fiber, so the background carried an angle made of rounding noise and
+    # long runs of one value that read as streaks in an angle map.
+    h, w = 160, 192
+    img = np.zeros((h, w), dtype=np.uint8)
+    img[60:100, :] = _phantom(h, w)[60:100, : w // 2].repeat(2, axis=1)[:, :w]
+    extra = {"density_mode": mode}
+    if mode == "pixel":
+        extra["pixel_step"] = 4
+    out, _ = _run(tmp_path, img, f"band_{mode}", **extra)
+    angle = out["mean_angle_deg"]
+    cover = out["fiber_coverage_percent"]
+    order = out["order_parameter"]
+    # Far from the band (top and bottom rows of the grid) there is no fiber.
+    for far in (angle[0], angle[-1], cover[0], cover[-1], order[0], order[-1]):
+        assert np.isnan(far).all()
+    # On the band there is.
+    mid = angle.shape[0] // 2
+    assert np.isfinite(angle[mid]).any() and np.isfinite(cover[mid]).any()
+    # Wherever an angle is given, at least 10% of the window is fiber.
+    finite = np.isfinite(angle)
+    assert (cover[finite] >= 10.0 - 1e-9).all()

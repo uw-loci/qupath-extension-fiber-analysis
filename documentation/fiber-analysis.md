@@ -339,6 +339,12 @@ model was least sure of.
   pass of box filters over each tile whatever the step. `Ridge count` is not
   available per pixel. Near the slide edge, a window that hangs off the image
   is averaged over the part inside it.
+- In both modes a window with no fiber has no `Fiber coverage (%)` (NaN, drawn
+  as no data), and `Mean angle (deg)` and `Order parameter` are given only
+  where at least 10% of the window is fiber; elsewhere they are NaN. Before
+  2026-10-22, per-pixel maps gave empty windows a coverage of about 1e-16 %
+  and an angle made of rounding noise, which showed as streaks in angle maps;
+  regenerate per-pixel maps made before then.
 - **Smooth** is recorded in the map rather than baked into it: the overlay,
   the channels entry and sampling interpolate between cell centres when it is
   on and fill each cell when it is off. The file is the same size either way.

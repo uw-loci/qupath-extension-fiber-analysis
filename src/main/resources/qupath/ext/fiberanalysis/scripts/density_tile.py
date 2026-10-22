@@ -245,7 +245,15 @@ def _run_pixel_mode(
 
     mask_f = fiber_mask.astype(np.float64)
     coverage_frac = sample(_box_mean(mask_f, window_px))
-    fiber_coverage_percent = np.where(coverage_frac > 0, 100.0 * coverage_frac, np.nan)
+    # Fiber pixels in the window, scaled to a full one. The box filter leaves
+    # ~1e-16 where there is no fiber, so "> 0" let empty windows through and
+    # gave them an angle made of rounding noise. Same rules as window mode
+    # (windows.compute_windows): no fiber pixel -> no coverage, and an angle
+    # and order parameter only from at least 10% of the window.
+    n_fiber = coverage_frac * box_area
+    min_pixels = max(1, int(0.1 * window_px * window_px))
+    has_fiber = n_fiber >= 0.5
+    fiber_coverage_percent = np.where(has_fiber, 100.0 * coverage_frac, np.nan)
 
     # Counts are scaled to a full window, so an edge window reads the same
     # density as an interior one rather than a smaller count.
@@ -260,7 +268,7 @@ def _run_pixel_mode(
     sin2 = np.where(mask_f > 0, np.sin(2.0 * theta), 0.0)
     cos_mean = sample(_box_mean(cos2, window_px))
     sin_mean = sample(_box_mean(sin2, window_px))
-    valid = coverage_frac > 0
+    valid = n_fiber >= min_pixels
     cos_norm = np.where(valid, cos_mean / np.maximum(coverage_frac, 1e-12), 0.0)
     sin_norm = np.where(valid, sin_mean / np.maximum(coverage_frac, 1e-12), 0.0)
     mean_angle_deg = np.where(
