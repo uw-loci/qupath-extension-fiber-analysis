@@ -540,7 +540,7 @@ public final class WindowClassifierWorkflow {
                 regionY);
         DensityTiffWriter.write(
                 outputPath.toString(),
-                new DensityMapInfo(lattice, srcW, srcH, srcPxUm, false, sourceImage, threshold, List.of()),
+                new DensityMapInfo(lattice, srcW, srcH, srcPxUm, false, sourceImage, threshold, null, List.of()),
                 channels,
                 grids.toArray(new float[0][]));
         logger.info(

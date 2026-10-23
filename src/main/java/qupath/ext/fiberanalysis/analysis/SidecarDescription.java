@@ -27,6 +27,7 @@ final class SidecarDescription {
     static final String PLACEMENT = "Placement:";
     static final String SOURCE_IMAGE = "Source image:";
     static final String THRESHOLD = ThresholdIdentity.DESCRIPTION_PREFIX;
+    static final String REGION = "Region:";
 
     private static final Pattern CHANNEL_ROW =
             Pattern.compile("\\[(\\d+)]\\s*name=([^;\\r\\n]+)(?:;\\s*unit=([^\\r\\n;]+))?(?:;\\s*axial=([0-9.]+))?");
@@ -35,7 +36,7 @@ final class SidecarDescription {
     private SidecarDescription() {}
 
     /**
-     * @param info     placement, render mode, source image and threshold (its channel list is ignored)
+     * @param info     placement, render mode, source image, threshold and region (its channel list is ignored)
      * @param channels the channels, in file order
      * @return the description text
      */
@@ -70,6 +71,8 @@ final class SidecarDescription {
                     .append('\n');
         if (info.threshold() != null)
             d.append(THRESHOLD).append(' ').append(oneLine(info.threshold())).append('\n');
+        if (info.region() != null)
+            d.append(REGION).append(' ').append(oneLine(info.region())).append('\n');
         d.append("Channels:\n");
         for (int c = 0; c < channels.size(); c++) {
             DensityChannelSpec spec = channels.get(c);
@@ -86,7 +89,7 @@ final class SidecarDescription {
 
     /**
      * @param desc a map file's image description
-     * @return placement, render mode, source image, threshold and channels
+     * @return placement, render mode, source image, threshold, region and channels
      * @throws IllegalArgumentException if the description has no placement line, as in
      *     files written before maps were stored at grid resolution
      */
@@ -94,6 +97,7 @@ final class SidecarDescription {
         Map<String, String> kv = null;
         String source = null;
         String threshold = null;
+        String region = null;
         for (String line : desc.split("\\R")) {
             String t = line.trim();
             if (t.startsWith(PLACEMENT)) {
@@ -104,6 +108,8 @@ final class SidecarDescription {
                 source = t.substring(SOURCE_IMAGE.length()).trim();
             } else if (t.startsWith(THRESHOLD)) {
                 threshold = t.substring(THRESHOLD.length()).trim();
+            } else if (t.startsWith(REGION)) {
+                region = t.substring(REGION.length()).trim();
             }
         }
         if (kv == null) {
@@ -131,6 +137,7 @@ final class SidecarDescription {
                     "bilinear".equals(kv.get("render")),
                     source,
                     threshold,
+                    region,
                     parse(desc));
         } catch (RuntimeException e) {
             throw new IllegalArgumentException("Malformed placement line in map file: " + kv, e);

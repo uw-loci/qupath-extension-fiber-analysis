@@ -18,10 +18,16 @@ String paramsJsonPath = ${PARAMS_JSON_PATH_LITERAL}
 String projectPath    = ${PROJECT_PATH_LITERAL}
 // Image names this script will (re-)compute density maps for.
 List<String> imageNames = [${IMAGE_NAMES_LITERAL}]
+// Region the map was computed in (replayed from the params JSON: regionMode,
+// regionClasses, regionAnnotationIds):
+//   ${REGION_DESCRIPTION}
+// Selected annotations are found again by ID, so they must still exist in the
+// saved image data.
 
 // ---- Load the spec ----
 DensityMapJobSpec spec = DensityMapJobSpec.fromJson(new File(paramsJsonPath))
 println "Loaded density-map spec from: " + paramsJsonPath
+println "Region: " + spec.region.describe()
 
 // ---- Open project + resolve entries ----
 Project project = ProjectIO.loadProject(new File(projectPath), java.awt.image.BufferedImage.class)

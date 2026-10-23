@@ -33,6 +33,7 @@ class DensityOverlayTest {
                 smooth,
                 "img",
                 null,
+                null,
                 List.of(new DensitySidecar.ChannelInfo(0, "Signal", null, 0)));
         return new DensityMapOverlay(
                 null, info, 0, grid, DensityMapOverlay.Style.range(viridis(), min, max, false), -1, null);
@@ -66,6 +67,7 @@ class DensityOverlayTest {
                 false,
                 "img",
                 null,
+                null,
                 List.of(new DensitySidecar.ChannelInfo(0, "Signal", null, 0)));
         float[] grid = {-5f, 0f, 0.5f, 9f};
         var o = new DensityMapOverlay(
@@ -86,6 +88,7 @@ class DensityOverlayTest {
                 0.25,
                 true,
                 "img",
+                null,
                 null,
                 List.of(
                         new DensitySidecar.ChannelInfo(0, "P(Stroma)", "probability", 0),
@@ -161,6 +164,7 @@ class DensityOverlayTest {
                 0.25,
                 true,
                 "img",
+                null,
                 null,
                 List.of(
                         new DensitySidecar.ChannelInfo(0, "Mean angle (deg)", "deg", 180),

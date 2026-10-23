@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
 class DensitySidecarTest {
 
     private static DensityMapInfo info(DensityLattice lat, boolean smooth, String source) {
-        return new DensityMapInfo(lat, 16952, 18225, 0.1732, smooth, source, null, List.of());
+        return new DensityMapInfo(lat, 16952, 18225, 0.1732, smooth, source, null, null, List.of());
     }
 
     @Test

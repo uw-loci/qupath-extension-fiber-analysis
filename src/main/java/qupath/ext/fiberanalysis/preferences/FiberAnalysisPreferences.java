@@ -52,6 +52,7 @@ public class FiberAnalysisPreferences {
     // === Section 1 -- Search area ===
     public static final String DEFAULT_SEARCH_AREA = "selected";
     public static final String DEFAULT_CLASS_FILTER = "";
+    public static final String DEFAULT_DENSITY_REGION_MODE = "whole";
     public static final double DEFAULT_BORDER_ZONE_UM = 50.0;
     public static final String DEFAULT_ZONE_MODE = "outside";
     public static final boolean DEFAULT_USE_IMAGE_PIXEL_SIZE = true;
@@ -152,6 +153,8 @@ public class FiberAnalysisPreferences {
     // === Properties (initialized in installPreferences) ===
     private static StringProperty searchArea;
     private static StringProperty classFilter;
+    private static StringProperty densityRegionMode;
+    private static StringProperty densityRegionClasses;
     private static DoubleProperty borderZoneUm;
     private static StringProperty zoneMode;
     private static BooleanProperty useImagePixelSize;
@@ -236,6 +239,9 @@ public class FiberAnalysisPreferences {
         envLastBuiltDir = PathPrefs.createPersistentPreference(PREFIX + "env.lastBuiltDir", "");
         searchArea = PathPrefs.createPersistentPreference(PREFIX + "searchArea", DEFAULT_SEARCH_AREA);
         classFilter = PathPrefs.createPersistentPreference(PREFIX + "classFilter", DEFAULT_CLASS_FILTER);
+        densityRegionMode =
+                PathPrefs.createPersistentPreference(PREFIX + "densityRegionMode", DEFAULT_DENSITY_REGION_MODE);
+        densityRegionClasses = PathPrefs.createPersistentPreference(PREFIX + "densityRegionClasses", "");
         borderZoneUm = PathPrefs.createPersistentPreference(PREFIX + "borderZoneUm", DEFAULT_BORDER_ZONE_UM);
         zoneMode = PathPrefs.createPersistentPreference(PREFIX + "zoneMode", DEFAULT_ZONE_MODE);
         useImagePixelSize =
@@ -329,6 +335,16 @@ public class FiberAnalysisPreferences {
 
     public static StringProperty classFilterProperty() {
         return classFilter;
+    }
+
+    /** @return the density map's region mode code ({@code whole}, {@code selected}, {@code any}, {@code classes}) */
+    public static StringProperty densityRegionModeProperty() {
+        return densityRegionMode;
+    }
+
+    /** @return the density map's region classes, comma-separated */
+    public static StringProperty densityRegionClassesProperty() {
+        return densityRegionClasses;
     }
 
     public static DoubleProperty borderZoneUmProperty() {

@@ -236,6 +236,7 @@ where the grid sits on the image:
 Placement: source_width=16952; source_height=18225; source_pixel_um=0.1732; cell_px=36; window_px=144; x0=54; y0=54; grid=467x503; render=bilinear
 Source image: <the image the map was computed on>
 Threshold: <the threshold the map was cut at; see "Which threshold a result was cut at">
+Region: <where the map was computed; see "Computing only inside annotations">
 ```
 
 Grid pixel (i, j) covers image pixels `x0 + i*cell_px` to `x0 + (i+1)*cell_px`
@@ -280,6 +281,59 @@ Three ways to use a map:
   values were stored in the image's own pixel type: on an 8-bit or 16-bit image
   every map value was cut to a whole number (a signal density of 0.12 read 0).
   Measurements taken that way are wrong.
+
+### Computing only inside annotations
+
+Most of a whole slide is often glass. **Analyze:** at the top of the dialog
+sets where the map is computed, with the same choices as TME Quant:
+
+| Choice | Computes the windows that touch |
+|---|---|
+| **Whole image** (default) | every window of the image |
+| **Inside selected annotations** | the area annotations selected in the open image. Pick only that image in the list. |
+| **Inside every area annotation** | any area annotation of each image, whatever its class |
+| **Inside area annotations of class:** | area annotations of the classes chosen below it, for example `Tissue` |
+
+The grid is always laid over the whole image, so a limited map has the same
+`Placement:` line as a whole-image map and lines up with the image (and in
+QuIET) in exactly the same way. Each value is the same value a whole-image run
+gives for that window; the windows that do not touch the annotations are left
+empty (NaN, drawn transparent). The time saved comes from the tiles that hold no
+such window: they are not read at all.
+
+A few details:
+
+- **A window counts if any of it overlaps an annotation**, so values reach up to
+  one window past the annotation's edge. A window that crosses the edge is
+  computed over the whole window, glass included, exactly as in a whole-image
+  map; it is not clipped to the annotation.
+- **Only area annotations count.** Lines and points are ignored.
+- **An image with no matching annotation is skipped**, not failed, and no map is
+  written for it. The finishing message counts skipped images.
+- **The map reads the saved annotations.** If the open image has unsaved
+  changes, the dialog asks to save it first.
+- **Selected annotations are recorded by ID.** The re-run script finds them again
+  by ID, so they must still exist in the saved image.
+- **With Otsu or Triangle**, the run-wide threshold is fitted on samples inside
+  the region rather than over the whole image, so glass does not pull it
+  down. The `Threshold:` line says so ("... inside area annotations of class
+  Tissue").
+- **Pixel-positivity channels** read only the tiles that touch the region too.
+  Object-density channels are computed from the objects as before and emptied
+  outside the region like every other channel.
+
+The map file records the choice and what it found, for example:
+
+```
+Region: area annotations of class Tissue; 3 annotation(s), 4.212e+07 um^2
+```
+
+A whole-image map says `Region: whole image`. The `_params.json` file stores
+`regionMode` (`whole`, `selected`, `any` or `classes`), `regionClasses`,
+`regionAnnotationIds` and `regionAnnotationNames`, and the re-run script repeats
+the region in a comment and replays it. **Show density map as overlay...**
+shows the region in its **Region** row. Maps made before this option have no
+`Region:` line; they always cover the whole image.
 
 ### Showing a map as an overlay
 

@@ -147,12 +147,12 @@ class ThresholdIdentityTest {
     @Test
     void theMapFileCarriesTheThreshold() {
         var id = otsu(0.08337, "pooled over 3 image(s), density run 20261021_1015");
-        var info =
-                new DensityMapInfo(DensityLattice.blocks(4, 4, 10), 40, 40, 0.5, false, "img", id.label(), List.of());
+        var info = new DensityMapInfo(
+                DensityLattice.blocks(4, 4, 10), 40, 40, 0.5, false, "img", id.label(), null, List.of());
         String desc = SidecarDescription.format(info, DensityChannelSpec.defaultChannels());
         assertThat(desc).contains("\nThreshold: Otsu 0.08337 | pooled over 3 image(s)");
         assertThat(SidecarDescription.parseInfo(desc).threshold()).isEqualTo(id.label());
-        var old = new DensityMapInfo(DensityLattice.blocks(4, 4, 10), 40, 40, 0.5, false, "img", null, List.of());
+        var old = new DensityMapInfo(DensityLattice.blocks(4, 4, 10), 40, 40, 0.5, false, "img", null, null, List.of());
         assertThat(SidecarDescription.parseInfo(SidecarDescription.format(old, DensityChannelSpec.defaultChannels()))
                         .threshold())
                 .isNull();

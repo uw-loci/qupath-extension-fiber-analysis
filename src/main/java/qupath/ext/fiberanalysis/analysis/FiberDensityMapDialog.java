@@ -89,6 +89,13 @@ public final class FiberDensityMapDialog {
     private RadioButton windowModeRadio;
     private RadioButton pixelModeRadio;
 
+    private ToggleGroup regionGroup;
+    private RadioButton regionWholeRadio;
+    private RadioButton regionSelectedRadio;
+    private RadioButton regionAnyRadio;
+    private RadioButton regionClassesRadio;
+    private javafx.scene.control.ListView<String> regionClassesList;
+
     private CheckBox objectDensityCheck;
     private javafx.scene.control.ListView<String> objectDensityClassesList;
 
@@ -147,6 +154,10 @@ public final class FiberDensityMapDialog {
         // Initial validation pass (covers the case where the project is empty
         // or every image has the same starting state).
         revalidate();
+        // The annotation selection changes in the viewer, not here; check again on return.
+        dialog.focusedProperty().addListener((obs, was, now) -> {
+            if (now) revalidate();
+        });
         dialog.show();
     }
 
@@ -247,6 +258,8 @@ public final class FiberDensityMapDialog {
         validationBox = new VBox(validationBanner);
         validationBox.setPadding(new Insets(8));
         validationBox.setStyle(emptyBannerStyle());
+
+        VBox regionBox = buildRegionSection();
 
         // --- Output mode ---
         Label modeLabel = new Label("Output mode");
@@ -370,6 +383,8 @@ public final class FiberDensityMapDialog {
         VBox content = new VBox(
                 12,
                 validationBox,
+                regionBox,
+                new Separator(),
                 modeBox,
                 new Separator(),
                 winBox,
@@ -392,6 +407,108 @@ public final class FiberDensityMapDialog {
 
         box.getChildren().addAll(hdr, scroll);
         return box;
+    }
+
+    /** The "Analyze:" choice, worded as in TME Quant so the two tools read the same. */
+    private VBox buildRegionSection() {
+        Label hdr = new Label("Analyze:");
+        hdr.setStyle("-fx-font-weight: bold;");
+        regionGroup = new ToggleGroup();
+        regionWholeRadio = new RadioButton(DensityRegion.Mode.WHOLE_IMAGE.label);
+        regionSelectedRadio = new RadioButton(DensityRegion.Mode.SELECTED.label);
+        regionAnyRadio = new RadioButton(DensityRegion.Mode.ANY_ANNOTATION.label);
+        regionClassesRadio = new RadioButton(DensityRegion.Mode.CLASSES.label);
+        for (RadioButton rb : List.of(regionWholeRadio, regionSelectedRadio, regionAnyRadio, regionClassesRadio))
+            rb.setToggleGroup(regionGroup);
+        regionWholeRadio.setTooltip(new Tooltip("Compute every window of each image, ignoring annotations."));
+        regionSelectedRadio.setTooltip(new Tooltip("Compute only the windows that touch the area annotations"
+                + " selected in the open image. Pick only that image on the left. A re-run finds them again by ID."));
+        regionAnyRadio.setTooltip(new Tooltip("Compute only the windows that touch any area annotation of each"
+                + " image, whatever its class. Images with no area annotation are skipped."));
+        regionClassesRadio.setTooltip(new Tooltip("Compute only the windows that touch area annotations of the"
+                + " classes chosen below. Images with no matching annotation are skipped."));
+        switch (DensityRegion.Mode.fromCode(
+                FiberAnalysisPreferences.densityRegionModeProperty().get())) {
+            case SELECTED -> regionSelectedRadio.setSelected(true);
+            case ANY_ANNOTATION -> regionAnyRadio.setSelected(true);
+            case CLASSES -> regionClassesRadio.setSelected(true);
+            default -> regionWholeRadio.setSelected(true);
+        }
+        regionClassesList = new javafx.scene.control.ListView<>();
+        regionClassesList.getSelectionModel().setSelectionMode(javafx.scene.control.SelectionMode.MULTIPLE);
+        regionClassesList.setPrefHeight(90);
+        regionClassesList
+                .disableProperty()
+                .bind(regionClassesRadio.selectedProperty().not());
+        VBox.setMargin(regionClassesList, new Insets(0, 0, 0, 24));
+        regionGroup.selectedToggleProperty().addListener((obs, o, n) -> revalidate());
+        regionClassesList.getSelectionModel().getSelectedItems().addListener((javafx.collections.ListChangeListener<
+                        String>)
+                c -> revalidate());
+        Label help = new Label("A limited map keeps the whole-image grid, so it lines up exactly like a whole-image"
+                + " map; windows that do not touch the annotations are left empty (no data). Tiles with no"
+                + " such window are not read at all, which is where the time is saved. The map file records"
+                + " the region.");
+        help.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
+        help.setWrapText(true);
+        return new VBox(
+                4,
+                hdr,
+                regionWholeRadio,
+                regionSelectedRadio,
+                regionAnyRadio,
+                regionClassesRadio,
+                regionClassesList,
+                help);
+    }
+
+    private DensityRegion.Mode regionMode() {
+        if (regionSelectedRadio != null && regionSelectedRadio.isSelected()) return DensityRegion.Mode.SELECTED;
+        if (regionAnyRadio != null && regionAnyRadio.isSelected()) return DensityRegion.Mode.ANY_ANNOTATION;
+        if (regionClassesRadio != null && regionClassesRadio.isSelected()) return DensityRegion.Mode.CLASSES;
+        return DensityRegion.Mode.WHOLE_IMAGE;
+    }
+
+    /** @return the open image's project entry, or null */
+    private ProjectImageEntry<BufferedImage> openEntry() {
+        Project<BufferedImage> project = gui != null ? gui.getProject() : null;
+        ImageData<BufferedImage> data = gui != null ? gui.getImageData() : null;
+        return project == null || data == null ? null : project.getEntry(data);
+    }
+
+    /**
+     * @param mode        the region mode
+     * @param picked      images picked to run
+     * @param open        the open image, or null
+     * @param openName    its name
+     * @param selected    area annotations selected in the open image
+     * @param classCount  classes chosen
+     * @return why the region cannot run, or null
+     */
+    static <T> String regionProblem(
+            DensityRegion.Mode mode, List<T> picked, T open, String openName, int selected, int classCount) {
+        switch (mode) {
+            case CLASSES:
+                return classCount == 0 ? "Choose at least one annotation class to compute inside." : null;
+            case SELECTED:
+                if (open == null) return "Open the image whose selected annotations the map should cover.";
+                if (picked.size() != 1 || picked.get(0) != open)
+                    return "'Inside selected annotations' works on the open image only: pick only \""
+                            + openName + "\" on the left, or use 'Inside every area annotation' or"
+                            + " 'of class' to run several images.";
+                return selected == 0 ? "Select one or more area annotations in the open image." : null;
+            default:
+                return null;
+        }
+    }
+
+    private int selectedAreaAnnotations() {
+        ImageData<BufferedImage> data = gui != null ? gui.getImageData() : null;
+        if (data == null) return 0;
+        int n = 0;
+        for (var o : data.getHierarchy().getSelectionModel().getSelectedObjects())
+            if (o.isAnnotation() && o.hasROI() && o.getROI().isArea()) n++;
+        return n;
     }
 
     private HBox buildFooter(Stage dialog) {
@@ -422,6 +539,8 @@ public final class FiberDensityMapDialog {
         }
         List<ImageRow> picked = pickedRows();
         if (picked.isEmpty()) return;
+        revalidate();
+        if (runBtn.isDisabled()) return;
         PixelSizeCheck sizes = pixelSizes(picked);
         if (sizes.mixed()
                 && PixelSizePrompt.ask(
@@ -513,10 +632,18 @@ public final class FiberDensityMapDialog {
                         : java.util.Collections.emptyList());
         if (projectThresholdNorm != null)
             spec = spec.withRunThreshold(projectThresholdNorm, "calibration '" + calName + "'");
+        DensityRegion region = buildRegion();
+        if (region == null) return;
+        spec = spec.withRegion(region);
+        FiberAnalysisPreferences.densityRegionModeProperty().set(region.mode.code);
+        if (region.mode == DensityRegion.Mode.CLASSES)
+            FiberAnalysisPreferences.densityRegionClassesProperty().set(String.join(",", region.classes));
+        if (!region.isWholeImage() && !saveOpenImageIfNeeded(entries)) return;
         logger.info(
-                "Project density map: dispatching {} image(s), mode={}",
+                "Project density map: dispatching {} image(s), mode={}, region={}",
                 entries.size(),
-                channelsMode ? "Channels" : "Sidecar");
+                channelsMode ? "Channels" : "Sidecar",
+                region.describe());
 
         Runnable onComplete = null;
         if (channelsMode) {
@@ -529,6 +656,53 @@ public final class FiberDensityMapDialog {
         }
 
         new FiberDensityMapWorkflow().runForEntries(spec, entries, project, gui, onComplete);
+    }
+
+    /** @return the dialog's region, or null when it cannot be built (the user was told why) */
+    private DensityRegion buildRegion() {
+        try {
+            return switch (regionMode()) {
+                case SELECTED ->
+                    DensityRegion.selected(gui.getImageData()
+                            .getHierarchy()
+                            .getSelectionModel()
+                            .getSelectedObjects());
+                case ANY_ANNOTATION -> DensityRegion.anyAnnotation();
+                case CLASSES ->
+                    DensityRegion.ofClasses(new ArrayList<>(
+                            regionClassesList.getSelectionModel().getSelectedItems()));
+                default -> DensityRegion.wholeImage();
+            };
+        } catch (IllegalArgumentException | NullPointerException e) {
+            Dialogs.showErrorMessage(
+                    "Fiber density map", e.getMessage() == null ? "No image is open." : e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * The run reads each image's saved objects, so unsaved annotations in the open image would be missed.
+     *
+     * @return false when the user cancelled
+     */
+    private boolean saveOpenImageIfNeeded(List<ProjectImageEntry<BufferedImage>> entries) {
+        ImageData<BufferedImage> data = gui != null ? gui.getImageData() : null;
+        ProjectImageEntry<BufferedImage> open = openEntry();
+        if (data == null || open == null || !entries.contains(open) || !data.isChanged()) return true;
+        var answer = Dialogs.showYesNoCancelDialog(
+                "Fiber density map",
+                "The open image has unsaved changes, and the map reads the saved annotations."
+                        + " Save the image now?\n\nNo runs on the last saved annotations.");
+        if (answer == null || answer == javafx.scene.control.ButtonType.CANCEL) return false;
+        if (answer == javafx.scene.control.ButtonType.YES) {
+            try {
+                open.saveImageData(data);
+            } catch (java.io.IOException e) {
+                Dialogs.showErrorMessage("Fiber density map", "Could not save the image: " + e.getMessage());
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void addChannelEntries(
@@ -569,6 +743,24 @@ public final class FiberDensityMapDialog {
         boolean channelsMode = modeChannelsRadio != null && modeChannelsRadio.isSelected();
 
         ValidationResult v = validate(picked, channelsMode);
+        if (v.severity != Severity.ERROR) {
+            List<ProjectImageEntry<BufferedImage>> entries = new ArrayList<>();
+            for (ImageRow r : picked) entries.add(r.entry);
+            ProjectImageEntry<BufferedImage> open = openEntry();
+            String problem = regionProblem(
+                    regionMode(),
+                    entries,
+                    open,
+                    open == null ? null : open.getImageName(),
+                    selectedAreaAnnotations(),
+                    regionClassesList == null
+                            ? 0
+                            : regionClassesList
+                                    .getSelectionModel()
+                                    .getSelectedItems()
+                                    .size());
+            if (problem != null) v = ValidationResult.error(problem);
+        }
         applyValidation(v);
     }
 
@@ -678,6 +870,7 @@ public final class FiberDensityMapDialog {
         Thread t = new Thread(
                 () -> {
                     Set<String> seen = new java.util.TreeSet<>();
+                    Set<String> annotationClasses = new java.util.TreeSet<>();
                     for (ProjectImageEntry<BufferedImage> entry : project.getImageList()) {
                         if (Thread.currentThread().isInterrupted()) return;
                         try {
@@ -687,6 +880,8 @@ public final class FiberDensityMapDialog {
                                     data.getHierarchy().getAnnotationObjects()) {
                                 qupath.lib.objects.classes.PathClass pc = po.getPathClass();
                                 if (pc != null) seen.add(pc.toString());
+                                if (po.hasROI() && po.getROI().isArea())
+                                    annotationClasses.add(AnnotationClassFilter.displayName(pc));
                             }
                             for (qupath.lib.objects.PathObject po :
                                     data.getHierarchy().getDetectionObjects()) {
@@ -698,7 +893,19 @@ public final class FiberDensityMapDialog {
                         }
                     }
                     List<String> names = new ArrayList<>(seen);
-                    Platform.runLater(() -> objectDensityClassesList.getItems().setAll(names));
+                    List<String> regionNames = new ArrayList<>(annotationClasses);
+                    Platform.runLater(() -> {
+                        objectDensityClassesList.getItems().setAll(names);
+                        if (regionClassesList == null) return;
+                        regionClassesList.getItems().setAll(regionNames);
+                        Set<String> saved =
+                                AnnotationClassFilter.parse(FiberAnalysisPreferences.densityRegionClassesProperty()
+                                        .get());
+                        for (String n : regionNames)
+                            if (saved.contains(n))
+                                regionClassesList.getSelectionModel().select(n);
+                        revalidate();
+                    });
                 },
                 "Density-ObjectClass-Scanner");
         t.setDaemon(true);

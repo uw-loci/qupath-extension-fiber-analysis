@@ -22,6 +22,7 @@ import java.util.List;
  * @param smooth        draw by interpolating between cell centres rather than filling each cell
  * @param sourceImage   name of the project image the map was computed on
  * @param threshold     the {@link ThresholdIdentity} label the map was segmented at, or null when not recorded
+ * @param region        where the map was computed ({@link DensityRegion}), or null when not recorded
  * @param channels      channel names and units, in file order
  */
 public record DensityMapInfo(
@@ -32,6 +33,7 @@ public record DensityMapInfo(
         boolean smooth,
         String sourceImage,
         String threshold,
+        String region,
         List<DensitySidecar.ChannelInfo> channels) {
 
     /**

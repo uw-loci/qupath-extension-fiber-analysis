@@ -42,6 +42,7 @@ final class PixelPositivityComputer {
      * @param geo    the density map's tiling and lattice
      * @param srcW   image width
      * @param srcH   image height
+     * @param inside the map's region, or null for the whole image; tiles outside it are not read
      * @return one {@code float[gridW * gridH]} per rule, NaN = no data
      * @throws IOException if a tile cannot be read
      */
@@ -50,7 +51,8 @@ final class PixelPositivityComputer {
             List<PixelPositivitySpec> specs,
             FiberDensityMapWorkflow.Geometry geo,
             int srcW,
-            int srcH)
+            int srcH,
+            DensityRegion.Footprints inside)
             throws IOException {
 
         List<float[]> out = new ArrayList<>(specs.size());
@@ -67,7 +69,13 @@ final class PixelPositivityComputer {
                 continue;
             }
             logger.info("Pixel positivity '{}': thresholding per tile", spec.channelDisplayName());
-            out.add(MaskBoxSampler.sample((x, y, w, h) -> threshold(server, spec, x, y, w, h), geo, srcW, srcH));
+            out.add(MaskBoxSampler.sample(
+                    (x, y, w, h) -> inside == null || inside.touches(x, y, w, h)
+                            ? threshold(server, spec, x, y, w, h)
+                            : new byte[w * h],
+                    geo,
+                    srcW,
+                    srcH));
         }
         return out;
     }

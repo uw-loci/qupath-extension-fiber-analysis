@@ -537,6 +537,7 @@ public final class DensityMapTilingScenario {
                         false,
                         entry.getImageName(),
                         null,
+                        null,
                         List.of()),
                 List.of(
                         DensityChannelSpec.forClassProbability("Stroma"),

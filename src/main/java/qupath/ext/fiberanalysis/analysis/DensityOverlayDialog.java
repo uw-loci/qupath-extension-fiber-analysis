@@ -68,6 +68,7 @@ public final class DensityOverlayDialog {
     private CheckBox hideBelowBox;
     private Label status;
     private Label thresholdLabel;
+    private Label regionLabel;
 
     private DensityOverlay.Loaded loaded;
     private DensityOverlay.Loaded brightnessLoaded;
@@ -159,6 +160,12 @@ public final class DensityOverlayDialog {
                 "The threshold this map's fibers were segmented at. Maps cut at different thresholds, or with"
                         + " other segmentation settings, are not comparable."));
 
+        regionLabel = new Label();
+        regionLabel.setWrapText(true);
+        regionLabel.setMaxWidth(420);
+        regionLabel.setTooltip(new javafx.scene.control.Tooltip(
+                "Where the map was computed. Outside a limited region the map has no values."));
+
         GridPane grid = new GridPane();
         grid.setHgap(8);
         grid.setVgap(6);
@@ -169,6 +176,7 @@ public final class DensityOverlayDialog {
         grid.add(hideBelowBox, 1, 4);
         grid.addRow(5, new Label("Brightness from"), brightnessCombo);
         grid.addRow(6, new Label("Threshold"), thresholdLabel);
+        grid.addRow(7, new Label("Region"), regionLabel);
         GridPane.setFillWidth(mapCombo, true);
 
         Label note = new Label("Drawn on QuPath's pixel-classification layer: the opacity slider and"
@@ -319,10 +327,13 @@ public final class DensityOverlayDialog {
         brightnessLoaded = null;
         channelInfos = List.of();
         thresholdLabel.setText("");
+        regionLabel.setText("");
         if (map == null) return;
         try {
             channelInfos = DensitySidecar.readChannelInfos(map);
-            thresholdLabel.setText(thresholdText(DensitySidecar.readInfo(map).threshold()));
+            DensityMapInfo mapInfo = DensitySidecar.readInfo(map);
+            thresholdLabel.setText(thresholdText(mapInfo.threshold()));
+            regionLabel.setText(regionText(mapInfo.region()));
             brightnessCombo.getItems().add(NO_BRIGHTNESS);
             for (var info : channelInfos) {
                 if (BRIGHTNESS_CHANNELS.contains(info.name))
@@ -345,6 +356,16 @@ public final class DensityOverlayDialog {
         if (threshold == null) return "Not recorded (map made before 2026-10-21)";
         ThresholdIdentity t = ThresholdIdentity.parse(threshold);
         return t == null ? threshold : t.cut() + "\n" + t.source() + "\nsettings " + t.settings();
+    }
+
+    /**
+     * @param region a map's recorded region, or null
+     * @return the text the Region row shows
+     */
+    static String regionText(String region) {
+        return region == null
+                ? "Whole image (not recorded: maps made before the region option always cover the whole image)"
+                : region;
     }
 
     /** The chosen channel's info, or null. */

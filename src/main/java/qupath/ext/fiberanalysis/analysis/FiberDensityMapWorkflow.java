@@ -170,11 +170,14 @@ public final class FiberDensityMapWorkflow {
                 try {
                     Path poolDir = Files.createTempDirectory("fiber-density-pool-");
                     try {
-                        PooledThreshold.Result pooled =
-                                PooledThreshold.pool(entries, spec.settings(), poolDir, progress::setSub);
+                        PooledThreshold.Result pooled = spec.region.isWholeImage()
+                                ? PooledThreshold.pool(entries, spec.settings(), poolDir, progress::setSub)
+                                : poolInRegion(spec, entries, poolDir, progress);
                         runSpec = spec.withRunThreshold(
                                 pooled.thresholdNorm(),
-                                PooledThreshold.describe(pooled) + ", density run "
+                                PooledThreshold.describe(pooled)
+                                        + (spec.region.isWholeImage() ? "" : " inside " + spec.region.describe())
+                                        + ", density run "
                                         + java.time.LocalDateTime.now()
                                                 .format(java.time.format.DateTimeFormatter.ofPattern(
                                                         "yyyyMMdd_HHmmss")));
@@ -194,10 +197,12 @@ public final class FiberDensityMapWorkflow {
 
             ThresholdIdentity identity = ThresholdIdentity.of(runSpec, Double.NaN);
             logger.info("Threshold: {}", identity.label());
+            logger.info("Region: {}", runSpec.region.describe());
             List<ProjectImageEntry<BufferedImage>> made = new ArrayList<>();
             int total = entries.size();
             int ok = 0;
             int failed = 0;
+            int skipped = 0;
             for (int i = 0; i < total; i++) {
                 ProjectImageEntry<BufferedImage> entry = entries.get(i);
                 final int idx = i;
@@ -211,6 +216,9 @@ public final class FiberDensityMapWorkflow {
                     } else {
                         failed++;
                     }
+                } catch (RegionEmptyException e) {
+                    skipped++;
+                    logger.warn("Density map skipped for {}: {}", entry.getImageName(), e.getMessage());
                 } catch (Exception e) {
                     failed++;
                     logger.error("Density map failed for {}", entry.getImageName(), e);
@@ -223,11 +231,21 @@ public final class FiberDensityMapWorkflow {
             ProjectThresholds.warnIfDiffers(project, made, ThresholdIdentity.META_DENSITY, "Fiber density map");
             final int okF = ok;
             final int failedF = failed;
+            final String skippedText = skipped == 0
+                    ? ""
+                    : String.format(Locale.ROOT, ", %d skipped (no annotation in the region)", skipped);
+            logger.info("Density maps done: {} ok, {} failed{}", ok, failed, skippedText);
             HeadlessFx.runLater(() -> {
                 progress.close();
                 Dialogs.showInfoNotification(
                         "Fiber density map",
-                        String.format(Locale.ROOT, "Done: %d ok, %d failed. Sidecars in %s", okF, failedF, outRoot));
+                        String.format(
+                                Locale.ROOT,
+                                "Done: %d ok, %d failed%s. Sidecars in %s",
+                                okF,
+                                failedF,
+                                skippedText,
+                                outRoot));
             });
         } finally {
             HeadlessFx.runLater(progress::close);
@@ -251,6 +269,18 @@ public final class FiberDensityMapWorkflow {
         double pxUm = cal.getAveragedPixelSizeMicrons();
         int srcW = server.getWidth();
         int srcH = server.getHeight();
+
+        DensityRegion.Resolved resolved = spec.region.resolve(data.getHierarchy());
+        if (resolved != null && resolved.count() == 0) {
+            throw new RegionEmptyException("no annotation matches " + spec.region.describe());
+        }
+        DensityRegion.Footprints inside = resolved == null ? null : new DensityRegion.Footprints(resolved.geometry());
+        if (resolved != null && resolved.missing() > 0) {
+            logger.warn(
+                    "{}: {} of the selected annotation(s) are not in this image",
+                    entry.getImageName(),
+                    resolved.missing());
+        }
 
         int windowPx = Math.max(2, (int) Math.round(spec.windowSizeUm / pxUm));
         double overlapFrac = Math.max(0.0, Math.min(0.95, spec.windowOverlapPercent / 100.0));
@@ -308,6 +338,8 @@ public final class FiberDensityMapWorkflow {
 
         int totalTiles = geo.nTilesX() * geo.nTilesY();
         int doneTiles = 0;
+        int computedTiles = 0;
+        long started = System.nanoTime();
 
         Path workDir = Files.createTempDirectory("fiber-density-tile-");
         try {
@@ -323,6 +355,10 @@ public final class FiberDensityMapWorkflow {
                     int tileGridW = geo.cellsIn(coreW);
                     int tileGridH = geo.cellsIn(coreH);
                     if (tileGridW <= 0 || tileGridH <= 0) continue;
+                    // Every window this tile owns lies inside its core, so a core
+                    // that misses the region holds no window that touches it.
+                    if (inside != null && !inside.touches(coreX, coreY, coreW, coreH)) continue;
+                    computedTiles++;
 
                     // What is actually read: the core plus a halo of filter
                     // context, clamped at the slide edge.
@@ -407,7 +443,7 @@ public final class FiberDensityMapWorkflow {
         if (spec.includePixelPositivity && !spec.pixelPositivitySpecs.isEmpty()) {
             progress.setSub("Computing pixel-positivity channels...");
             List<float[]> posGrids =
-                    PixelPositivityComputer.compute(server, spec.pixelPositivitySpecs, geo, srcW, srcH);
+                    PixelPositivityComputer.compute(server, spec.pixelPositivitySpecs, geo, srcW, srcH, inside);
             for (int i = 0; i < posGrids.size(); i++) {
                 float[] grid = posGrids.get(i);
                 int dst = nAfterObject + i;
@@ -416,6 +452,28 @@ public final class FiberDensityMapWorkflow {
                 }
             }
         }
+
+        String regionLabel = "whole image";
+        if (inside != null) {
+            long kept = inside.mask(accum, gridW, gridH, stridePx, pixelMode ? stridePx : windowPx);
+            regionLabel = resolved.label(spec.region, pxUm);
+            logger.info(
+                    "{}: region {}; {} of {} cells kept, {} of {} tiles computed",
+                    entry.getImageName(),
+                    regionLabel,
+                    kept,
+                    (long) gridW * gridH,
+                    computedTiles,
+                    totalTiles);
+        }
+        logger.info(
+                "{}: grid {}x{}, {} of {} tiles computed in {} s",
+                entry.getImageName(),
+                gridW,
+                gridH,
+                computedTiles,
+                totalTiles,
+                String.format(Locale.ROOT, "%.1f", (System.nanoTime() - started) / 1e9));
 
         // One pixel per grid cell; the description places the grid on the
         // source image, so readers draw it at any zoom.
@@ -432,6 +490,7 @@ public final class FiberDensityMapWorkflow {
                         spec.smoothInterpolation,
                         entry.getImageName(),
                         identity.label(),
+                        regionLabel,
                         List.of()),
                 channels,
                 accum);
@@ -449,6 +508,7 @@ public final class FiberDensityMapWorkflow {
             placeholders.put("PROJECT_PATH_LITERAL", RunProvenance.groovyString(projectPath));
             placeholders.put(
                     "IMAGE_NAMES_LITERAL", RunProvenance.groovyStringList(java.util.List.of(entry.getImageName())));
+            placeholders.put("REGION_DESCRIPTION", regionLabel.replaceAll("[\\r\\n]+", " "));
             RunProvenance.writeAll(
                     outRoot,
                     safeName + "_density",
@@ -465,6 +525,60 @@ public final class FiberDensityMapWorkflow {
             logger.warn("Could not write density-map provenance for {}: {}", entry.getImageName(), provEx.getMessage());
         }
         return outPath;
+    }
+
+    /** An image with no annotation in the run's region; skipped, not failed. */
+    static final class RegionEmptyException extends IOException {
+        RegionEmptyException(String message) {
+            super(message);
+        }
+    }
+
+    /** One threshold for the run, fitted on samples inside each image's region. */
+    private static PooledThreshold.Result poolInRegion(
+            DensityMapJobSpec spec, List<ProjectImageEntry<BufferedImage>> entries, Path poolDir, ProgressUi progress)
+            throws IOException {
+        List<PooledThreshold.ZoneRegion> regions = new ArrayList<>();
+        List<ImageServer<BufferedImage>> servers = new ArrayList<>();
+        try {
+            for (ProjectImageEntry<BufferedImage> entry : entries) {
+                ImageData<BufferedImage> data = entry.readImageData();
+                ImageServer<BufferedImage> server = data.getServer();
+                servers.add(server);
+                PixelCalibration cal = server.getPixelCalibration();
+                if (cal == null || !cal.hasPixelSizeMicrons()) continue;
+                DensityRegion.Resolved r = spec.region.resolve(data.getHierarchy());
+                if (r == null || r.count() == 0) continue;
+                var env = r.geometry().getEnvelopeInternal();
+                int x0 = Math.max(0, (int) Math.floor(env.getMinX()));
+                int y0 = Math.max(0, (int) Math.floor(env.getMinY()));
+                int x1 = Math.min(server.getWidth(), (int) Math.ceil(env.getMaxX()));
+                int y1 = Math.min(server.getHeight(), (int) Math.ceil(env.getMaxY()));
+                if (x1 <= x0 || y1 <= y0) continue;
+                var roi = qupath.lib.roi.GeometryTools.geometryToROI(
+                        r.geometry(), qupath.lib.regions.ImagePlane.getDefaultPlane());
+                regions.add(new PooledThreshold.ZoneRegion(
+                        server, roi, new int[] {x0, y0, x1 - x0, y1 - y0}, 1.0, cal.getAveragedPixelSizeMicrons()));
+            }
+            if (regions.isEmpty())
+                throw new IOException("No image has an annotation in the region (" + spec.region.describe() + ")");
+            return PooledThreshold.poolZones(
+                    regions,
+                    "whole",
+                    0,
+                    spec.settings(),
+                    poolDir,
+                    PooledThreshold.GRID * PooledThreshold.GRID * regions.size(),
+                    progress::setSub);
+        } finally {
+            for (ImageServer<BufferedImage> s : servers) {
+                try {
+                    s.close();
+                } catch (Exception ignored) {
+                    // a server that will not close holds a file handle until QuPath exits
+                }
+            }
+        }
     }
 
     private static Map<String, Object> buildTileInputs(
@@ -770,6 +884,9 @@ public final class FiberDensityMapWorkflow {
         /** Per-row positivity rules (source channel + operator + threshold). */
         public final List<PixelPositivitySpec> pixelPositivitySpecs;
 
+        /** Where the map is computed; cells outside stay NaN. */
+        public final DensityRegion region;
+
         public DensityMapJobSpec(
                 double windowSizeUm,
                 double windowOverlapPercent,
@@ -827,6 +944,7 @@ public final class FiberDensityMapWorkflow {
             this.pixelPositivitySpecs = pixelPositivitySpecs == null
                     ? java.util.Collections.emptyList()
                     : List.copyOf(pixelPositivitySpecs);
+            this.region = DensityRegion.wholeImage();
         }
 
         /**
@@ -839,6 +957,41 @@ public final class FiberDensityMapWorkflow {
          */
         public DensityMapJobSpec withRunThreshold(double thresholdNorm, String source) {
             return new DensityMapJobSpec(this, thresholdNorm, source, fittedMethod);
+        }
+
+        /**
+         * @param region where to compute the map
+         * @return a copy computed only there
+         */
+        public DensityMapJobSpec withRegion(DensityRegion region) {
+            return new DensityMapJobSpec(this, region == null ? DensityRegion.wholeImage() : region);
+        }
+
+        private DensityMapJobSpec(DensityMapJobSpec o, DensityRegion region) {
+            this.windowSizeUm = o.windowSizeUm;
+            this.windowOverlapPercent = o.windowOverlapPercent;
+            this.segChannel = o.segChannel;
+            this.thresholdMethod = o.thresholdMethod;
+            this.manualThreshold = o.manualThreshold;
+            this.manualResponseThreshold = o.manualResponseThreshold;
+            this.ridgeFilter = o.ridgeFilter;
+            this.sigmaMinUm = o.sigmaMinUm;
+            this.sigmaMaxUm = o.sigmaMaxUm;
+            this.sigmaStepUm = o.sigmaStepUm;
+            this.minFiberAreaUm2 = o.minFiberAreaUm2;
+            this.invertIntensity = o.invertIntensity;
+            this.rollingBallRadiusUm = o.rollingBallRadiusUm;
+            this.projectThresholdNorm = o.projectThresholdNorm;
+            this.smoothInterpolation = o.smoothInterpolation;
+            this.densityMode = o.densityMode;
+            this.pixelStepUm = o.pixelStepUm;
+            this.thresholdSource = o.thresholdSource;
+            this.fittedMethod = o.fittedMethod;
+            this.includeObjectDensity = o.includeObjectDensity;
+            this.objectDensityClasses = o.objectDensityClasses;
+            this.includePixelPositivity = o.includePixelPositivity;
+            this.pixelPositivitySpecs = o.pixelPositivitySpecs;
+            this.region = region;
         }
 
         private DensityMapJobSpec(DensityMapJobSpec o, double thresholdNorm, String source, String fittedMethod) {
@@ -865,6 +1018,7 @@ public final class FiberDensityMapWorkflow {
             this.objectDensityClasses = o.objectDensityClasses;
             this.includePixelPositivity = o.includePixelPositivity;
             this.pixelPositivitySpecs = o.pixelPositivitySpecs;
+            this.region = o.region;
         }
 
         /** @return these settings as the pooled-threshold step reads them */
@@ -952,6 +1106,7 @@ public final class FiberDensityMapWorkflow {
                 posMaps.add(row);
             }
             m.put("pixelPositivitySpecs", posMaps);
+            region.putInto(m);
             return m;
         }
 
@@ -1006,6 +1161,11 @@ public final class FiberDensityMapWorkflow {
                     jstringList(p, "objectDensityClasses"),
                     jbool(p, "includePixelPositivity", false),
                     jpositivityList(p, "pixelPositivitySpecs"));
+            spec = spec.withRegion(DensityRegion.fromStored(
+                    jstring(p, "regionMode", null),
+                    jstringList(p, "regionClasses"),
+                    jstringList(p, "regionAnnotationIds"),
+                    jstringList(p, "regionAnnotationNames")));
             // A pooled run-wide threshold is replayed at the value it had, not
             // re-pooled, so a re-run reproduces the original map.
             String source = jstring(p, "thresholdSource", null);
