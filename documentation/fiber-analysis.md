@@ -658,6 +658,10 @@ Two consequences worth knowing:
 - **No annotation-level overlays for a tiled run.** At this size a
   single full-resolution PNG cannot be allocated either. Per-tile
   overlays are kept under `tiles/`.
+- **The input image of each region is deleted once it has been analysed.**
+  `region.png`, the channel read from the image, is re-readable from the
+  image at any time and was most of a run folder (112 MB for one tile of an
+  MH_FNA2 pilot run). A region or tile that fails keeps it, for checking.
 
 `Analysis downsample` remains the lever for trading detail against
 time. Note it runs out quickly for SHG: at 0.1732 um/px a 1 um fibre

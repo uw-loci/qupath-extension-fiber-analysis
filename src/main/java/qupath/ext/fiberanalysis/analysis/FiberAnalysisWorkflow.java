@@ -774,6 +774,7 @@ public class FiberAnalysisWorkflow {
         if (result.has("error") && !result.get("error").isJsonNull()) {
             throw new RuntimeException("Python error: " + result.get("error").getAsString());
         }
+        deleteRegionImage(regionPng);
 
         Map<String, Path> overlays = new LinkedHashMap<>();
         registerIfExists(overlays, "fiber_mask", annDir.resolve("fiber_mask_overlay.png"));
@@ -970,6 +971,7 @@ public class FiberAnalysisWorkflow {
 
                 int kept = mergeTileWindows(
                         tileDir.resolve("windows.json"), box, ownedBoxes.get(t), mergedByPos, coreOwned);
+                deleteRegionImage(tilePng);
                 tileWindowCounts.add(kept);
                 tileScalars.add(flattenScalars(result));
                 tileIndices.add(t);
@@ -1623,6 +1625,20 @@ public class FiberAnalysisWorkflow {
             }
         }
         // arrays intentionally skipped for the flat-scalar summary
+    }
+
+    /**
+     * Deletes a region's input image once Python has finished with it: it is re-readable from the
+     * image, and at full resolution it was most of a run folder (112 MB for one tile).
+     *
+     * @param png the region image
+     */
+    private static void deleteRegionImage(Path png) {
+        try {
+            Files.deleteIfExists(png);
+        } catch (IOException e) {
+            logger.debug("Could not delete {}: {}", png, e.getMessage());
+        }
     }
 
     private static void registerIfExists(Map<String, Path> out, String key, Path candidate) {

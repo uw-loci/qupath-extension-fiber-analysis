@@ -32,6 +32,8 @@ final class SidecarDescription {
     private static final Pattern CHANNEL_ROW =
             Pattern.compile("\\[(\\d+)]\\s*name=([^;\\r\\n]+)(?:;\\s*unit=([^\\r\\n;]+))?(?:;\\s*axial=([0-9.]+))?");
     private static final Pattern KEY_VALUE = Pattern.compile("(\\w+)=([^;\\s]+)");
+    // What a carriage return becomes in a description written on Windows: "&#13;", or " #13;".
+    private static final Pattern CR_RESIDUE = Pattern.compile("[ \\t]*&?#13;|\\r");
 
     private SidecarDescription() {}
 
@@ -52,7 +54,7 @@ final class SidecarDescription {
         d.append(String.format(
                 Locale.ROOT,
                 "%s source_width=%d; source_height=%d; source_pixel_um=%s; cell_px=%d; window_px=%d;"
-                        + " x0=%s; y0=%s; grid=%dx%d; render=%s%n",
+                        + " x0=%s; y0=%s; grid=%dx%d; render=%s\n",
                 PLACEMENT,
                 info.sourceWidth(),
                 info.sourceHeight(),
@@ -78,7 +80,7 @@ final class SidecarDescription {
             DensityChannelSpec spec = channels.get(c);
             d.append(String.format(
                     Locale.ROOT,
-                    "  [%d] name=%s%s%s%n",
+                    "  [%d] name=%s%s%s\n",
                     c,
                     spec.channelName,
                     spec.unit != null ? "; unit=" + spec.unit : "",
@@ -94,6 +96,7 @@ final class SidecarDescription {
      *     files written before maps were stored at grid resolution
      */
     static DensityMapInfo parseInfo(String desc) {
+        desc = clean(desc);
         Map<String, String> kv = null;
         String source = null;
         String threshold = null;
@@ -146,6 +149,7 @@ final class SidecarDescription {
 
     /** Visible for tests: extract channel rows from the description. */
     static List<DensitySidecar.ChannelInfo> parse(String desc) {
+        desc = clean(desc);
         // The name runs to the next ';' or the end of the line: a lazy (.+?)
         // followed only by optional groups matched ONE character, so every
         // channel was named by its first letter.
@@ -161,6 +165,14 @@ final class SidecarDescription {
         }
         out.sort((a, b) -> Integer.compare(a.index, b.index));
         return out;
+    }
+
+    /**
+     * @param desc a description as read from a file
+     * @return it without carriage returns or what they turned into on Windows
+     */
+    static String clean(String desc) {
+        return desc == null ? null : CR_RESIDUE.matcher(desc).replaceAll("");
     }
 
     private static String num(double v) {

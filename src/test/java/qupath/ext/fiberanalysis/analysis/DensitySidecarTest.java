@@ -28,6 +28,41 @@ class DensitySidecarTest {
     }
 
     @Test
+    void theDescriptionHasNoCarriageReturns() {
+        String desc = SidecarDescription.format(
+                info(DensityLattice.windows(4, 4, 87, 87, 0, 0), false, "a"), DensityChannelSpec.defaultChannels());
+        // A literal CR is what a Windows writer turned into " #13;" in the file.
+        assertThat(desc).doesNotContain("\r");
+    }
+
+    @Test
+    void aMapWrittenOnWindowsReadsClean() {
+        // As written into the MH_FNA2 pilot maps on 2026-10-23 (String.format %n on Windows).
+        String desc = "FiberAnalysis density map.\r\n"
+                + "Placement: source_width=94850; source_height=75512; source_pixel_um=0.1732; cell_px=87;"
+                + " window_px=87; x0=0; y0=0; grid=1090x867; render=nearest #13;\r\n"
+                + "Source image: img (1)\r\n"
+                + "Region: area annotations of class Tissue; 1 annotation(s), 4.000e+06 um^2\r\n"
+                + "Channels:\r\n"
+                + "  [0] name=Fiber coverage (%); unit=% #13;\r\n"
+                + "  [1] name=Ridge count #13;\r\n"
+                + "  [4] name=Mean angle (deg); unit=deg; axial=180 #13;\r\n"
+                + "  [5] name=Order parameter&#13;\r\n";
+        DensityMapInfo info = SidecarDescription.parseInfo(desc);
+        assertThat(info.smooth()).isFalse();
+        assertThat(info.lattice().gridW()).isEqualTo(1090);
+        assertThat(info.region()).isEqualTo("area annotations of class Tissue; 1 annotation(s), 4.000e+06 um^2");
+        var ch = info.channels();
+        assertThat(ch)
+                .extracting(c -> c.name)
+                .containsExactly("Fiber coverage (%)", "Ridge count", "Mean angle (deg)", "Order parameter");
+        assertThat(ch.get(0).unit).isEqualTo("%");
+        assertThat(ch.get(2).unit).isEqualTo("deg");
+        assertThat(ch.get(2).axialPeriod).isEqualTo(180.0);
+        assertThat(info.channelIndex("Order parameter")).isEqualTo(3);
+    }
+
+    @Test
     void everyChannelNameRoundTripsWhole() {
         var channels = new java.util.ArrayList<>(DensityChannelSpec.defaultChannels());
         channels.add(DensityChannelSpec.forObjectClass("Tumor: Stroma"));
