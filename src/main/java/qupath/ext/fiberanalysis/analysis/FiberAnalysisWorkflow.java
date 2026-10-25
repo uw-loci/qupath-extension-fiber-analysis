@@ -51,6 +51,9 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import org.apposed.appose.Service.Task;
+import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.prep.PreparedGeometry;
+import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.FiberAnalysisExtension;
@@ -228,6 +231,20 @@ public class FiberAnalysisWorkflow {
         return new int[] {
             rx, ry, Math.min(server.getWidth() - rx, w + 2 * pad), Math.min(server.getHeight() - ry, h + 2 * pad)
         };
+    }
+
+    /**
+     * Whether a tile's read box overlaps the analysis zone.
+     *
+     * @param zone zone geometry, full-image pixels
+     * @param x    tile x, full-image pixels
+     * @param y    tile y, full-image pixels
+     * @param w    tile width, full-image pixels
+     * @param h    tile height, full-image pixels
+     * @return true if any part of the zone lies in the tile
+     */
+    static boolean tileTouchesZone(PreparedGeometry zone, int x, int y, int w, int h) {
+        return zone.intersects(zone.getGeometry().getFactory().toGeometry(new Envelope(x, x + w, y, y + h)));
     }
 
     /**
@@ -536,7 +553,8 @@ public class FiberAnalysisWorkflow {
                                     shot.runId,
                                     paramsHash,
                                     params.minWindowCoveragePercent(),
-                                    res.downsample());
+                                    res.downsample(),
+                                    pixelSizeUm * res.downsample());
                             allWindowDetections.addAll(windowDetections);
                             logger.info(
                                     "Created {} window detection objects for annotation '{}'",
@@ -906,6 +924,11 @@ public class FiberAnalysisWorkflow {
         // Each tile sees only part of the outline, so the zone (a band measured
         // from the whole outline) is computed here once and rasterised per tile.
         ROI zoneRoi = AnalysisZone.roi(roi, params.zoneMode(), params.borderZoneUm() / (pixelSizeEffUm / ds));
+        PreparedGeometry zoneGeom = PreparedGeometryFactory.prepare(zoneRoi.getGeometry());
+        if (params.radonOn()) {
+            logger.info(
+                    "Annotation {}: Radon is not computed on a tiled run (its tiles' values do not combine)", index);
+        }
         Path tilesDir = annDir.resolve("tiles");
         Files.createDirectories(tilesDir);
 
@@ -927,6 +950,7 @@ public class FiberAnalysisWorkflow {
         ProgressEstimator est = new ProgressEstimator(grid.count());
         String runId = "";
         int failed = 0;
+        int skipped = 0;
 
         for (int t = 0; t < grid.count(); t++) {
             if (progress.isCancelled()) {
@@ -946,6 +970,14 @@ public class FiberAnalysisWorkflow {
             int tileFullY = ry + (int) Math.round(box.y() * ds);
             int tileFullW = (int) Math.round(box.w() * ds);
             int tileFullH = (int) Math.round(box.h() * ds);
+            // A tile clear of the zone holds no window that counts; reading and
+            // analysing it cost about a minute each on PDAC_1.
+            if (!tileTouchesZone(zoneGeom, tileFullX, tileFullY, tileFullW, tileFullH)) {
+                skipped++;
+                est.unitCompleted();
+                progress.setEstimate(est, "tiles");
+                continue;
+            }
 
             try {
                 Path tilePng = tileDir.resolve("region.png");
@@ -977,6 +1009,7 @@ public class FiberAnalysisWorkflow {
                         (int) Math.round(annH / ds),
                         ownedBoxes.get(t));
                 in.put("zone_mask_path", tileZone.toString());
+                in.put("radon_on", false);
 
                 Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", in);
                 Object json = task.outputs.get("result_json");
@@ -1012,6 +1045,10 @@ public class FiberAnalysisWorkflow {
             logger.warn(
                     "Annotation {}: {} of {} tiles failed; merged results cover the rest", index, failed, grid.count());
         }
+        if (skipped > 0) {
+            logger.info(
+                    "Annotation {}: {} of {} tiles skipped, clear of the analysis zone", index, skipped, grid.count());
+        }
 
         int windowPx = TileGrid.windowPx(params.windowSizeUm(), pixelSizeEffUm);
         int stridePx = TileGrid.stridePx(windowPx, params.windowOverlapPercent());
@@ -1023,7 +1060,7 @@ public class FiberAnalysisWorkflow {
                 "Annotation {}: merged {} windows from {} tiles into {}",
                 index,
                 mergedWindows.size(),
-                grid.count() - failed,
+                grid.count() - failed - skipped,
                 mergedJson.getFileName());
 
         Map<String, Double> summary = aggregateTileScalars(tileScalars, tileWindowCounts);
@@ -1035,7 +1072,15 @@ public class FiberAnalysisWorkflow {
         // provenance to tell a tiled aggregate from a single-shot result.
         if (params.jsonSidecar()) {
             writeTiledSummaryJson(
-                    annDir.resolve("results.json"), summary, tileScalars, grid, failed, mergedWindows.size(), runId);
+                    annDir.resolve("results.json"),
+                    summary,
+                    tileScalars,
+                    grid,
+                    failed,
+                    skipped,
+                    mergedWindows.size(),
+                    runId,
+                    params.radonOn());
         }
         // No annotation-level overlays for a tiled run: at this size a single
         // full-resolution PNG cannot be allocated either. Per-tile overlays are
@@ -1350,8 +1395,10 @@ public class FiberAnalysisWorkflow {
             List<Map<String, Double>> tileScalars,
             TileGrid grid,
             int tilesFailed,
+            int tilesSkipped,
             int windowCount,
-            String runId)
+            String runId,
+            boolean radonRequested)
             throws IOException {
         JsonObject root = new JsonObject();
         root.addProperty("result_kind", "tiled_aggregate");
@@ -1361,6 +1408,7 @@ public class FiberAnalysisWorkflow {
         tiling.addProperty("tiles_total", grid.count());
         tiling.addProperty("tiles_succeeded", tileScalars.size());
         tiling.addProperty("tiles_failed", tilesFailed);
+        tiling.addProperty("tiles_skipped_outside_zone", tilesSkipped);
         tiling.addProperty("window_px", grid.windowPx());
         tiling.addProperty("stride_px", grid.stride());
         tiling.addProperty("tile_step_px", grid.step());
@@ -1376,6 +1424,11 @@ public class FiberAnalysisWorkflow {
         JsonArray droppedArr = new JsonArray();
         for (String k : droppedTileScalarKeys(tileScalars)) droppedArr.add(k);
         tiling.add("omitted_scalars", droppedArr);
+        if (radonRequested) {
+            tiling.addProperty(
+                    "radon",
+                    "not computed: the Radon profile of an annotation is not the average of its tiles' profiles");
+        }
         root.add("tiling", tiling);
 
         JsonObject summaryObj = new JsonObject();
@@ -1588,6 +1641,7 @@ public class FiberAnalysisWorkflow {
         in.put("texture_homogeneity", p.homogeneity());
         in.put("texture_entropy", p.entropy());
         in.put("texture_dissimilarity", p.dissimilarity());
+        in.put("glcm_per_distance", p.glcmPerDistance());
 
         // Output
         in.put("output_dir", outputDir.toString());
@@ -2100,6 +2154,7 @@ public class FiberAnalysisWorkflow {
         m.put("jsonSidecar", p.jsonSidecar());
         m.put("emitNpz", p.emitNpz());
         m.put("collagenObjects", p.collagenObjects());
+        m.put("glcmPerDistance", p.glcmPerDistance());
         return m;
     }
 
@@ -2335,6 +2390,18 @@ public class FiberAnalysisWorkflow {
      * extended to handle the richer fiber-analysis window schema (see
      * {@code fiberlib/io.py} {@code save_windows_json}).
      */
+    /**
+     * Measurement name for one GLCM property at one distance.
+     *
+     * @param prop  property name as Python writes it, e.g. "contrast"
+     * @param distUm distance in micrometres
+     * @return e.g. "Contrast (GLCM, 10.05 um)"
+     */
+    static String glcmDistanceName(String prop, double distUm) {
+        String cap = prop.isEmpty() ? prop : Character.toUpperCase(prop.charAt(0)) + prop.substring(1);
+        return String.format(Locale.ROOT, "%s (GLCM, %.2f um)", cap, distUm);
+    }
+
     private static List<PathObject> createWindowDetections(
             Path windowsJsonPath,
             int offsetX,
@@ -2343,7 +2410,8 @@ public class FiberAnalysisWorkflow {
             String runId,
             String paramsHash,
             double minWindowCoveragePercent,
-            double downsample) {
+            double downsample,
+            double pixelSizeEffUm) {
         List<PathObject> out = new ArrayList<>();
         try (Reader reader = Files.newBufferedReader(windowsJsonPath)) {
             JsonObject root = new Gson().fromJson(reader, JsonObject.class);
@@ -2450,6 +2518,27 @@ public class FiberAnalysisWorkflow {
                                 && v.isJsonPrimitive()
                                 && v.getAsJsonPrimitive().isNumber()) {
                             det.getMeasurementList().put(key, v.getAsDouble());
+                        }
+                    }
+                }
+                // One value per GLCM distance, next to the average above; only
+                // written when more than one distance was asked for.
+                if (w.has("texture_by_distance") && w.get("texture_by_distance").isJsonObject()) {
+                    for (Map.Entry<String, JsonElement> de :
+                            w.getAsJsonObject("texture_by_distance").entrySet()) {
+                        if (!de.getValue().isJsonObject()) continue;
+                        double dUm;
+                        try {
+                            dUm = Integer.parseInt(de.getKey()) * pixelSizeEffUm;
+                        } catch (NumberFormatException ex) {
+                            continue;
+                        }
+                        for (Map.Entry<String, JsonElement> e :
+                                de.getValue().getAsJsonObject().entrySet()) {
+                            JsonElement v = e.getValue();
+                            if (v == null || v.isJsonNull() || !v.isJsonPrimitive()) continue;
+                            if (!v.getAsJsonPrimitive().isNumber()) continue;
+                            det.getMeasurementList().put(glcmDistanceName(e.getKey(), dUm), v.getAsDouble());
                         }
                     }
                 }

@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -517,3 +517,16 @@ __version__ = "0.4.2"
 #     own. segment_internal(return_threshold=True) returns it with the mask, so
 #     the segmentation preview can say which value it cut at and whether the
 #     run will cut at the same one.
+
+# 0.4.3 (2026-10-25):
+#   - texture.compute_glcm_window(per_distance=True) / analyze(glcm_per_distance=True),
+#     off by default: with two or more GLCM distances, each
+#     window also carries the value at each distance alone
+#     (``per_window_by_distance``; windows.json ``texture_by_distance``), next
+#     to the average over all of them, which is unchanged.
+#   - Same results, less work, measured on a 7830 px PDAC_1 tile:
+#     segmentation.pick_channel takes HSV V as the channel maximum instead of
+#     converting the whole tile to HSV (24 s); compute_skeleton_tortuosity
+#     reuses the pipeline's skeleton (8 s); the annotation and per-window gap
+#     statistics share one distance transform (18 s); Radon and texture share
+#     one value scalar.

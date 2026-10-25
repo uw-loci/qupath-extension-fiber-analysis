@@ -23,6 +23,9 @@ windows.json schema (consumed by the Java side and by pandas users):
          "tortuosity_median": float | null,  # was `tortuosity` in v0.1.0
          "texture": {                        # optional, per GLCM property
             "contrast": float, ...
+         },
+         "texture_by_distance": {            # optional, with 2+ GLCM distances
+            "<distance_px>": {"contrast": float, ...}, ...
          }
         },
         ...
@@ -83,6 +86,11 @@ def save_windows_json(window_grid, path, meta=None, pixel_size_um=None):
     tort = window_grid.get("tortuosity")
     n_fibers_grid = window_grid.get("n_fibers")
     tex = window_grid.get("texture", {}) if isinstance(window_grid.get("texture"), dict) else {}
+    tex_by_d = (
+        window_grid.get("texture_by_distance", {})
+        if isinstance(window_grid.get("texture_by_distance"), dict)
+        else {}
+    )
     # Per-window morphometric arrays. Flattened directly into each window
     # entry so `pd.json_normalize` finds them as flat columns next to the
     # existing fields (n_fiber_px, tortuosity_median, etc.).
@@ -158,6 +166,11 @@ def save_windows_json(window_grid, path, meta=None, pixel_size_um=None):
                 entry["tortuosity_median"] = _scalar(tort[iy, ix])
             if tex:
                 entry["texture"] = {k: _scalar(v[iy, ix]) for k, v in tex.items() if v is not None}
+            if tex_by_d:
+                entry["texture_by_distance"] = {
+                    str(d): {k: _scalar(v[iy, ix]) for k, v in dv.items() if v is not None}
+                    for d, dv in tex_by_d.items()
+                }
             for mk, mv in morph_pw.items():
                 if isinstance(mv, np.ndarray) and mv.shape == (Hw, Ww):
                     entry[mk] = _scalar(mv[iy, ix])

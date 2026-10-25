@@ -23,14 +23,14 @@ import qupath.ext.fiberanalysis.analysis.FiberAnalysisParams;
 class FiberAnalysisParamsTest {
 
     /**
-     * 62 components, the last added being manualResponseThreshold (the Manual
-     * cut used with a ridge filter). If this fails after a deliberate change,
+     * 63 components, the last added being glcmPerDistance (one GLCM value per
+     * distance next to the average). If this fails after a deliberate change,
      * update both this test and 02_ui_design.md.
      */
     @Test
     void recordHasExpectedComponentCount() {
         RecordComponent[] components = FiberAnalysisParams.class.getRecordComponents();
-        assertThat(components).hasSize(62);
+        assertThat(components).hasSize(63);
     }
 
     @Test

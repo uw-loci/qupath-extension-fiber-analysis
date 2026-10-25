@@ -139,6 +139,7 @@ def analyze(
     texture_homogeneity=True,
     texture_entropy=False,
     texture_dissimilarity=False,
+    glcm_per_distance=False,
     heatmap_property="contrast",
     # Boundary bbox fallback (region-local pixel coords)
     bbox_x=0,
@@ -386,6 +387,7 @@ def analyze(
         pe["quant_levels"] = qlevels
         pe["glcm_distances_px"] = list(glcm_dists)
         pe["texture_props"] = [k for k, on in tex_props.items() if on]
+        pe["glcm_per_distance"] = bool(glcm_per_distance)
         pe["heatmap_property"] = heatmap_prop
     pe["emit_fiber_mask_png"] = emit_mask
     pe["emit_straightness_png"] = emit_str
@@ -509,6 +511,18 @@ def analyze(
     # ---- Fiber-angle map (geometric: tangent of the skeleton) ----
     skeleton, fiber_angles_deg = straight.skeletonize_and_tangents(analysis_mask)
 
+    _scalar_cache = []
+
+    def _value_scalar():
+        """rgb_to_value(image_rgb), computed once for Radon and texture."""
+        if not _scalar_cache:
+            _scalar_cache.append(rgb_to_value(image_rgb))
+        return _scalar_cache[0]
+
+    # One distance transform of the fiber mask serves the annotation and the
+    # per-window gap statistics; they differ only in which centres count.
+    gap_dist = morph.gap_distance(fiber_mask) if (morph_on and morph_flags["gaps"]) else None
+
     # ---- Window grid (axial circular stats) ----
     window_grid = None
     if win_on:
@@ -579,6 +593,7 @@ def analyze(
                 analysis_mask,
                 window_grid=window_grid,
                 min_branch_px=max(1, int(round(min_branch_um_v / px_um))),
+                skeleton=skeleton,
             )
             # chord/arc summary statistics over fibers traced through
             # crossings. See straightness.compute_skeleton_tortuosity for
@@ -600,7 +615,7 @@ def analyze(
             if window_grid is not None and "per_window_n_fibers" in tort:
                 window_grid["n_fibers"] = tort["per_window_n_fibers"]
         if rad_on:
-            scalar = rgb_to_value(image_rgb)
+            scalar = _value_scalar()
             radon_out = straight.compute_radon_scalar(scalar, analysis_mask)
             # compute_radon_scalar measures the rho FWHM in pixels and leaves
             # the conversion to its caller, which is here. Without this the
@@ -643,7 +658,7 @@ def analyze(
         if morph_flags["gaps"]:
             # Counted in the owned core only, so a tiled run counts each gap
             # once; the Java merge combines tiles by gap_count and maximum.
-            gap = morph.gap_analysis(fiber_mask, _c(zone_mask))
+            gap = morph.gap_analysis(fiber_mask, _c(zone_mask), dist=gap_dist)
             m_block["gap_mean_um"] = float(gap["mean_gap_px"] * px_um)
             m_block["gap_max_um"] = float(gap["max_gap_px"] * px_um)
             m_block["gap_count"] = int(gap["n_gaps"])
@@ -651,7 +666,7 @@ def analyze(
 
     # ---- Family: texture (GLCM) ----
     if tex_on:
-        scalar = rgb_to_value(image_rgb)
+        scalar = _value_scalar()
         tex_block = tex.compute_glcm_window(
             image_scalar=scalar,
             fiber_mask=analysis_mask,
@@ -659,6 +674,7 @@ def analyze(
             quant_levels=qlevels,
             distances_px=glcm_dists,
             props=[k for k, on in tex_props.items() if on],
+            per_distance=bool(glcm_per_distance),
         )
         result["texture"] = {
             "props": [k for k, on in tex_props.items() if on],
@@ -671,6 +687,8 @@ def analyze(
         }
         if window_grid is not None:
             window_grid["texture"] = tex_block.get("per_window", {})
+            if "per_window_by_distance" in tex_block:
+                window_grid["texture_by_distance"] = tex_block["per_window_by_distance"]
 
     # ---- Per-window morphometric arrays ----
     if morph_on and window_grid is not None:
@@ -686,6 +704,7 @@ def analyze(
             flags=morph_flags,
             zone_mask=zone_mask,
             gap_fiber_mask=fiber_mask,
+            gap_dist=gap_dist,
         )
         if "total_length_px" in pw_morph:
             pw_morph["total_length_um"] = pw_morph["total_length_px"] * px_um
@@ -723,8 +742,13 @@ def analyze(
                     and arr.dtype.kind == "f"
                 ):
                     arr[invalid] = np.nan
-            tex_block = window_grid.get("texture")
-            if isinstance(tex_block, dict):
+            tex_blocks = [window_grid.get("texture")]
+            by_d = window_grid.get("texture_by_distance")
+            if isinstance(by_d, dict):
+                tex_blocks += list(by_d.values())
+            for tex_block in tex_blocks:
+                if not isinstance(tex_block, dict):
+                    continue
                 for k, v in tex_block.items():
                     if (
                         isinstance(v, np.ndarray)

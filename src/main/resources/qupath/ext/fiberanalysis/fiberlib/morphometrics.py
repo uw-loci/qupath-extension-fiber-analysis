@@ -208,7 +208,7 @@ def lacunarity(fiber_mask, box_sizes_px):
 
 # ---- gap analysis ----------------------------------------------------------
 
-def gap_peaks(fiber_mask, zone_mask=None):
+def gap_peaks(fiber_mask, zone_mask=None, dist=None):
     """Gap widths at the centres of the fiber-free spaces, as a full-size array.
 
     A gap centre is a 3x3 local maximum of the distance to the nearest fiber
@@ -221,13 +221,17 @@ def gap_peaks(fiber_mask, zone_mask=None):
     Through fiberlib 0.3.11 the radius was reported as the gap, and centres
     outside the zone or cut by the edge were counted.
 
+    ``dist`` is :func:`gap_distance` of the same ``fiber_mask``, to share one
+    distance transform between calls that differ only in ``zone_mask``.
+
     Returns:
         (H, W) float array: the width at each counted centre, 0 elsewhere.
     """
     fm = fiber_mask.astype(bool)
     if not fm.any():
         return np.zeros(fm.shape, dtype=np.float64)
-    dist = ndimage.distance_transform_edt(~fm)
+    if dist is None:
+        dist = gap_distance(fm)
     nb_max = ndimage.maximum_filter(dist, size=3, mode="constant", cval=0.0)
     peaks = (dist == nb_max) & (dist > 1.0)
     h, w = fm.shape
@@ -239,14 +243,19 @@ def gap_peaks(fiber_mask, zone_mask=None):
     return np.where(peaks, 2.0 * dist, 0.0)
 
 
-def gap_analysis(fiber_mask, zone_mask=None):
+def gap_distance(fiber_mask):
+    """Distance from each pixel to the nearest fiber pixel, for :func:`gap_peaks`."""
+    return ndimage.distance_transform_edt(~np.asarray(fiber_mask, dtype=bool))
+
+
+def gap_analysis(fiber_mask, zone_mask=None, dist=None):
     """Distance-transform-based gap widths (see :func:`gap_peaks`).
 
     Returns a dict with ``mean_gap_px``, ``max_gap_px`` (widths, pixels; NaN
     when there is no gap) and ``n_gaps``. A fast proxy for "largest inscribed
     circle in fiber-free regions" without bringing in OpenCV.
     """
-    widths = gap_peaks(fiber_mask, zone_mask)
+    widths = gap_peaks(fiber_mask, zone_mask, dist=dist)
     vals = widths[widths > 0]
     if vals.size == 0:
         return {"mean_gap_px": float("nan"), "max_gap_px": float("nan"), "n_gaps": 0}
@@ -278,6 +287,7 @@ def per_window_morphometrics(
     flags=None,
     zone_mask=None,
     gap_fiber_mask=None,
+    gap_dist=None,
 ):
     """Compute morphometric measurements on a moving window grid.
 
@@ -317,6 +327,7 @@ def per_window_morphometrics(
         gap_fiber_mask: fibers the gap distances are measured to, normally
             every segmented fiber rather than only those in the zone.
             Defaults to ``fiber_mask``.
+        gap_dist: :func:`gap_distance` of that mask, if already computed.
 
     Returns:
         Dict of {name: np.ndarray(Hw, Ww)} for every enabled metric. Per-box
@@ -356,7 +367,7 @@ def per_window_morphometrics(
     # the whole image, not by treating the window edge as fiber.
     peak_vals_full = None
     if flags.get("gaps"):
-        peak_vals_full = gap_peaks(fm if gap_fiber_mask is None else gap_fiber_mask, zone_mask)
+        peak_vals_full = gap_peaks(fm if gap_fiber_mask is None else gap_fiber_mask, zone_mask, dist=gap_dist)
 
     out = {}
 

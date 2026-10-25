@@ -377,7 +377,8 @@ public final class FiberAnalysisBatchDialog {
                 base.morphSummary(),
                 base.jsonSidecar(),
                 base.emitNpz(),
-                base.collagenObjects());
+                base.collagenObjects(),
+                base.glcmPerDistance());
     }
 
     private void runBatch(FiberAnalysisParams params, List<ProjectImageEntry<BufferedImage>> entries) {
@@ -676,7 +677,8 @@ public final class FiberAnalysisBatchDialog {
                 bool(obj, "morphSummary", true),
                 bool(obj, "jsonSidecar", true),
                 bool(obj, "emitNpz", false),
-                bool(obj, "collagenObjects", true));
+                bool(obj, "collagenObjects", true),
+                bool(obj, "glcmPerDistance", false));
     }
 
     private static String str(JsonObject o, String key, String def) {

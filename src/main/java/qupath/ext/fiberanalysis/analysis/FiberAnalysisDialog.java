@@ -164,6 +164,7 @@ public final class FiberAnalysisDialog {
     private CheckBox homogeneityCheck;
     private CheckBox entropyCheck;
     private CheckBox dissimilarityCheck;
+    private CheckBox glcmPerDistanceCheck;
 
     // -- Section 7 --
     private TextField outputDirField;
@@ -1540,11 +1541,20 @@ public final class FiberAnalysisDialog {
         propGrid.add(entropyCheck, 0, 2);
         propGrid.add(dissimilarityCheck, 1, 2);
         content.getChildren().add(propGrid);
+        glcmPerDistanceCheck = new CheckBox("Also one value per distance");
+        glcmPerDistanceCheck.setSelected(
+                FiberAnalysisPreferences.glcmPerDistanceProperty().get());
+        applyTooltip(
+                glcmPerDistanceCheck,
+                "With two or more distances, each window also gets each property at each distance alone, "
+                        + "e.g. \"Contrast (GLCM, 10.05 um)\", next to the average over all distances.");
+        content.getChildren().add(glcmPerDistanceCheck);
 
         BooleanBinding textureDisabled = textureEnabledCheck.selectedProperty().not();
         numericGrid.disableProperty().bind(textureDisabled);
         propLabel.disableProperty().bind(textureDisabled);
         propGrid.disableProperty().bind(textureDisabled);
+        glcmPerDistanceCheck.disableProperty().bind(textureDisabled);
 
         return SectionBuilder.createSection("6. Texture (GLCM / Haralick)", false, content);
     }
@@ -1860,7 +1870,8 @@ public final class FiberAnalysisDialog {
                 morphSummaryCheck.isSelected(),
                 jsonSidecarCheck.isSelected(),
                 emitNpzCheck.isSelected(),
-                collagenObjectsCheck.isSelected());
+                collagenObjectsCheck.isSelected(),
+                glcmPerDistanceCheck.isSelected());
     }
 
     /**
@@ -1933,6 +1944,7 @@ public final class FiberAnalysisDialog {
         FiberAnalysisPreferences.homogeneityProperty().set(homogeneityCheck.isSelected());
         FiberAnalysisPreferences.entropyProperty().set(entropyCheck.isSelected());
         FiberAnalysisPreferences.dissimilarityProperty().set(dissimilarityCheck.isSelected());
+        FiberAnalysisPreferences.glcmPerDistanceProperty().set(glcmPerDistanceCheck.isSelected());
 
         FiberAnalysisPreferences.outputDirProperty().set(emptyIfNull(outputDirField.getText()));
         FiberAnalysisPreferences.fiberMaskOverlayProperty().set(fiberMaskOverlayCheck.isSelected());

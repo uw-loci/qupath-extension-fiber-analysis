@@ -125,7 +125,10 @@ public record FiberAnalysisParams(
         // CollagenAnalysis. Independent of the per-window detection toggle
         // (Section 3) -- this one is one detection per fiber blob, classed
         // as collagen, regardless of windowing.
-        boolean collagenObjects) {
+        boolean collagenObjects,
+        // With two or more GLCM distances, also one measurement per distance
+        // next to the average over them. Output only: the average is unchanged.
+        boolean glcmPerDistance) {
 
     /**
      * @param downsample the analysis downsample
@@ -237,6 +240,7 @@ public record FiberAnalysisParams(
                 FiberAnalysisPreferences.morphSummaryProperty().get(),
                 FiberAnalysisPreferences.jsonSidecarProperty().get(),
                 FiberAnalysisPreferences.emitNpzProperty().get(),
-                FiberAnalysisPreferences.collagenObjectsProperty().get());
+                FiberAnalysisPreferences.collagenObjectsProperty().get(),
+                FiberAnalysisPreferences.glcmPerDistanceProperty().get());
     }
 }

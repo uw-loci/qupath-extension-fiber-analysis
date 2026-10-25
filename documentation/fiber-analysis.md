@@ -658,6 +658,19 @@ Two consequences worth knowing:
 - **No annotation-level overlays for a tiled run.** At this size a
   single full-resolution PNG cannot be allocated either. Per-tile
   overlays are kept under `tiles/`.
+- **Tiles with no part of the analysis zone are skipped.** A tile in an
+  empty corner of the bounding box holds no window that counts, so it is
+  neither read nor analysed. On the MH_FNA2 PDAC_1 tissue outline, 54 of
+  130 tiles were empty and cost about a minute each. The windows are the
+  same either way. `results.json` records the number under
+  `tiling.tiles_skipped_outside_zone`. The region totals (`region_pixels`
+  and the region coverage) count only the tiles that were analysed.
+- **No Radon scalar for a tiled run.** The Radon profile of an annotation
+  is not the average of its tiles' profiles. A tile's Radon transform was
+  also half the run time of a PDAC_1 tile (291 of 583 s, measured on one
+  tile), so a tiled run skips it.
+  `results.json` says so under `tiling.radon`. Radon is a per-annotation
+  number and never a window measurement, so the windows do not change.
 - **The input image of each region is deleted once it has been analysed.**
   `region.png`, the channel read from the image, is re-readable from the
   image at any time and was most of a run folder (112 MB for one tile of an
@@ -997,6 +1010,15 @@ not raw RGB.
    `d in {1, 2, 3}` (`d <= window_side / 8`), `theta in {0, 45, 90, 135
    deg}`, averaged over the offsets that have at least one pair; a window
    with none is NaN.
+
+   With **Also one value per distance** ticked (off by default) and more
+   than one distance, each window detection also gets the value at each
+   distance alone, averaged over the four angles, next to the average
+   over all of them, which does not change. The measurement name gives the distance,
+   for example `Contrast (GLCM, 10.05 um)` beside `Contrast (GLCM)`. The
+   distance is the pixel offset times the pixel size, so 10 um at
+   0.1732 um/px is 58 px, or 10.05 um. In `windows.json` these values are
+   under `texture_by_distance`, keyed by the distance in pixels.
 3. **Features** (scikit-image `graycoprops`) on normalised
    `P(i, j)`:
 

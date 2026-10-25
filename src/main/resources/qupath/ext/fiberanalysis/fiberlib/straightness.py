@@ -414,7 +414,7 @@ def segment_tortuosity(path):
 WAVY_STRAIGHTNESS_CUT = 0.85
 
 
-def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2):
+def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2, skeleton=None):
     """Per-fiber straightness (chord/arc), CT-FIRE convention.
 
     Fibers are traced through crossings by :func:`trace_fibers` rather than
@@ -450,8 +450,10 @@ def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2):
       median_fiber_len_px    median traced length. Report it: it is the
                              number that says whether the others describe
                              fibers or fragments.
+
+    ``skeleton``, when given, is ``skeletonize(fiber_mask)`` already computed.
     """
-    sk = skmorph.skeletonize(fiber_mask.astype(bool))
+    sk = skmorph.skeletonize(fiber_mask.astype(bool)) if skeleton is None else np.asarray(skeleton, dtype=bool)
     segs = [p for p in trace_fibers(sk) if len(p) >= int(min_branch_px)]
     paired = [(p, segment_tortuosity(p)) for p in segs]
     paired = [(p, t) for p, t in paired if t == t]  # drop NaNs

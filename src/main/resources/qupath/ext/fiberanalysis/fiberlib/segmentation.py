@@ -77,6 +77,10 @@ def pick_channel(image, channel):
 
     key = _CHANNEL_KEYS.get(str(channel).strip().lower(), "value")
     rgb_scaled = scale_to_unit(image[..., :3])
+    if key == "value":
+        # HSV V is the channel maximum; the full conversion took 24 s on a
+        # 7830 px tile for this one plane.
+        return rgb_scaled.max(axis=-1).astype(np.float32)
     hsv = rgb2hsv(rgb_scaled)
     if key == "hue":
         return hsv[..., 0].astype(np.float32)

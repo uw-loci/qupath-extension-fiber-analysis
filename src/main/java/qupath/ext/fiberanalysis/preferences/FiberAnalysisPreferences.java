@@ -99,6 +99,7 @@ public class FiberAnalysisPreferences {
     // as CollagenAnalysis. ON by default so the analyzed fibers are
     // immediately queryable / classifiable in the hierarchy.
     public static final boolean DEFAULT_COLLAGEN_OBJECTS = true;
+    public static final boolean DEFAULT_GLCM_PER_DISTANCE = false;
     // Minimum fiber coverage % per window for it to be reported. Below this,
     // the window is excluded from PathObject creation AND its heatmap cell
     // is rendered transparent. Default 5% suppresses the corners-of-rounded-
@@ -184,6 +185,7 @@ public class FiberAnalysisPreferences {
     private static IntegerProperty windowOverlapPercent;
     private static BooleanProperty windowObjects;
     private static BooleanProperty collagenObjects;
+    private static BooleanProperty glcmPerDistance;
     private static DoubleProperty minWindowCoveragePercent;
 
     private static BooleanProperty straightnessEnabled;
@@ -281,6 +283,7 @@ public class FiberAnalysisPreferences {
                 PathPrefs.createPersistentPreference(PREFIX + "windowOverlapPercent", DEFAULT_WINDOW_OVERLAP_PERCENT);
         windowObjects = PathPrefs.createPersistentPreference(PREFIX + "windowObjects", DEFAULT_WINDOW_OBJECTS);
         collagenObjects = PathPrefs.createPersistentPreference(PREFIX + "collagenObjects", DEFAULT_COLLAGEN_OBJECTS);
+        glcmPerDistance = PathPrefs.createPersistentPreference(PREFIX + "glcmPerDistance", DEFAULT_GLCM_PER_DISTANCE);
         minWindowCoveragePercent = PathPrefs.createPersistentPreference(
                 PREFIX + "minWindowCoveragePercent", DEFAULT_MIN_WINDOW_COVERAGE_PERCENT);
 
@@ -450,6 +453,10 @@ public class FiberAnalysisPreferences {
 
     public static BooleanProperty windowObjectsProperty() {
         return windowObjects;
+    }
+
+    public static BooleanProperty glcmPerDistanceProperty() {
+        return glcmPerDistance;
     }
 
     public static BooleanProperty collagenObjectsProperty() {
