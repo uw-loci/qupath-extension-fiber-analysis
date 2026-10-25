@@ -746,6 +746,19 @@ where `p` is the overlap fraction (default 0). Larger windows
 metric; smaller windows resolve finer spatial variation but increase
 per-window noise.
 
+**The grid is laid from the image origin, not from each annotation.**
+Every window starts at a multiple of the stride counted from the image's
+top-left corner (the region read around an annotation is moved out to
+the nearest grid line, by less than one stride). So windows of two
+annotations on one image line up, and they line up with a project
+density map whose window divides this one. At 0.1732 um/px a 10 um
+density map has 58 px cells; a 50.2 um annotation window is 290 px, 5 x
+58, so each annotation window covers exactly 5 x 5 map cells (a 50 um
+window would be 289 px and drift a pixel per window). Window sizes are
+rounded to whole pixels separately, so pick the larger size as a whole
+multiple of the smaller in pixels. Before 2026-10-25 each annotation's
+grid started at its own padded corner.
+
 The grid implementation is lifted from PPM's `compute_window_alignment`
 (MIT, attribution comment retained). It computes the per-window mean
 fiber-pixel count plus the **axial circular statistics** described in

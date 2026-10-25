@@ -231,6 +231,25 @@ public class FiberAnalysisWorkflow {
     }
 
     /**
+     * Moves a read box's origin down to the window grid laid from the image origin, keeping its
+     * far edges.
+     *
+     * @param box  {@code {x, y, w, h}} in full-resolution pixels
+     * @param step the window stride in full-resolution pixels
+     * @param imgW image width
+     * @param imgH image height
+     * @return the aligned box, clipped to the image
+     */
+    static int[] alignToGrid(int[] box, int step, int imgW, int imgH) {
+        if (step <= 1) return box;
+        int x = Math.floorDiv(box[0], step) * step;
+        int y = Math.floorDiv(box[1], step) * step;
+        int right = Math.min(imgW, box[0] + box[2]);
+        int bottom = Math.min(imgH, box[1] + box[3]);
+        return new int[] {x, y, right - x, bottom - y};
+    }
+
+    /**
      * The analysis regions of some annotations on one image, for pooling a threshold.
      *
      * @param p           the run's parameters
@@ -636,7 +655,17 @@ public class FiberAnalysisWorkflow {
 
         // Dilated bbox: pad by the border-zone width (converted to pixels) plus a slop.
         double dilationPx = params.borderZoneUm() / pixelSizeUm;
-        int[] box = readBox(roi, server, dilationPx);
+        double ds = Math.max(1.0, params.analysisDownsample());
+        double pixelSizeEffUm = pixelSizeUm * ds;
+        int windowPx = TileGrid.windowPx(params.windowSizeUm(), pixelSizeEffUm);
+        int stridePx = TileGrid.stridePx(windowPx, params.windowOverlapPercent());
+        // Windows sit on one grid from the image origin, so annotations, and a density map with a
+        // window that divides this one, line up.
+        int[] box = alignToGrid(
+                readBox(roi, server, dilationPx),
+                (int) Math.round(stridePx * ds),
+                server.getWidth(),
+                server.getHeight());
         int rx = box[0];
         int ry = box[1];
         int rw = box[2];
@@ -658,11 +687,9 @@ public class FiberAnalysisWorkflow {
         // Written to disk rather than passed as an NDArray through Appose to keep
         // the contract simple. A future iteration can switch to NDArray IPC for
         // speed (pattern in PPMPerpendicularityWorkflow.bufferedImageToRGBNDArray).
-        double ds = Math.max(1.0, params.analysisDownsample());
         long readW = (long) Math.ceil(rw / ds);
         long readH = (long) Math.ceil(rh / ds);
         long samples = readW * readH;
-        double pixelSizeEffUm = pixelSizeUm * ds;
         logger.info(
                 "Annotation {}: pixel size {} um/px (effective {} at downsample {}), reading {}x{} = {} MP",
                 index,
@@ -679,8 +706,6 @@ public class FiberAnalysisWorkflow {
         // Tile whenever the read would exceed one tile's budget. PIL warns above
         // ~89 MP and Java caps a raster well below this region, so the budget is
         // what keeps BOTH sides inside their limits regardless of tissue size.
-        int windowPx = TileGrid.windowPx(params.windowSizeUm(), pixelSizeEffUm);
-        int stridePx = TileGrid.stridePx(windowPx, params.windowOverlapPercent());
         TileGrid grid = TileGrid.create((int) readW, (int) readH, windowPx, stridePx, TILE_BUDGET_PX);
         if (grid.count() > 1) {
             logger.info(
