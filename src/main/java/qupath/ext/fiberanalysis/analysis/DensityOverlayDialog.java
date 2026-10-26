@@ -234,7 +234,7 @@ public final class DensityOverlayDialog {
         if (density != null && DensitySidecar.exists(density)) out.add(density);
         Path root = DensitySidecar.classifierMapsRoot(project);
         if (root != null && Files.isDirectory(root)) {
-            String prefix = DensitySidecar.sanitize(entry.getImageName()) + "_";
+            String prefix = MapFileName.safe(entry.getImageName()) + "_";
             try (Stream<Path> s = Files.list(root)) {
                 s.filter(p -> {
                             String n = p.getFileName().toString();

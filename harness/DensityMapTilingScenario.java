@@ -36,6 +36,7 @@ import qupath.ext.fiberanalysis.analysis.DensityMapReader;
 import qupath.ext.fiberanalysis.analysis.DensityOverlay;
 import qupath.ext.fiberanalysis.analysis.DensityOverlayDialog;
 import qupath.ext.fiberanalysis.analysis.DensitySidecar;
+import qupath.ext.fiberanalysis.analysis.MapFileName;
 import qupath.ext.fiberanalysis.analysis.DensityTiffWriter;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapDialog;
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow;
@@ -525,7 +526,7 @@ public final class DensityMapTilingScenario {
                 index[k] = i == gw / 2 ? Float.NaN : (tumor ? 1 : 0);
             }
         Path classMap = DensitySidecar.classifierMapsRoot(project)
-                .resolve(DensitySidecar.sanitize(entry.getImageName()) + "_harness-classes.ome.tif");
+                .resolve(MapFileName.safe(entry.getImageName()) + "_harness-classes.ome.tif");
         Files.createDirectories(classMap.getParent());
         DensityTiffWriter.write(
                 classMap.toString(),
@@ -821,7 +822,7 @@ public final class DensityMapTilingScenario {
         Thread t = new FiberDensityMapWorkflow().runForEntries(spec, List.of(entry), project, null);
         t.join();
         Path out = project.getPath().getParent().resolve("fiber-analysis/density-maps")
-                .resolve(DensitySidecar.sanitize(entry.getImageName())
+                .resolve(MapFileName.safe(entry.getImageName())
                         + "_density.ome.tif");
         check(Files.isRegularFile(out), mode + " mode wrote a sidecar");
         // Only the suffix: an image name can itself contain ".ome.tif".

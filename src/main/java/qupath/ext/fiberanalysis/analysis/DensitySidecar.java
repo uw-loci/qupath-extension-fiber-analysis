@@ -58,21 +58,6 @@ public final class DensitySidecar {
 
     private DensitySidecar() {}
 
-    /**
-     * Mirror of {@link FiberDensityMapWorkflow}'s sanitize -- the two MUST
-     * agree, otherwise the sampling command cannot find the sidecar a run
-     * produced. Kept here so future callers can locate sidecars without
-     * reaching into the workflow class.
-     */
-    public static String sanitize(String name) {
-        if (name == null || name.isBlank()) return "image";
-        String s = name.replaceAll("[\\\\/:*?\"<>|\\s]+", "_");
-        s = s.replaceAll("[. ]+$", "");
-        if (s.isBlank()) return "image";
-        if (s.length() > 60) s = s.substring(0, 60);
-        return s;
-    }
-
     /** Project-relative location of the density-map sidecar folder. */
     public static Path densityMapsRoot(Project<?> project) {
         if (project == null || project.getPath() == null) return null;
@@ -85,7 +70,7 @@ public final class DensitySidecar {
     public static Path sidecarPathFor(Project<?> project, ProjectImageEntry<?> entry) {
         Path root = densityMapsRoot(project);
         if (root == null || entry == null) return null;
-        return root.resolve(sanitize(entry.getImageName()) + "_density.ome.tif");
+        return root.resolve(MapFileName.safe(entry.getImageName()) + "_density.ome.tif");
     }
 
     /** Project-relative location of the classifier-map sidecar folder. */
@@ -111,8 +96,8 @@ public final class DensitySidecar {
     public static Path classifierSidecarPathFor(Project<?> project, ProjectImageEntry<?> entry, String classifierId) {
         Path root = classifierMapsRoot(project);
         if (root == null || entry == null) return null;
-        String id = sanitize(classifierId == null || classifierId.isBlank() ? "model" : classifierId);
-        return root.resolve(sanitize(entry.getImageName()) + "_" + id + ".ome.tif");
+        String id = MapFileName.safe(classifierId == null || classifierId.isBlank() ? "model" : classifierId);
+        return root.resolve(MapFileName.safe(entry.getImageName()) + "_" + id + ".ome.tif");
     }
 
     /** True iff the sidecar exists on disk and is non-empty. */

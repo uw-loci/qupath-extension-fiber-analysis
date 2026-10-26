@@ -219,6 +219,16 @@ For density-of-fiber maps across an entire slide, use the separate
 dialog. It tile-streams each selected image, runs the same per-window
 computations, and writes one small map file per image at
 `<project>/fiber-analysis/density-maps/<image>_density.ome.tif`.
+`<image>` is the image name with `\ / : * ? " < > |` and spaces turned into
+`_`, which is what QuIET's `{imageSafe}` token gives. A name over 200
+characters is cut and ends in `_` and an 8-character hash, so two long names
+never share a file. (Until 2026-10-26 names were cut at 60 characters, so
+`slide.ome.tif (1)` and `slide.ome.tif` could get the same file.)
+
+**A tile that cannot be read or written stops that image.** No map is written
+for it, the run moves on to the next image, and the finishing message counts it
+as failed. The message names the tile and the folder the tile images go to,
+usually the system temp folder; a full drive is the usual cause.
 
 **The map file holds one value per window, not per image pixel.** A 25 µm
 window moved 6.25 µm at a time on a 16952 x 18225 slide at 0.1732 µm/px is a

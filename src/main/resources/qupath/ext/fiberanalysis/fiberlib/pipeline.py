@@ -512,12 +512,19 @@ def analyze(
     skeleton, fiber_angles_deg = straight.skeletonize_and_tangents(analysis_mask)
 
     _scalar_cache = []
+    _fibers_cache = []
 
     def _value_scalar():
         """rgb_to_value(image_rgb), computed once for Radon and texture."""
         if not _scalar_cache:
             _scalar_cache.append(rgb_to_value(image_rgb))
         return _scalar_cache[0]
+
+    def _fibers():
+        """trace_fibers(skeleton), traced once for straightness and curvature."""
+        if not _fibers_cache:
+            _fibers_cache.append(straight.trace_fibers(skeleton))
+        return _fibers_cache[0]
 
     # One distance transform of the fiber mask serves the annotation and the
     # per-window gap statistics; they differ only in which centres count.
@@ -594,6 +601,7 @@ def analyze(
                 window_grid=window_grid,
                 min_branch_px=max(1, int(round(min_branch_um_v / px_um))),
                 skeleton=skeleton,
+                fibers=_fibers(),
             )
             # chord/arc summary statistics over fibers traced through
             # crossings. See straightness.compute_skeleton_tortuosity for
@@ -641,7 +649,7 @@ def analyze(
         if morph_flags["curvature"]:
             m_block["mean_curvature_per_um"] = float(
                 morph.mean_curvature(
-                    skeleton, segment_len_px=max(2, int(round(2.0 / px_um)))
+                    skeleton, segment_len_px=max(2, int(round(2.0 / px_um))), fibers=_fibers()
                 )
                 / max(px_um, 1e-9)
             )
@@ -663,6 +671,8 @@ def analyze(
             m_block["gap_max_um"] = float(gap["max_gap_px"] * px_um)
             m_block["gap_count"] = int(gap["n_gaps"])
         result["morphometrics"] = m_block
+
+    _fibers_cache.clear()  # the traced fibers are not needed past this point
 
     # ---- Family: texture (GLCM) ----
     if tex_on:

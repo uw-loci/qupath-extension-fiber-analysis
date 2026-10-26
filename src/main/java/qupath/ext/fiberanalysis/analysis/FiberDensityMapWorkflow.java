@@ -371,12 +371,7 @@ public final class FiberDensityMapWorkflow {
 
                     Path tilePng = workDir.resolve(String.format("tile_%04d_%04d.png", tx, ty));
                     RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, readX, readY, readW, readH);
-                    try {
-                        SourceChannel.writeRegionPng(server, req, spec.segChannel, tilePng);
-                    } catch (IOException ioe) {
-                        logger.warn("Tile ({},{}) skipped: {}", coreX, coreY, ioe.getMessage());
-                        continue;
-                    }
+                    writeTileImage(server, req, spec.segChannel, tilePng, coreX, coreY);
 
                     Path tileNpz = workDir.resolve(String.format("tile_%04d_%04d.npz", tx, ty));
                     Map<String, Object> in = buildTileInputs(spec, pxUm, tilePng, readW, readH, tileNpz);
@@ -477,7 +472,7 @@ public final class FiberDensityMapWorkflow {
 
         // One pixel per grid cell; the description places the grid on the
         // source image, so readers draw it at any zoom.
-        String safeName = sanitize(entry.getImageName());
+        String safeName = MapFileName.safe(entry.getImageName());
         Path outPath = outRoot.resolve(safeName + "_density.ome.tif");
         ThresholdIdentity identity = ThresholdIdentity.of(spec, pxUm);
         DensityTiffWriter.write(
@@ -525,6 +520,27 @@ public final class FiberDensityMapWorkflow {
             logger.warn("Could not write density-map provenance for {}: {}", entry.getImageName(), provEx.getMessage());
         }
         return outPath;
+    }
+
+    /**
+     * Writes one tile's image for Python. A tile that cannot be read or written
+     * fails the image: its cells would otherwise stay NaN, which a reader
+     * cannot tell from "outside the region".
+     *
+     * @throws IOException naming the tile and the folder it was written to
+     */
+    static void writeTileImage(
+            ImageServer<BufferedImage> server, RegionRequest req, String channel, Path png, int coreX, int coreY)
+            throws IOException {
+        try {
+            SourceChannel.writeRegionPng(server, req, channel, png);
+        } catch (IOException e) {
+            throw new IOException(
+                    "Could not read or write the tile at (" + coreX + ", " + coreY + ") in " + png.getParent()
+                            + ": " + e.getMessage() + ". No map was written for this image; if that drive is full,"
+                            + " free space and run it again.",
+                    e);
+        }
     }
 
     /** An image with no annotation in the run's region; skipped, not failed. */
@@ -647,8 +663,9 @@ public final class FiberDensityMapWorkflow {
             if (key == null) continue;
             NpzReader.Entry e = npz.get(key);
             if (e == null) {
-                logger.warn("Tile npz missing key '{}' -- channel will keep NaN", key);
-                continue;
+                // density_tile.py writes every fiber channel, so a missing one
+                // means Java and Python disagree; NaN would read as "no data".
+                throw new IOException("Tile " + npzPath.getFileName() + " has no '" + key + "' channel");
             }
             float[] tileArr = e.asFloat32();
             for (int ry = 0; ry < npyH; ry++) {
@@ -798,15 +815,6 @@ public final class FiberDensityMapWorkflow {
             if (p != null) return p;
         }
         return Path.of(System.getProperty("user.home"), "QuPath", "fiber-out");
-    }
-
-    /**
-     * Delegates to {@link DensitySidecar#sanitize(String)} so the writer and
-     * the sampling-command's sidecar-locator stay in sync. If you change the
-     * sanitisation rules, change them there.
-     */
-    private static String sanitize(String name) {
-        return DensitySidecar.sanitize(name);
     }
 
     /**

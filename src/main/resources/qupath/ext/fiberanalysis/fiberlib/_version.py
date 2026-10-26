@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -530,3 +530,13 @@ __version__ = "0.4.3"
 #     reuses the pipeline's skeleton (8 s); the annotation and per-window gap
 #     statistics share one distance transform (18 s); Radon and texture share
 #     one value scalar.
+#
+# 0.4.4 (2026-10-26):
+#   - Same results, less work, measured on the same PDAC_1 tile (105 s -> 88 s,
+#     every windows.json and results.json value identical):
+#     straightness._trace_links looks each skeleton pixel's neighbours up in an
+#     8-bit mask built once with numpy instead of indexing the array per
+#     neighbour; the annotation's straightness and mean curvature share one
+#     trace_fibers pass (fibers=) instead of tracing the whole tile twice;
+#     morphometrics.mean_curvature takes every path's step lengths in one numpy
+#     call. Traced paths are identical, pixel for pixel and in order.

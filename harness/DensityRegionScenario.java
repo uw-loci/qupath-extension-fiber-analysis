@@ -61,7 +61,7 @@ public final class DensityRegionScenario {
 
     static final double WINDOW_UM = 15.0;
     static final String COVERAGE = "Fiber coverage (%)";
-    static final String PATTERN = "{project}/fiber-analysis/density-maps/{imageSafe:60}_density.ome.tif";
+    static final String PATTERN = "{project}/fiber-analysis/density-maps/{imageSafe}_density.ome.tif";
 
     private static void check(boolean condition, String what) {
         System.out.println((condition ? "[PASS] " : "[FAIL] ") + what);

@@ -79,7 +79,7 @@ def branch_endpoint_counts(skeleton):
 
 # ---- curvature -------------------------------------------------------------
 
-def mean_curvature(skeleton, segment_len_px=4):
+def mean_curvature(skeleton, segment_len_px=4, fibers=None):
     """Mean absolute tangent rotation along skeleton segments.
 
     For each maximal skeleton segment (endpoint-to-endpoint or
@@ -97,6 +97,9 @@ def mean_curvature(skeleton, segment_len_px=4):
     per-pixel gradient-difference proxy that ignored ``segment_len_px``
     entirely and did not match the docstring claim of "per-segment tangent
     rotation". This rewrite walks the skeleton path proper.
+
+    ``fibers``, when given, is ``straightness.trace_fibers(skeleton)``
+    already computed.
     """
     sk = skeleton.astype(bool)
     if not sk.any():
@@ -108,30 +111,36 @@ def mean_curvature(skeleton, segment_len_px=4):
 
     seg_len = max(2, int(segment_len_px))
 
+    paths = [p for p in (_straight.trace_fibers(sk) if fibers is None else fibers) if len(p) >= 2]
+    if not paths:
+        return float("nan")
+    # Every path's step lengths in one call; each path then sums its own slice.
+    lengths = [len(p) for p in paths]
+    steps = np.linalg.norm(np.diff(np.asarray([q for p in paths for q in p], dtype=np.float64), axis=0), axis=1)
+
     rotations_per_unit = []
-    for path in _straight.trace_fibers(sk):
-        n = len(path)
-        if n < 2:
+    first = 0
+    for path, n in zip(paths, lengths):
+        lo = first
+        first += n
+        # Tangent at start: vector from path[0] -> path[min(seg_len, n-1)].
+        a, b = path[0], path[min(seg_len, n - 1)]
+        # Tangent at end: vector from path[max(0, n-1-seg_len)] -> path[-1].
+        c, d = path[max(0, n - 1 - seg_len)], path[-1]
+        sy, sx = float(b[0] - a[0]), float(b[1] - a[1])
+        ey, ex = float(d[0] - c[0]), float(d[1] - c[1])
+        if (sy == 0 and sx == 0) or (ey == 0 and ex == 0):
             continue
-        pts = np.asarray(path, dtype=np.float64)
-        # Tangent at start: vector from pts[0] -> pts[min(seg_len, n-1)].
-        end_start_idx = min(seg_len, n - 1)
-        v_start = pts[end_start_idx] - pts[0]
-        # Tangent at end: vector from pts[max(0, n-1-seg_len)] -> pts[-1].
-        start_end_idx = max(0, n - 1 - seg_len)
-        v_end = pts[-1] - pts[start_end_idx]
-        if np.linalg.norm(v_start) == 0 or np.linalg.norm(v_end) == 0:
-            continue
-        ang_start = math.atan2(v_start[1], v_start[0])
-        ang_end = math.atan2(v_end[1], v_end[0])
+        ang_start = math.atan2(sx, sy)
+        ang_end = math.atan2(ex, ey)
         dtheta = abs(ang_end - ang_start)
         # Wrap into [0, pi/2] for the 180-flip ambiguity (skeleton tangent
         # is direction-agnostic).
         dtheta = min(dtheta, 2 * math.pi - dtheta)
         dtheta = min(dtheta, math.pi - dtheta)
-        # Arc length: sum of per-step Euclidean distances.
-        diffs = np.diff(pts, axis=0)
-        arc = float(np.sum(np.linalg.norm(diffs, axis=1)))
+        # Arc length: sum of per-step Euclidean distances. The slice skips the
+        # step joining this path to the one before it.
+        arc = float(np.sum(steps[lo:lo + n - 1]))
         if arc <= 0:
             continue
         rotations_per_unit.append(dtheta / arc)

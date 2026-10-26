@@ -225,56 +225,70 @@ MAX_LINK_TURN_DEG = 70.0
 LINK_DIR_WINDOW_PX = 8
 
 
-def _neighbours(skel, y, x):
-    h, w = skel.shape
-    out = []
-    for dy, dx in _OFFS:
-        yy, xx = y + dy, x + dx
-        if 0 <= yy < h and 0 <= xx < w and skel[yy, xx]:
-            out.append((yy, xx))
-    return out
+def _end_direction(path, window, from_end=False):
+    """Unit vector along the first `window` pixels, pointing away from path[0].
 
-
-def _end_direction(path, window):
-    """Unit vector along the first `window` pixels, pointing away from path[0]."""
+    ``from_end`` reads the path backwards, from path[-1].
+    """
     n = min(int(window), len(path))
     if n < 2:
         return (0.0, 0.0)
-    dy = float(path[n - 1][0] - path[0][0])
-    dx = float(path[n - 1][1] - path[0][1])
+    a, b = (path[-1], path[-n]) if from_end else (path[0], path[n - 1])
+    dy = float(b[0] - a[0])
+    dx = float(b[1] - a[1])
     mag = math.hypot(dy, dx)
     return (0.0, 0.0) if mag == 0.0 else (dy / mag, dx / mag)
 
 
 def _trace_links(skel, node):
-    """Chains of pixels running between two nodes. Returns (a, b, path) tuples."""
+    """Chains of pixels running between two nodes. Returns (a, b, path) tuples.
+
+    Pixels are flat indices while tracing. Each skeleton pixel's neighbours
+    come from an 8-bit mask built once with numpy, listed in ``_OFFS`` order.
+    """
+    sk = np.asarray(skel, dtype=bool)
+    h, w = sk.shape
+    padded = np.pad(sk, 1)
+    bits = np.zeros((h, w), dtype=np.uint8)
+    for k, (dy, dx) in enumerate(_OFFS):
+        bits |= padded[1 + dy:1 + dy + h, 1 + dx:1 + dx + w].astype(np.uint8) << k
+    # For each mask, the set neighbours as (flat offset, dy, dx), in _OFFS order.
+    table = [
+        tuple((dy * w + dx, dy, dx) for k, (dy, dx) in enumerate(_OFFS) if m >> k & 1) for m in range(256)
+    ]
+    # Only skeleton pixels are ever looked up, so key by those alone.
+    on = np.flatnonzero(sk)
+    nbits = dict(zip(on.tolist(), bits.ravel()[on].tolist()))
+    node_flat = np.flatnonzero(np.asarray(node, dtype=bool).ravel() & sk.ravel()).tolist()
+    is_node = set(node_flat)
+
     links = []
     traced = set()
-    for y, x in zip(*np.where(node)):
-        start = (int(y), int(x))
-        for first in _neighbours(skel, *start):
+    for start in node_flat:
+        for d0, dy0, dx0 in table[nbits[start]]:
+            first = start + d0
             if (start, first) in traced:
                 continue
             path = [start, first]
             seen = {start, first}
             prev, cur = start, first
-            while not node[cur]:
-                cands = [q for q in _neighbours(skel, *cur) if q != prev and q not in seen]
+            py, px = dy0, dx0  # the last step, cur - prev
+            while cur not in is_node:
+                cands = [(cur + d, dy, dx) for d, dy, dx in table[nbits[cur]] if cur + d != prev and cur + d not in seen]
                 if not cands:
                     break
                 if len(cands) == 1:
-                    nxt = cands[0]
+                    nxt, py, px = cands[0]
                 else:
                     # Ambiguous only at a staircase corner, where one candidate
                     # continues the run and the other doubles back.
-                    dy, dx = cur[0] - prev[0], cur[1] - prev[1]
-                    nxt = max(cands, key=lambda q: (q[0] - cur[0]) * dy + (q[1] - cur[1]) * dx)
+                    nxt, py, px = max(cands, key=lambda c: c[1] * py + c[2] * px)
                 path.append(nxt)
                 seen.add(nxt)
                 prev, cur = cur, nxt
             traced.add((start, first))
             traced.add((cur, path[-2]))
-            links.append((start, cur, path))
+            links.append((divmod(start, w), divmod(cur, w), [divmod(i, w) for i in path]))
     return links
 
 
@@ -295,7 +309,7 @@ def _pair_links_at_junctions(links, node_is_junction, max_turn_deg, dir_window):
         dirs = {}
         for idx, end in ends:
             path = links[idx][2]
-            dirs[(idx, end)] = _end_direction(path if end == 0 else path[::-1], dir_window)
+            dirs[(idx, end)] = _end_direction(path, dir_window, from_end=end == 1)
         cands = []
         for i in range(len(ends)):
             for j in range(i + 1, len(ends)):
@@ -414,7 +428,7 @@ def segment_tortuosity(path):
 WAVY_STRAIGHTNESS_CUT = 0.85
 
 
-def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2, skeleton=None):
+def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2, skeleton=None, fibers=None):
     """Per-fiber straightness (chord/arc), CT-FIRE convention.
 
     Fibers are traced through crossings by :func:`trace_fibers` rather than
@@ -451,10 +465,13 @@ def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2, s
                              number that says whether the others describe
                              fibers or fragments.
 
-    ``skeleton``, when given, is ``skeletonize(fiber_mask)`` already computed.
+    ``skeleton``, when given, is ``skeletonize(fiber_mask)`` already computed,
+    and ``fibers`` is ``trace_fibers(skeleton)``.
     """
-    sk = skmorph.skeletonize(fiber_mask.astype(bool)) if skeleton is None else np.asarray(skeleton, dtype=bool)
-    segs = [p for p in trace_fibers(sk) if len(p) >= int(min_branch_px)]
+    if fibers is None:
+        sk = skmorph.skeletonize(fiber_mask.astype(bool)) if skeleton is None else np.asarray(skeleton, dtype=bool)
+        fibers = trace_fibers(sk)
+    segs = [p for p in fibers if len(p) >= int(min_branch_px)]
     paired = [(p, segment_tortuosity(p)) for p in segs]
     paired = [(p, t) for p, t in paired if t == t]  # drop NaNs
     segs = [p for p, _t in paired]
