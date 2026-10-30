@@ -69,6 +69,8 @@ _FORWARD = [
     "fractal_box_sizes_px",
     "texture_enabled",
     "quant_levels",
+    "glcm_gray_min",
+    "glcm_gray_max",
     "glcm_distances_px",
     "texture_contrast",
     "texture_correlation",

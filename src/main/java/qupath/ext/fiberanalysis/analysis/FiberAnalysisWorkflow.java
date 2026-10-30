@@ -491,6 +491,7 @@ public class FiberAnalysisWorkflow {
 
             List<PathObject> allWindowDetections = new ArrayList<>();
             List<PathObject> allCollagenDetections = new ArrayList<>();
+            List<Map<String, Double>> annotationSummaries = new ArrayList<>();
 
             ProgressEstimator annEstimator = new ProgressEstimator(total);
             for (int i = 0; i < total; i++) {
@@ -506,6 +507,7 @@ public class FiberAnalysisWorkflow {
                 try {
                     OneShotResult shot = runOne(params, ann, i, imageData, pixelSizeUm, outputRoot, progress);
                     AnnotationResult res = shot.result;
+                    annotationSummaries.add(res.summaryMetrics());
                     completed++;
                     annEstimator.unitCompleted();
                     progress.setEstimate(annEstimator, "annotations");
@@ -573,6 +575,21 @@ public class FiberAnalysisWorkflow {
                 }
             }
 
+            String levelNote = textureLevelNote(annotationSummaries, params.quantLevels());
+            if (levelNote != null) {
+                logger.warn("{}", levelNote);
+                try {
+                    Files.writeString(
+                            outputRoot.resolve("run_notes.txt"),
+                            levelNote + "\n",
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.APPEND);
+                } catch (IOException e) {
+                    logger.warn("Could not write run_notes.txt: {}", e.getMessage());
+                }
+                HeadlessFx.runLater(() -> Dialogs.showWarningNotification("Fiber Analysis", levelNote));
+            }
+
             if (identity != null) {
                 for (PathObject d : allWindowDetections)
                     d.getMetadata().put(ThresholdIdentity.META_OBJECT, identity.label());
@@ -631,6 +648,45 @@ public class FiberAnalysisWorkflow {
         } finally {
             HeadlessFx.runLater(progress::close);
         }
+    }
+
+    /**
+     * @param summaries   each annotation's scalars
+     * @param quantLevels the run's GLCM levels
+     * @return a warning when fibers filled too few levels for texture to mean much, naming a
+     *     range to set, or null
+     */
+    static String textureLevelNote(List<Map<String, Double>> summaries, int quantLevels) {
+        int floor = Math.min(8, quantLevels / 2);
+        int low = 0;
+        int measured = 0;
+        double fewest = Double.MAX_VALUE;
+        double lowest = Double.MAX_VALUE;
+        double highest = 0;
+        for (Map<String, Double> s : summaries) {
+            Double used = s.get("texture.levels_holding_99pct");
+            if (used == null) continue;
+            measured++;
+            lowest = Math.min(lowest, s.getOrDefault("texture.fiber_gray_p1", lowest));
+            highest = Math.max(highest, s.getOrDefault("texture.fiber_gray_p99", 0.0));
+            if (used < floor) {
+                low++;
+                fewest = Math.min(fewest, used);
+            }
+        }
+        if (low == 0) return null;
+        return String.format(
+                Locale.ROOT,
+                "GLCM texture is coarse: in %d of %d annotations, 99%% of fiber pixels fell in %.0f or fewer of %d"
+                        + " gray levels. Set the texture gray range to fit the fibers, for example %.0f to %.0f"
+                        + " (their 1st to 99th percentile here), and use the same range for every image you"
+                        + " compare.",
+                low,
+                measured,
+                Math.ceil(fewest),
+                quantLevels,
+                lowest,
+                highest);
     }
 
     /** Per-annotation analysis output: the panel-facing record plus run-level provenance keys. */
@@ -1634,6 +1690,8 @@ public class FiberAnalysisWorkflow {
         // Texture
         in.put("texture_enabled", p.textureEnabled());
         in.put("quant_levels", p.quantLevels());
+        in.put("glcm_gray_min", p.glcmGrayMin());
+        in.put("glcm_gray_max", p.glcmGrayMax());
         in.put("glcm_distances_px", umListToPxCsv(p.glcmDistancesUm(), pixelSizeUm, "GLCM distances"));
         in.put("texture_contrast", p.contrast());
         in.put("texture_correlation", p.correlation());
@@ -2138,6 +2196,8 @@ public class FiberAnalysisWorkflow {
         m.put("fractalBoxSizesUm", p.fractalBoxSizesUm());
         m.put("textureEnabled", p.textureEnabled());
         m.put("quantLevels", p.quantLevels());
+        m.put("glcmGrayMin", p.glcmGrayMin());
+        m.put("glcmGrayMax", p.glcmGrayMax());
         m.put("glcmDistancesUm", p.glcmDistancesUm());
         m.put("contrast", p.contrast());
         m.put("correlation", p.correlation());
@@ -2264,6 +2324,11 @@ public class FiberAnalysisWorkflow {
         ordered.put("fractalBoxSizesUm", p.fractalBoxSizesUm());
         ordered.put("textureEnabled", p.textureEnabled());
         ordered.put("quantLevels", p.quantLevels());
+        // Only when set, so a full-scale run keeps its hash.
+        if (p.glcmGrayMax() > 0) {
+            ordered.put("glcmGrayMin", p.glcmGrayMin());
+            ordered.put("glcmGrayMax", p.glcmGrayMax());
+        }
         ordered.put("glcmDistancesUm", p.glcmDistancesUm());
         ordered.put("contrast", p.contrast());
         ordered.put("correlation", p.correlation());

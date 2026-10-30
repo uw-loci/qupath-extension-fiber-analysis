@@ -132,6 +132,8 @@ def analyze(
     # Texture
     texture_enabled=True,
     quant_levels=16,
+    glcm_gray_min=0,
+    glcm_gray_max=0,
     glcm_distances_px=(1, 2, 3),
     texture_contrast=True,
     texture_correlation=True,
@@ -302,6 +304,8 @@ def analyze(
 
     tex_on = bool(texture_enabled)
     qlevels = int(quant_levels)
+    gray_min = float(glcm_gray_min)
+    gray_max = float(glcm_gray_max)
     glcm_dists = (
         parse_int_list(glcm_distances_px)
         if glcm_distances_px is not None
@@ -385,6 +389,8 @@ def analyze(
     pe["texture_enabled"] = tex_on
     if tex_on:
         pe["quant_levels"] = qlevels
+        pe["glcm_gray_min"] = gray_min
+        pe["glcm_gray_max"] = gray_max
         pe["glcm_distances_px"] = list(glcm_dists)
         pe["texture_props"] = [k for k, on in tex_props.items() if on]
         pe["glcm_per_distance"] = bool(glcm_per_distance)
@@ -677,6 +683,16 @@ def analyze(
     # ---- Family: texture (GLCM) ----
     if tex_on:
         scalar = _value_scalar()
+        scale = seg.full_scale(image_rgb)
+        # glcm_gray_max 0 is the full scale.
+        value_range = (0.0, 1.0)
+        if gray_max > 0:
+            if gray_max <= gray_min or gray_min < 0 or gray_max > scale:
+                raise ValueError(
+                    f"GLCM gray range {gray_min:g} to {gray_max:g} does not fit this image,"
+                    f" whose gray levels run 0 to {scale:g}"
+                )
+            value_range = (gray_min / scale, gray_max / scale)
         tex_block = tex.compute_glcm_window(
             image_scalar=scalar,
             fiber_mask=analysis_mask,
@@ -685,11 +701,15 @@ def analyze(
             distances_px=glcm_dists,
             props=[k for k, on in tex_props.items() if on],
             per_distance=bool(glcm_per_distance),
+            value_range=value_range,
         )
         result["texture"] = {
             "props": [k for k, on in tex_props.items() if on],
             "distances_px": list(glcm_dists),
             "quant_levels": int(qlevels),
+            "gray_min": gray_min if gray_max > 0 else 0.0,
+            "gray_max": gray_max if gray_max > 0 else scale,
+            **tex.level_use(scalar, analysis_mask, qlevels, value_range, scale),
             "mean_per_prop": {
                 k: float(np.nanmean(v))
                 for k, v in tex_block.get("per_window", {}).items()

@@ -38,14 +38,47 @@ logger = logging.getLogger("fiber.texture")
 _ANGLES = [0.0, np.pi / 4.0, np.pi / 2.0, 3.0 * np.pi / 4.0]
 
 
-def quantise(image_scalar, levels):
-    """Quantise a [0,1]-ish scalar image into 0..levels-1 uint8."""
-    # Callers pass a [0,1] scalar (see pipeline.rgb_to_value). Re-scaling here
-    # by an assumed 8-bit range is what made 16-bit sources depend on a
-    # compensating bug upstream; clip only, as a guard.
-    arr = np.clip(image_scalar.astype(np.float32), 0.0, 1.0)
+def quantise(image_scalar, levels, value_range=(0.0, 1.0)):
+    """Quantise a [0,1] scalar image into 0..levels-1 uint8.
+
+    ``value_range`` is the part of [0,1] the levels span; values outside it
+    clip to the end levels. The range is the caller's, fixed for a run: taking
+    it from each window or tile would give every one its own meaning of a level.
+    """
+    lo, hi = value_range
+    arr = np.clip((image_scalar.astype(np.float32) - lo) / (hi - lo), 0.0, 1.0)
     q = np.floor(arr * (levels - 1) + 0.5).astype(np.uint8)
     return q
+
+
+def level_use(image_scalar, fiber_mask, levels, value_range, full_scale):
+    """How well a gray range fits the fibers.
+
+    Args:
+        image_scalar: (H, W) [0,1] scalar.
+        fiber_mask:   (H, W) bool.
+        levels:       number of gray levels.
+        value_range:  (lo, hi) on [0,1], as for :func:`quantise`.
+        full_scale:   gray level of 1.0.
+
+    Returns:
+        dict; levels_holding_99pct counts the fullest levels that together hold
+        99% of fiber pixels, fiber_gray_p1 / fiber_gray_p99 are the fibers' own
+        range in gray levels, and clipped_percent is the share of fiber pixels
+        outside ``value_range``. Empty when there are no fiber pixels.
+    """
+    v = np.asarray(image_scalar, dtype=np.float32)[np.asarray(fiber_mask, dtype=bool)]
+    if v.size == 0:
+        return {}
+    counts = np.sort(np.bincount(quantise(v, levels, value_range), minlength=int(levels)))[::-1]
+    p1, p99 = np.percentile(v, [1, 99])
+    lo, hi = value_range
+    return {
+        "levels_holding_99pct": int((np.cumsum(counts) < 0.99 * v.size).sum()) + 1,
+        "fiber_gray_p1": float(p1) * float(full_scale),
+        "fiber_gray_p99": float(p99) * float(full_scale),
+        "clipped_percent": 100.0 * float(np.mean((v < lo) | (v > hi))),
+    }
 
 
 def code_fibers(q, fiber_mask):
@@ -107,7 +140,14 @@ def glcm_props_for_patch(patch_codes, distances_px, levels, props, by_distance=F
 
 
 def compute_glcm_window(
-    image_scalar, fiber_mask, window_grid, quant_levels, distances_px, props, per_distance=False
+    image_scalar,
+    fiber_mask,
+    window_grid,
+    quant_levels,
+    distances_px,
+    props,
+    per_distance=False,
+    value_range=(0.0, 1.0),
 ):
     """Per-window GLCM features.
 
@@ -116,8 +156,9 @@ def compute_glcm_window(
     returns a dict with ``per_window``: a dict {prop_name: (Hw, Ww) array}.
     With ``per_distance`` and two or more distances it also holds
     ``per_window_by_distance``: {distance_px: {prop_name: (Hw, Ww) array}}.
+    ``value_range`` is passed to :func:`quantise`.
     """
-    q = quantise(image_scalar, int(quant_levels))
+    q = quantise(image_scalar, int(quant_levels), value_range)
     q_masked = code_fibers(q, fiber_mask)
 
     if window_grid is None:

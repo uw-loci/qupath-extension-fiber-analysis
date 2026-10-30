@@ -47,6 +47,33 @@ class TileZoneSkipTest {
     }
 
     @Test
+    void aRunIsWarnedWhenFibersFillTooFewGrayLevels() {
+        var pdac = java.util.Map.of(
+                "texture.levels_holding_99pct",
+                4.0,
+                "texture.fiber_gray_p1",
+                4523.0,
+                "texture.fiber_gray_p99",
+                19520.0);
+        var fine = java.util.Map.of(
+                "texture.levels_holding_99pct",
+                16.0,
+                "texture.fiber_gray_p1",
+                3000.0,
+                "texture.fiber_gray_p99",
+                25000.0);
+        assertThat(FiberAnalysisWorkflow.textureLevelNote(java.util.List.of(fine), 16))
+                .isNull();
+        assertThat(FiberAnalysisWorkflow.textureLevelNote(java.util.List.of(pdac, fine), 16))
+                .contains("1 of 2 annotations")
+                .contains("4 or fewer of 16")
+                .contains("3000 to 25000");
+        // No texture block, nothing to say.
+        assertThat(FiberAnalysisWorkflow.textureLevelNote(java.util.List.of(java.util.Map.of()), 16))
+                .isNull();
+    }
+
+    @Test
     void perDistanceGlcmNamesCarryTheDistance() {
         assertThat(FiberAnalysisWorkflow.glcmDistanceName("contrast", 58 * 0.1732))
                 .isEqualTo("Contrast (GLCM, 10.05 um)");

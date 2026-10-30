@@ -128,7 +128,11 @@ public record FiberAnalysisParams(
         boolean collagenObjects,
         // With two or more GLCM distances, also one measurement per distance
         // next to the average over them. Output only: the average is unchanged.
-        boolean glcmPerDistance) {
+        boolean glcmPerDistance,
+        // Gray levels the GLCM levels span, in the source's own units. A maximum
+        // of 0 is the full scale.
+        int glcmGrayMin,
+        int glcmGrayMax) {
 
     /**
      * @param downsample the analysis downsample
@@ -241,6 +245,8 @@ public record FiberAnalysisParams(
                 FiberAnalysisPreferences.jsonSidecarProperty().get(),
                 FiberAnalysisPreferences.emitNpzProperty().get(),
                 FiberAnalysisPreferences.collagenObjectsProperty().get(),
-                FiberAnalysisPreferences.glcmPerDistanceProperty().get());
+                FiberAnalysisPreferences.glcmPerDistanceProperty().get(),
+                FiberAnalysisPreferences.glcmGrayMinProperty().get(),
+                FiberAnalysisPreferences.glcmGrayMaxProperty().get());
     }
 }

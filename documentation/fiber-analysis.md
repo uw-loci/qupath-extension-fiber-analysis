@@ -1010,9 +1010,26 @@ al. 2014 (3-D texture review -- we use the 2-D math, not 3-D).
 derived scalar channel (biref intensity, or grayscale of the RGB),
 not raw RGB.
 
-1. **Quantise** fiber pixels to `L = 16` (or up to 256) gray levels,
-   uniform over the channel's full 0-1 scale, the same for every window and
-   image so values can be compared.
+1. **Quantize** fiber pixels to `L = 16` (or up to 256) gray levels,
+   uniform over the **gray range**, which is the channel's full scale unless
+   **Gray range minimum** and **Gray range maximum** are set. The range is the
+   same for every window and tile of a run, never fitted to one of them, so a
+   level keeps one meaning. Pixels outside it go in the end levels.
+
+   **Set the range for dim images.** On the full 0-65535 scale, 16 levels are
+   4369 gray levels wide, so an image that fills a small part of the scale
+   lands in very few levels and its texture reads as flat: fibers at 200-470
+   fall in one level, giving energy 1 and contrast 0 in every window. Raising
+   the level count does not rescue that; at 256 they still fill two levels.
+   Every run records in `results.json` under `texture` the range used
+   (`gray_min`, `gray_max`), how many levels hold 99% of fiber pixels
+   (`levels_holding_99pct`), the fibers' own 1st and 99th percentiles
+   (`fiber_gray_p1`, `fiber_gray_p99`) and the share of them outside the range
+   (`clipped_percent`). When fibers fill fewer than 8 levels (or half of them,
+   if that is fewer), the run warns, writes the warning to `run_notes.txt` and
+   names a range to use. To compare images or regions, pick one range per
+   modality and use it for all of them: texture from different ranges does not
+   compare. Maps and other measurements do not use this range.
 2. **GLCM** `P_d_theta(i, j)` = count of fiber-pixel pairs with gray levels
    `(i, j)` at offset `(d, theta)`. A pair with a background pixel is not
    counted, so the features describe the fibers, not how much of the window

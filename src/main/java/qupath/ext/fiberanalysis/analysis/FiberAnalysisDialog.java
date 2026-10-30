@@ -157,6 +157,8 @@ public final class FiberAnalysisDialog {
     // -- Section 6 --
     private CheckBox textureEnabledCheck;
     private Spinner<Integer> quantLevelsSpinner;
+    private Spinner<Integer> glcmGrayMinSpinner;
+    private Spinner<Integer> glcmGrayMaxSpinner;
     private TextField glcmDistancesField;
     private CheckBox contrastCheck;
     private CheckBox correlationCheck;
@@ -1491,6 +1493,27 @@ public final class FiberAnalysisDialog {
         numericGrid.add(new Label("Quantization levels:"), 0, 0);
         numericGrid.add(quantLevelsSpinner, 1, 0);
 
+        glcmGrayMinSpinner = new Spinner<>(new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                0, 65535, FiberAnalysisPreferences.glcmGrayMinProperty().get(), 100));
+        glcmGrayMinSpinner.setEditable(true);
+        applyTooltip(
+                glcmGrayMinSpinner,
+                "Gray level at the bottom of the quantization levels, in the source's own units."
+                        + " Darker fiber pixels go in the lowest level.");
+        glcmGrayMaxSpinner = new Spinner<>(new SpinnerValueFactory.IntegerSpinnerValueFactory(
+                0, 65535, FiberAnalysisPreferences.glcmGrayMaxProperty().get(), 100));
+        glcmGrayMaxSpinner.setEditable(true);
+        applyTooltip(
+                glcmGrayMaxSpinner,
+                "Gray level at the top of the quantization levels; 0 is the image's full scale (65535 for"
+                        + " 16-bit). A dim image on full scale lands in one or two levels and its texture reads"
+                        + " as flat. Use the same range for every image you compare. A run reports the"
+                        + " fibers' own range and warns when too few levels were used.");
+        numericGrid.add(new Label("Gray range minimum:"), 0, 1);
+        numericGrid.add(glcmGrayMinSpinner, 1, 1);
+        numericGrid.add(new Label("Gray range maximum:"), 0, 2);
+        numericGrid.add(glcmGrayMaxSpinner, 1, 2);
+
         glcmDistancesField =
                 new TextField(FiberAnalysisPreferences.glcmDistancesPxProperty().get());
         glcmDistancesField.setPrefColumnCount(14);
@@ -1874,7 +1897,9 @@ public final class FiberAnalysisDialog {
                 jsonSidecarCheck.isSelected(),
                 emitNpzCheck.isSelected(),
                 collagenObjectsCheck.isSelected(),
-                glcmPerDistanceCheck.isSelected());
+                glcmPerDistanceCheck.isSelected(),
+                glcmGrayMinSpinner.getValue(),
+                glcmGrayMaxSpinner.getValue());
     }
 
     /**
@@ -1948,6 +1973,8 @@ public final class FiberAnalysisDialog {
         FiberAnalysisPreferences.entropyProperty().set(entropyCheck.isSelected());
         FiberAnalysisPreferences.dissimilarityProperty().set(dissimilarityCheck.isSelected());
         FiberAnalysisPreferences.glcmPerDistanceProperty().set(glcmPerDistanceCheck.isSelected());
+        FiberAnalysisPreferences.glcmGrayMinProperty().set(glcmGrayMinSpinner.getValue());
+        FiberAnalysisPreferences.glcmGrayMaxProperty().set(glcmGrayMaxSpinner.getValue());
 
         FiberAnalysisPreferences.outputDirProperty().set(emptyIfNull(outputDirField.getText()));
         FiberAnalysisPreferences.fiberMaskOverlayProperty().set(fiberMaskOverlayCheck.isSelected());

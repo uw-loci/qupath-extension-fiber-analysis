@@ -131,6 +131,9 @@ public class FiberAnalysisPreferences {
     // === Section 6 -- Texture ===
     public static final boolean DEFAULT_TEXTURE_ENABLED = true;
     public static final int DEFAULT_QUANT_LEVELS = 16;
+    public static final int DEFAULT_GLCM_GRAY_MIN = 0;
+    /** 0 is the full scale. */
+    public static final int DEFAULT_GLCM_GRAY_MAX = 0;
     // GLCM offset distances in microns; Java converts to integer pixels per
     // image. 0.1-0.3 um covers the typical fiber-width texture scale.
     public static final String DEFAULT_GLCM_DISTANCES_UM = "0.1,0.2,0.3";
@@ -207,6 +210,8 @@ public class FiberAnalysisPreferences {
 
     private static BooleanProperty textureEnabled;
     private static IntegerProperty quantLevels;
+    private static IntegerProperty glcmGrayMin;
+    private static IntegerProperty glcmGrayMax;
     private static StringProperty glcmDistancesPx;
     private static BooleanProperty contrast;
     private static BooleanProperty correlation;
@@ -308,6 +313,8 @@ public class FiberAnalysisPreferences {
 
         textureEnabled = PathPrefs.createPersistentPreference(PREFIX + "textureEnabled", DEFAULT_TEXTURE_ENABLED);
         quantLevels = PathPrefs.createPersistentPreference(PREFIX + "quantLevels", DEFAULT_QUANT_LEVELS);
+        glcmGrayMin = PathPrefs.createPersistentPreference(PREFIX + "glcmGrayMin", DEFAULT_GLCM_GRAY_MIN);
+        glcmGrayMax = PathPrefs.createPersistentPreference(PREFIX + "glcmGrayMax", DEFAULT_GLCM_GRAY_MAX);
         glcmDistancesPx = PathPrefs.createPersistentPreference(PREFIX + "glcmDistancesUm", DEFAULT_GLCM_DISTANCES_UM);
         contrast = PathPrefs.createPersistentPreference(PREFIX + "contrast", DEFAULT_CONTRAST);
         correlation = PathPrefs.createPersistentPreference(PREFIX + "correlation", DEFAULT_CORRELATION);
@@ -533,6 +540,14 @@ public class FiberAnalysisPreferences {
 
     public static IntegerProperty quantLevelsProperty() {
         return quantLevels;
+    }
+
+    public static IntegerProperty glcmGrayMinProperty() {
+        return glcmGrayMin;
+    }
+
+    public static IntegerProperty glcmGrayMaxProperty() {
+        return glcmGrayMax;
     }
 
     public static StringProperty glcmDistancesPxProperty() {

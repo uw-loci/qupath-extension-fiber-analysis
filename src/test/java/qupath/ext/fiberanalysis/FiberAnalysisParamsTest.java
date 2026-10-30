@@ -23,14 +23,14 @@ import qupath.ext.fiberanalysis.analysis.FiberAnalysisParams;
 class FiberAnalysisParamsTest {
 
     /**
-     * 63 components, the last added being glcmPerDistance (one GLCM value per
-     * distance next to the average). If this fails after a deliberate change,
+     * 65 components, the last added being glcmGrayMin and glcmGrayMax (the gray
+     * range the GLCM levels span). If this fails after a deliberate change,
      * update both this test and 02_ui_design.md.
      */
     @Test
     void recordHasExpectedComponentCount() {
         RecordComponent[] components = FiberAnalysisParams.class.getRecordComponents();
-        assertThat(components).hasSize(63);
+        assertThat(components).hasSize(65);
     }
 
     @Test

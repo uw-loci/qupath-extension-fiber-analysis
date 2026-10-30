@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.5"
+__version__ = "0.4.6"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -548,3 +548,13 @@ __version__ = "0.4.5"
 #   - segment_internal(return_threshold=True) also returns the scalar's peak,
 #     and preview_segmentation reports it, so a response cut no pixel reaches
 #     can be named.
+#
+# 0.4.6 (2026-10-30):
+#   - GLCM levels can span a gray range (analyze(glcm_gray_min, glcm_gray_max),
+#     texture.quantise(value_range)) instead of the full 0-65535. 0 for the
+#     maximum keeps the full scale, and its values do not change.
+#   - results.json texture block: gray_min, gray_max, levels_holding_99pct,
+#     fiber_gray_p1, fiber_gray_p99, clipped_percent. On a 7830 px PDAC_1
+#     tile, 5 of 16 levels held 99% of fiber pixels at full scale and 15 of 16
+#     on the fibers' own 1st-99th percentile range; a default run's
+#     windows.json is unchanged from 0.4.5.
