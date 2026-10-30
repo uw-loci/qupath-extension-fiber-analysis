@@ -29,11 +29,11 @@ import qupath.lib.regions.RegionRequest;
  * here, so the preview, the run, the calibration and the density tiles all
  * see identical pixels.
  *
- * <p>Naming a channel matters for more than convenience: a multi-band 16-bit
- * PNG is truncated to 8 bits when Python loads it, because PIL has no 16-bit
- * colour mode. Extracting the one band the user asked for lets the region go
- * out as single-band 16-bit, which survives intact -- so a manual threshold
- * stays a real gray level on 16-bit sources.
+ * <p>Only RGB images go out with several bands. PIL keeps just the high byte
+ * of a multi-band 16-bit PNG, so every other image goes out as one band at its
+ * own bit depth: the band the user named, or the brightest band at each pixel
+ * for Raw intensity and Value. A manual threshold therefore stays a real gray
+ * level on 16-bit sources.
  */
 public final class SourceChannel {
 
@@ -52,13 +52,14 @@ public final class SourceChannel {
 
     /**
      * @param server image to list channels for; may be null
-     * @return the four derived choices followed by the image's own channel
-     *     names, so a multi-channel image can be reduced to one band
+     * @return the derived choices followed by the image's own channel names;
+     *     no Hue or Saturation on a multi-channel image that is not RGB
      */
     static List<String> choices(ImageServer<BufferedImage> server) {
         List<String> out = new ArrayList<>(DERIVED);
         if (server == null) return out;
         try {
+            if (!server.isRGB() && server.nChannels() > 1) out.removeAll(List.of(HUE, SATURATION));
             for (int i = 0; i < server.nChannels(); i++) {
                 String name = server.getChannel(i).getName();
                 if (name != null && !name.isBlank() && !out.contains(name)) out.add(name);
@@ -89,19 +90,16 @@ public final class SourceChannel {
 
     /**
      * Largest value the segmenter can actually see, which bounds the manual
-     * threshold. Single-band 16-bit survives the PNG round-trip; anything
-     * multi-band is delivered as 8-bit.
+     * threshold.
      *
      * @param server image to measure; may be null
      * @param choice the selected source channel
-     * @return 65535 when a 16-bit single band will be delivered, else 255
+     * @return 65535 for a 16-bit image, else 255
      */
     static int deliveredFullScale(ImageServer<BufferedImage> server, String choice) {
         if (server == null) return 255;
         try {
-            if (server.getPixelType() != PixelType.UINT16 || server.isRGB()) return 255;
-            boolean singleBand = server.nChannels() == 1 || bandIndex(server, choice) >= 0;
-            return singleBand ? 65535 : 255;
+            return server.getPixelType() == PixelType.UINT16 ? 65535 : 255;
         } catch (Exception ex) {
             logger.debug("Could not read pixel type: {}", ex.getMessage());
             return 255;
@@ -128,8 +126,9 @@ public final class SourceChannel {
      *
      * @param server  image to read from
      * @param request region to read at downsample 1
-     * @param choice  the selected source channel; a named channel is extracted
-     *                as a single band at the source bit depth
+     * @param choice  the selected source channel; a named channel, or the
+     *                brightest band for Raw intensity and Value, goes out as one
+     *                band at the source bit depth
      * @param outPng  file to write
      * @return the written width and height
      * @throws IOException if the region cannot be read or no PNG writer accepts it
@@ -142,29 +141,7 @@ public final class SourceChannel {
                     + server.getWidth() + "x" + server.getHeight() + ")");
         }
 
-        int band = bandIndex(server, choice);
-        // A single-channel image has exactly one band whatever the choice says,
-        // so send it as one and keep its bit depth.
-        if (band < 0 && server.nChannels() == 1) band = 0;
-
-        BufferedImage toWrite = region;
-        if (band >= 0) {
-            BufferedImage single = extractBand(region, band, server.getPixelType());
-            if (single != null) {
-                toWrite = single;
-            } else if (server.getPixelType() != PixelType.UINT8) {
-                throw new IOException("Fiber analysis reads 8- and 16-bit images; "
-                        + server.getMetadata().getName()
-                        + " is " + server.getPixelType() + ". Convert it to 16-bit, or analyse the image it was"
-                        + " made from.");
-            } else {
-                logger.warn(
-                        "Cannot extract band {} of pixel type {} as a single-band PNG; sending the whole region,"
-                                + " which Python will load as 8-bit",
-                        band,
-                        server.getPixelType());
-            }
-        }
+        BufferedImage toWrite = imageToSend(server, region, choice);
 
         // ImageIO.write returns false (no exception, no file written) when the
         // BufferedImage type has no matching PNG writer -- TYPE_CUSTOM rasters
@@ -194,25 +171,57 @@ public final class SourceChannel {
         return new WrittenSize(toWrite.getWidth(), toWrite.getHeight());
     }
 
-    /**
-     * @return a grayscale copy of one band at the source bit depth, or null when
-     *     the pixel type has no lossless single-band PNG representation
-     */
-    private static BufferedImage extractBand(BufferedImage region, int band, PixelType pixelType) {
-        Raster raster = region.getRaster();
-        if (band >= raster.getNumBands()) return null;
-        int type;
-        if (pixelType == PixelType.UINT8) {
-            type = BufferedImage.TYPE_BYTE_GRAY;
-        } else if (pixelType == PixelType.UINT16) {
-            type = BufferedImage.TYPE_USHORT_GRAY;
-        } else {
-            return null;
+    /** @return the whole region for a derived choice on RGB, else one band at the source bit depth */
+    private static BufferedImage imageToSend(ImageServer<BufferedImage> server, BufferedImage region, String choice)
+            throws IOException {
+        int band = bandIndex(server, choice);
+        // A single-channel image has exactly one band whatever the choice says.
+        if (band < 0 && server.nChannels() == 1) band = 0;
+        if (band < 0 && server.isRGB()) return region;
+        PixelType type = server.getPixelType();
+        if (type != PixelType.UINT8 && type != PixelType.UINT16) {
+            throw new IOException("Fiber analysis reads 8- and 16-bit images; "
+                    + server.getMetadata().getName()
+                    + " is " + type + ". Convert it to 16-bit, or analyze the image it was made from.");
         }
+        if (band >= 0) return extractBand(region, band, type);
+        if (HUE.equals(choice) || SATURATION.equals(choice)) {
+            throw new IOException(
+                    choice + " needs an RGB image, and " + server.getMetadata().getName()
+                            + " has separate channels. Choose Raw intensity or one of its channels as the source channel.");
+        }
+        return brightestBand(region, type);
+    }
+
+    /**
+     * @param region    multi-band image
+     * @param pixelType its pixel type, UINT8 or UINT16
+     * @return a grayscale image of the largest band value at each pixel
+     */
+    static BufferedImage brightestBand(BufferedImage region, PixelType pixelType) {
+        Raster raster = region.getRaster();
         int w = region.getWidth();
         int h = region.getHeight();
+        int[] max = new int[w * h];
+        for (int b = 0; b < raster.getNumBands(); b++) {
+            int[] samples = raster.getSamples(0, 0, w, h, b, (int[]) null);
+            for (int i = 0; i < max.length; i++) {
+                if (samples[i] > max[i]) max[i] = samples[i];
+            }
+        }
+        return grayImage(w, h, max, pixelType);
+    }
+
+    /** @return a grayscale copy of one band at the source bit depth */
+    private static BufferedImage extractBand(BufferedImage region, int band, PixelType pixelType) {
+        int w = region.getWidth();
+        int h = region.getHeight();
+        return grayImage(w, h, region.getRaster().getSamples(0, 0, w, h, band, (int[]) null), pixelType);
+    }
+
+    private static BufferedImage grayImage(int w, int h, int[] samples, PixelType pixelType) {
+        int type = pixelType == PixelType.UINT16 ? BufferedImage.TYPE_USHORT_GRAY : BufferedImage.TYPE_BYTE_GRAY;
         BufferedImage out = new BufferedImage(w, h, type);
-        int[] samples = raster.getSamples(0, 0, w, h, band, (int[]) null);
         out.getRaster().setSamples(0, 0, w, h, 0, samples);
         return out;
     }

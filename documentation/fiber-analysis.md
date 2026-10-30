@@ -706,14 +706,15 @@ Two limits worth knowing before choosing Manual:
   the dialog says when it was not, and a run refuses it. Calibrations
   and window classifiers made with a ridge filter before fiberlib 0.4.1
   were on a per-region scale and must be made again.
-- On a multi-channel image, **name a channel to keep 16-bit
-  precision.** Regions are handed to Python as PNG, and PIL has no
-  16-bit colour mode, so a multi-band 16-bit region would be truncated
-  on load (raw 4500 arriving as 17). Selecting one of the image's own
-  channels in **Source channel** sends that single band instead, which
-  survives intact -- and the manual spinner then opens up to 0-65535.
-  The four derived choices (Raw intensity / Hue / Saturation / Value)
-  need all three colour bands, so they cap the spinner at 255.
+- **16-bit images keep their full precision.** Every image that is not
+  RGB reaches Python as one band at its own bit depth: the channel named
+  in **Source channel**, or, for Raw intensity and Value, the brightest
+  channel at each pixel. The manual spinner runs 0-65535 for all of them.
+  Hue and Saturation need RGB, so a multi-channel image does not offer
+  them. (Until 2026-10-30, Raw intensity and Value on a multi-channel
+  16-bit image kept only the high byte of each pixel, so raw 4500 arrived
+  as 17 and a dim image collapsed. Measurements from such a run, unless a
+  channel was named, should be redone.)
 
 Practical guidance for mode A:
 
