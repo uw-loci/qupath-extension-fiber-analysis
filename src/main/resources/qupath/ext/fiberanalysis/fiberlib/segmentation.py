@@ -360,9 +360,10 @@ def segment_internal(
 ):
     """Internal fiber segmenter. See module docstring for parameters.
 
-    ``return_threshold`` returns ``(mask, cut, full_scale)`` instead of the
-    mask: the resolved cut on the thresholded scalar's scale, and the divisor
-    that turns a gray level into it (1.0 with a ridge filter).
+    ``return_threshold`` returns ``(mask, cut, full_scale, peak)`` instead of
+    the mask: the resolved cut on the thresholded scalar's scale, the divisor
+    that turns a gray level into it (1.0 with a ridge filter), and the scalar's
+    largest value, so a cut nothing can reach can be reported.
 
     ``invert_intensity`` flips bright<->dark before thresholding -- needed for
     DAB / chromogenic brightfield where collagen appears DARKER than
@@ -422,7 +423,7 @@ def segment_internal(
     if min_fiber_area_px > 0:
         mask = skmorph.remove_small_objects(mask, min_size=int(min_fiber_area_px))
     if return_threshold:
-        return mask.astype(bool), cut, float(manual_full_scale)
+        return mask.astype(bool), cut, float(manual_full_scale), float(normed.max())
     return mask.astype(bool)
 
 

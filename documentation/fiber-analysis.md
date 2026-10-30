@@ -448,7 +448,7 @@ pick its own threshold: a nearly empty tile would cut into background noise
 while its neighbour clipped faint fibers, so coverage would jump at tile edges
 and could not be compared between slides. Instead it samples a 4 x 4 grid of
 tiles (up to 1024 px each) spread over every selected image, runs the chosen
-method once on the pooled histogram (4096 bins on the channel's full scale),
+method once on the pooled histogram (65536 bins on the channel's full scale),
 and every tile of every image uses that value. With one image selected that is
 a slide-level threshold; with several it is shared across them. The value and
 how it was obtained are written to `_density_params.json`

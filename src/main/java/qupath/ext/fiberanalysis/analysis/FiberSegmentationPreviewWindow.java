@@ -485,7 +485,11 @@ final class FiberSegmentationPreviewWindow {
                             result.get("threshold").getAsDouble(),
                             result.get("full_scale").getAsDouble(),
                             !"none".equalsIgnoreCase(p.ridgeFilter()))
-                    + ", " + fitNote;
+                    + ", " + fitNote
+                    + peakNote(
+                            result.get("threshold").getAsDouble(),
+                            result.get("peak").getAsDouble(),
+                            !"none".equalsIgnoreCase(p.ridgeFilter()));
             final boolean matchesF = matchesRun;
             Platform.runLater(() -> {
                 if (lastRequest.get() != requestId) return;
@@ -578,6 +582,13 @@ final class FiberSegmentationPreviewWindow {
             return String.format(Locale.ROOT, "%.4g (gray level %.0f of %.0f)", cut, cut * fullScale, fullScale);
         }
         return String.format(Locale.ROOT, "%.4g", cut);
+    }
+
+    /** @return the strongest ridge response in view, and a warning when the cut is above it */
+    static String peakNote(double cut, double peak, boolean ridge) {
+        if (!ridge) return "";
+        String note = String.format(Locale.ROOT, "; strongest response here %.4g", peak);
+        return cut > peak ? note + ", so this cut finds no fibers" : note;
     }
 
     private static <T> T onFx(java.util.concurrent.Callable<T> work) throws Exception {

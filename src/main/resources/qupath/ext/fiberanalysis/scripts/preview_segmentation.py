@@ -31,6 +31,7 @@ Outputs:
         "coverage_percent": float,  # fiber_pixels / total_pixels * 100
         "threshold": float,         # the cut, on the thresholded scalar's scale
         "full_scale": float,        # gray level = threshold * full_scale (1.0 with a ridge filter)
+        "peak": float,              # largest value of the thresholded scalar
         "ms_segment": float,
         "ms_render": float
       }
@@ -74,7 +75,7 @@ try:
         except (TypeError, ValueError):
             pthr = None
 
-    fiber_mask, cut, scale = seg.segment_internal(
+    fiber_mask, cut, scale, peak = seg.segment_internal(
         image=image_rgb,
         channel=str(seg_channel),
         threshold_method=str(threshold_method).lower(),
@@ -107,6 +108,7 @@ try:
         "coverage_percent": coverage,
         "threshold": cut,
         "full_scale": scale,
+        "peak": peak,
         "ms_segment": t_seg,
         "ms_render": t_render,
     })

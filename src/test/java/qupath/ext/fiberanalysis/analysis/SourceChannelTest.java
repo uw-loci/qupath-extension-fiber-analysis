@@ -27,6 +27,15 @@ import qupath.lib.images.servers.PixelType;
 class SourceChannelTest {
 
     @Test
+    void thePreviewSaysWhenTheResponseCutIsOutOfReach() {
+        assertThat(FiberSegmentationPreviewWindow.peakNote(0.1, 0.0043, true))
+                .contains("0.0043")
+                .contains("finds no fibers");
+        assertThat(FiberSegmentationPreviewWindow.peakNote(0.002, 0.0043, true)).doesNotContain("finds no fibers");
+        assertThat(FiberSegmentationPreviewWindow.peakNote(0.1, 0.0043, false)).isEmpty();
+    }
+
+    @Test
     void theBrightestBandKeepsAllSixteenBitsThroughThePng(@TempDir Path dir) throws Exception {
         WritableRaster raster = Raster.createBandedRaster(DataBuffer.TYPE_USHORT, 2, 1, 3, new Point());
         raster.setPixel(0, 0, new int[] {300, 470, 200});

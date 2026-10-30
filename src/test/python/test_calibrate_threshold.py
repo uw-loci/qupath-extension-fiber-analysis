@@ -73,14 +73,14 @@ def test_pooled_otsu_matches_otsu_on_the_pooled_pixels(tmp_path):
     assert out["threshold_normalised"] == pytest.approx(
         threshold_otsu(pooled), abs=1.0 / 4096
     )
-    assert out["histogram_bins"] == 4096
-    assert len(out["histogram_counts"]) == 4096
+    assert out["histogram_bins"] == 65536
+    assert len(out["histogram_counts"]) == 65536
     assert out["method"] == "otsu"
 
 
 def test_the_binning_no_longer_sets_the_cut():
     g = _load()
-    assert g["HIST_BINS"] >= 4096
+    assert g["HIST_BINS"] >= 65536
 
 
 def test_triangle_on_a_histogram_matches_skimage():

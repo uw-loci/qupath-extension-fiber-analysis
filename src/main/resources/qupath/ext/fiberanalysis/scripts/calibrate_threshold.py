@@ -69,11 +69,10 @@ def _opt(name, default):
     return globals().get(name, default)
 
 
-# 256 bins on [0, 1] let the threshold land only on 1/256 steps of full scale:
-# on 16-bit data sitting in the low range (one liver birefringence image spans
-# 0.03-0.17) a half-bin is ~1.4% of the data range. 4096 bins resolve 16-bit
-# data to 16 gray levels for the same pooling.
-HIST_BINS = 4096
+# The threshold can land only on a bin, and data can fill a small part of full
+# scale: a liver PolScope retardance image spans 200-470 of 65535, about 16 bins
+# of 4096. 65536 bins resolve 16-bit data to one gray level.
+HIST_BINS = 65536
 
 
 def triangle_on_histogram(hist, centers):

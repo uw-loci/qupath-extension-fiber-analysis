@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -540,3 +540,11 @@ __version__ = "0.4.4"
 #     trace_fibers pass (fibers=) instead of tracing the whole tile twice;
 #     morphometrics.mean_curvature takes every path's step lengths in one numpy
 #     call. Traced paths are identical, pixel for pixel and in order.
+#
+# 0.4.5 (2026-10-30):
+#   - calibrate_threshold: pooled histogram of 65536 bins, not 4096. A pooled
+#     Otsu or Triangle cut could land only on 16-count steps, about 16 possible
+#     cuts on a retardance image spanning 200-470.
+#   - segment_internal(return_threshold=True) also returns the scalar's peak,
+#     and preview_segmentation reports it, so a response cut no pixel reaches
+#     can be named.

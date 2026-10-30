@@ -97,11 +97,11 @@ def test_segment_internal_reports_the_cut_it_used():
     img = _fibers([1.0, 0.3])
     rgb = np.repeat((img * 65535).astype(np.uint16)[..., None], 3, axis=-1)
     common = dict(sigma_min=2, sigma_max=4, sigma_step=1, min_fiber_area_px=0)
-    _, cut, scale = seg.segment_internal(
+    _, cut, scale, _peak = seg.segment_internal(
         rgb, "Raw intensity", "manual", 30, "none", return_threshold=True, **common
     )
     assert scale == 65535.0 and cut == pytest.approx(30 / 65535)
-    _, cut, scale = seg.segment_internal(
+    _, cut, scale, peak = seg.segment_internal(
         rgb,
         "Raw intensity",
         "manual",
@@ -112,7 +112,8 @@ def test_segment_internal_reports_the_cut_it_used():
         **common,
     )
     assert scale == 1.0 and cut == pytest.approx(0.2)
-    mask, cut, _ = seg.segment_internal(
+    assert 0.2 < peak <= 1.0
+    mask, cut, _, _peak = seg.segment_internal(
         rgb, "Raw intensity", "otsu", 0, "none", return_threshold=True, **common
     )
     expected = seg.resolve_threshold(rgb[..., 0].astype(np.float32) / 65535.0, "otsu", 0)

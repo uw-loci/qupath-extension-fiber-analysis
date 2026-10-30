@@ -848,13 +848,16 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.manualResponseThresholdProperty().get(),
                 0.01));
         manualResponseSpinner.setEditable(true);
+        // The factory's default format shows two decimals, so 0.002 would read as 0.
+        manualResponseSpinner.getValueFactory().setConverter(new javafx.util.converter.DoubleStringConverter());
         applyTooltip(
                 manualResponseSpinner,
                 "With a ridge filter on, the cut is on the filter's response: 1.0 is the response of a"
                         + " fiber at full contrast (as bright as the image format allows), 0.1 keeps fibers down"
                         + " to about a tenth of that with Sato or Meijering (Frangi responds less to faint"
-                        + " fibers). The scale is the same in every region and image. Check the value with"
-                        + " Preview segmentation, or let Otsu pick it.");
+                        + " fibers). The scale is the same in every region and image, so on a dim image the"
+                        + " brightest fiber may respond far below 0.1. Preview segmentation shows the strongest"
+                        + " response in view; or let Otsu pick the cut.");
         BooleanBinding manualDisabled = thresholdMethodCombo.valueProperty().isNotEqualTo("Manual");
         manualThreshLabel.disableProperty().bind(manualDisabled);
         manualThresholdSpinner.disableProperty().bind(manualDisabled);
