@@ -336,7 +336,7 @@ public class ApposeFiberService {
         if (fiberlibDir == null) {
             throw new IOException("Cannot start Python worker: fiberlib has not been unpacked");
         }
-        pythonService = environment.python();
+        pythonService = ApposeGpu.forWorker(environment).python();
         pythonService.debug(msg -> {
             logger.info("[Fiber Python] {}", msg);
             qupath.ext.fiberanalysis.ui.PythonConsoleWindow.appendMessage(msg);
