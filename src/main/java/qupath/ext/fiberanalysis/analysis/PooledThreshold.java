@@ -168,6 +168,42 @@ public final class PooledThreshold {
             int maxSamples,
             Consumer<String> progress)
             throws IOException {
+        Samples s = sampleZones(regions, zoneMode, borderUm, spec.segChannel(), workDir, maxSamples, progress);
+        return poolSamples(s.pngs(), s.masks(), s.pixelSizes(), spec, s.images());
+    }
+
+    /**
+     * Sample boxes written for Python.
+     *
+     * @param pngs       region images
+     * @param masks      zone masks, index-aligned
+     * @param pixelSizes um/px as read, index-aligned
+     * @param images     images sampled
+     */
+    record Samples(List<String> pngs, List<String> masks, List<Double> pixelSizes, int images) {}
+
+    /**
+     * Writes evenly spread sample boxes of the analysis zones.
+     *
+     * @param regions    the annotations' regions
+     * @param zoneMode   "whole", "inside", "outside" or "both"
+     * @param borderUm   zone width, microns
+     * @param channel    the source channel
+     * @param workDir    scratch directory for the sample PNGs
+     * @param maxSamples most sample boxes in all; regions are taken evenly when there are more
+     * @param progress   status sink; may be null
+     * @return the samples
+     * @throws IOException if nothing could be sampled
+     */
+    static Samples sampleZones(
+            List<ZoneRegion> regions,
+            String zoneMode,
+            double borderUm,
+            String channel,
+            Path workDir,
+            int maxSamples,
+            Consumer<String> progress)
+            throws IOException {
         Files.createDirectories(workDir);
         List<ZoneRegion> chosen = regions;
         if (regions.size() > maxSamples) {
@@ -183,8 +219,7 @@ public final class PooledThreshold {
         int k = 0;
         for (int r = 0; r < chosen.size(); r++) {
             ZoneRegion z = chosen.get(r);
-            if (progress != null)
-                progress.accept("Sampling for a run-wide threshold: region " + (r + 1) + " of " + chosen.size());
+            if (progress != null) progress.accept("Sampling the run: region " + (r + 1) + " of " + chosen.size());
             ROI zoneRoi = AnalysisZone.roi(z.roi(), zoneMode, borderUm / z.pixelSizeUm());
             int side = (int) Math.round(SAMPLE_PX * z.downsample());
             for (int[] b : zoneBoxes(z.readBox(), zoneRoi.getGeometry(), side, perRegion)) {
@@ -192,7 +227,7 @@ public final class PooledThreshold {
                 Path mask = workDir.resolve(String.format(java.util.Locale.ROOT, "zone_%04d_mask.png", k++));
                 RegionRequest req =
                         RegionRequest.createInstance(z.server().getPath(), z.downsample(), b[0], b[1], b[2], b[3]);
-                SourceChannel.WrittenSize size = SourceChannel.writeRegionPng(z.server(), req, spec.segChannel(), png);
+                SourceChannel.WrittenSize size = SourceChannel.writeRegionPng(z.server(), req, channel, png);
                 FiberAnalysisWorkflow.rasterisePolygonMask(
                         zoneRoi, b[0], b[1], size.width(), size.height(), z.downsample(), mask);
                 pngs.add(png.toString());
@@ -201,8 +236,8 @@ public final class PooledThreshold {
                 images.add(z.server().getPath());
             }
         }
-        if (pngs.isEmpty()) throw new IOException("The analysis zones are empty; nothing to fit a threshold on");
-        return poolSamples(pngs, masks, pixelSizes, spec, images.size());
+        if (pngs.isEmpty()) throw new IOException("The analysis zones are empty; nothing to sample");
+        return new Samples(pngs, masks, pixelSizes, images.size());
     }
 
     /**

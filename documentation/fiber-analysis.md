@@ -1030,6 +1030,27 @@ not raw RGB.
    names a range to use. To compare images or regions, pick one range per
    modality and use it for all of them: texture from different ranges does not
    compare. Maps and other measurements do not use this range.
+
+   **Automatic ranges, for messy data.** **Gray range** can also fit the range
+   once per run from up to 64 sample boxes of the analysis zones, segmented as
+   the run segments them, on fiber pixels only:
+
+   - **1st to 99th percentile of fibers**: ignores the darkest and brightest 1%.
+   - **Mean +/- 3 SD of fibers**: the range limitation of Collewet et al. 2004
+     ([doi:10.1016/j.mri.2003.09.001](https://doi.org/10.1016/j.mri.2003.09.001)),
+     clipped to the image's scale.
+   - **Minimum to maximum of fibers**: the range the Image Biomarker
+     Standardization Initiative's fixed bin number uses (Zwanenburg et al. 2020,
+     [doi:10.1148/radiol.2020191145](https://doi.org/10.1148/radiol.2020191145)).
+     One bright speck stretches it.
+
+   The fitted range goes in `run_notes.txt` and in each `results.json`. A batch
+   fits one range across all its images. **That range belongs to those pixels, so
+   texture may be inconsistent between images and with any other run**, and the
+   batch dialog says so in red, as does `run_notes.txt`. Do not use an automatic
+   range when the intensity distribution is expected to differ between images,
+   for example on a negative control: its dim fibers would pull the range, or be
+   compared on a range fitted to brighter images. Set one range by hand for those.
 2. **GLCM** `P_d_theta(i, j)` = count of fiber-pixel pairs with gray levels
    `(i, j)` at offset `(d, theta)`. A pair with a background pixel is not
    counted, so the features describe the fibers, not how much of the window

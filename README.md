@@ -155,6 +155,7 @@ at-a-glance reference.
 | Fractal box sizes | 5. Morphometrics | 0.25,0.5,1,2,4,8,16 | um | Box sizes for box-counting fractal dimension. |
 | Enable GLCM texture | 6. Texture | checked | -- | Master toggle for per-window GLCM / Haralick features. |
 | Quantization levels | 6. Texture | 16 | gray levels | Number of gray levels the source channel is quantized to before GLCM. |
+| Gray range | 6. Texture | Set by hand | -- | How the gray range is chosen: by hand, or fitted once per run on sampled fiber pixels (1st to 99th percentile, mean +/- 3 SD, or minimum to maximum). A fitted range differs between runs, so a batch shows a red warning: results may be inconsistent between images, and an automatic range should not be used when the distribution is expected to differ, for example on a negative control. |
 | Gray range minimum, maximum | 6. Texture | 0, 0 | gray level | The gray levels the quantization levels span; a maximum of 0 is the image's full scale. A dim image on full scale lands in one or two levels and its texture reads as flat, so set the range to fit the fibers and use the same range for every image you compare. A run reports the fibers' own range and warns when too few levels were used. |
 | GLCM distance(s) | 6. Texture | 0.1,0.2,0.3 | um | Offsets at which co-occurrence is computed. Converted to whole pixels per image. |
 | Contrast | 6. Texture | checked | -- | GLCM contrast (variance of intensity differences). |

@@ -17,8 +17,22 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import javafx.application.Platform;
+import javafx.embed.swing.SwingFXUtils;
+import javafx.geometry.Bounds;
+import javafx.scene.Node;
+import javafx.scene.Parent;
+import javafx.scene.Scene;
+import javafx.scene.control.Label;
+import javafx.scene.control.TitledPane;
+import javafx.scene.image.WritableImage;
+import javafx.scene.layout.VBox;
+import javafx.stage.Stage;
+import javax.imageio.ImageIO;
+import qupath.ext.fiberanalysis.analysis.FiberAnalysisBatchDialog;
+import qupath.ext.fiberanalysis.analysis.FiberAnalysisDialog;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisParams;
 import qupath.ext.fiberanalysis.analysis.FiberAnalysisWorkflow;
+import qupath.ext.fiberanalysis.analysis.GlcmRange;
 import qupath.ext.fiberanalysis.analysis.SourceChannel;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.lib.gui.QuPathGUI;
@@ -129,6 +143,93 @@ public final class GlcmRangeScenario {
         double fitContrast = run(qupath, data, a, 200, 470, outDir);
         check(!notes(outDir).contains("GLCM texture is coarse"), "a run on a fitted range does not warn");
         check(fitContrast > 1.0, "on a fitted range the texture is real (contrast " + fitContrast + ")");
+
+        clearNotes(outDir);
+        onFx(() -> {
+            FiberAnalysisPreferences.glcmRangeMethodProperty().set(GlcmRange.PERCENTILE);
+            return null;
+        });
+        double autoContrast = run(qupath, data, a, 0, 0, outDir);
+        System.out.println("[....] run notes: " + notes(outDir).strip());
+        check(notes(outDir).contains("GLCM gray range"), "an automatic run records the range it fitted");
+        check(!notes(outDir).contains("GLCM texture is coarse"), "an automatic range does not leave the run coarse");
+        check(autoContrast > 1.0, "the automatic range gives real texture (contrast " + autoContrast + ")");
+        onFx(() -> {
+            FiberAnalysisPreferences.glcmRangeMethodProperty().set(GlcmRange.BY_HAND);
+            return null;
+        });
+
+        dialogLooks(qupath, data, outDir);
+    }
+
+    /** The texture rows do not overlap, and the red batch warning renders. */
+    private static void dialogLooks(QuPathGUI qupath, ImageData<BufferedImage> data, Path outDir) throws Exception {
+        onFx(() -> {
+            qupath.getViewer().setImageData(data);
+            new FiberAnalysisDialog(qupath, null).show();
+            return null;
+        });
+        Thread.sleep(1500);
+        Stage stage = onFx(() -> {
+            for (javafx.stage.Window w : javafx.stage.Window.getWindows()) {
+                if (w instanceof Stage st && st.getScene() != null && st.getScene().getRoot().lookupAll(".titled-pane").size() > 3)
+                    return st;
+            }
+            return null;
+        });
+        check(stage != null, "the Fiber Analysis dialog opens");
+        if (stage == null) return;
+        Parent root = stage.getScene().getRoot();
+        onFx(() -> {
+            for (Node n : root.lookupAll(".titled-pane")) {
+                TitledPane t = (TitledPane) n;
+                t.setExpanded(t.getText() != null && t.getText().startsWith("6."));
+            }
+            stage.setHeight(900);
+            return null;
+        });
+        Thread.sleep(800);
+        Bounds[] rows = onFx(() -> {
+            root.applyCss();
+            root.layout();
+            Bounds dist = null, min = null, max = null, method = null;
+            for (Node n : root.lookupAll(".label")) {
+                if (!(n instanceof Label l) || !n.isVisible() || l.getText() == null) continue;
+                switch (l.getText()) {
+                    case "GLCM distance(s) (um):" -> dist = n.localToScene(n.getBoundsInLocal());
+                    case "Gray range:" -> method = n.localToScene(n.getBoundsInLocal());
+                    case "Gray range minimum:" -> min = n.localToScene(n.getBoundsInLocal());
+                    case "Gray range maximum:" -> max = n.localToScene(n.getBoundsInLocal());
+                    default -> {}
+                }
+            }
+            return new Bounds[] {dist, method, min, max};
+        });
+        boolean all = rows[0] != null && rows[1] != null && rows[2] != null && rows[3] != null;
+        check(all, "section 6 shows the distance and gray range rows");
+        if (all) {
+            for (int i = 1; i < rows.length; i++) {
+                check(rows[i].getMinY() >= rows[i - 1].getMaxY(), "row " + i + " sits below the one before it");
+            }
+        }
+        onFx(() -> {
+            WritableImage img = root.snapshot(null, null);
+            ImageIO.write(SwingFXUtils.fromFXImage(img, null), "png", outDir.resolve("section6.png").toFile());
+            Label warning = FiberAnalysisBatchDialog.buildRangeWarning();
+            warning.setVisible(true);
+            warning.setPrefWidth(600);
+            VBox box = new VBox(warning);
+            box.setPadding(new javafx.geometry.Insets(12));
+            new Scene(box, 624, 130);
+            box.applyCss();
+            box.layout();
+            ImageIO.write(
+                    SwingFXUtils.fromFXImage(box.snapshot(null, null), null),
+                    "png",
+                    outDir.resolve("batch_warning.png").toFile());
+            return null;
+        });
+        check(Files.isRegularFile(outDir.resolve("batch_warning.png")), "the red batch warning renders");
     }
 
     private static double run(

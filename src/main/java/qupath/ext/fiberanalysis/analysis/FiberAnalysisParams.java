@@ -132,7 +132,9 @@ public record FiberAnalysisParams(
         // Gray levels the GLCM levels span, in the source's own units. A maximum
         // of 0 is the full scale.
         int glcmGrayMin,
-        int glcmGrayMax) {
+        int glcmGrayMax,
+        // A GlcmRange method: set by hand, or fitted once on the run's fibers.
+        String glcmRangeMethod) {
 
     /**
      * @param downsample the analysis downsample
@@ -247,6 +249,7 @@ public record FiberAnalysisParams(
                 FiberAnalysisPreferences.collagenObjectsProperty().get(),
                 FiberAnalysisPreferences.glcmPerDistanceProperty().get(),
                 FiberAnalysisPreferences.glcmGrayMinProperty().get(),
-                FiberAnalysisPreferences.glcmGrayMaxProperty().get());
+                FiberAnalysisPreferences.glcmGrayMaxProperty().get(),
+                FiberAnalysisPreferences.glcmRangeMethodProperty().get());
     }
 }

@@ -81,6 +81,51 @@ def level_use(image_scalar, fiber_mask, levels, value_range, full_scale):
     }
 
 
+#: How an automatic gray range is taken from fiber pixels. Mean +/- 3 SD follows
+#: Collewet et al. 2004, doi:10.1016/j.mri.2003.09.001; the range of the region's
+#: own values is the fixed-bin-number discretization of the IBSI, Zwanenburg et
+#: al. 2020, doi:10.1148/radiol.2020191145.
+RANGE_METHODS = ("percentile_1_99", "mean_3sd", "min_max")
+
+
+def range_from_histogram(hist, method, full_scale):
+    """A gray range from a histogram of fiber pixels.
+
+    Args:
+        hist:       counts in equal bins over [0, 1].
+        method:     one of :data:`RANGE_METHODS`.
+        full_scale: gray level of 1.0.
+
+    Returns:
+        (lo, hi) in gray levels, whole numbers inside 0..full_scale.
+
+    Raises:
+        ValueError: on an unknown method, or fibers with no spread to fit.
+    """
+    h = np.asarray(hist, dtype=np.float64)
+    if method not in RANGE_METHODS:
+        raise ValueError(f"Unknown GLCM range method {method!r}")
+    total = h.sum()
+    if total <= 0:
+        raise ValueError("No fiber pixels to fit a GLCM gray range on")
+    centers = (np.arange(h.size) + 0.5) / h.size
+    if method == "percentile_1_99":
+        cum = np.cumsum(h) / total
+        lo, hi = centers[np.searchsorted(cum, 0.01)], centers[np.searchsorted(cum, 0.99)]
+    elif method == "mean_3sd":
+        mean = (centers * h).sum() / total
+        sd = np.sqrt((h * (centers - mean) ** 2).sum() / total)
+        lo, hi = mean - 3.0 * sd, mean + 3.0 * sd
+    else:
+        filled = np.flatnonzero(h)
+        lo, hi = centers[filled[0]], centers[filled[-1]]
+    gray_lo = int(np.floor(max(lo, 0.0) * full_scale))
+    gray_hi = int(np.ceil(min(hi, 1.0) * full_scale))
+    if gray_hi <= gray_lo:
+        raise ValueError("Fiber pixels have no spread to fit a GLCM gray range on")
+    return gray_lo, gray_hi
+
+
 def code_fibers(q, fiber_mask):
     """Gray levels 0..L-1 on fiber pixels become codes 1..L; background is 0."""
     return np.where(fiber_mask, q.astype(np.uint16) + 1, 0).astype(np.uint16)

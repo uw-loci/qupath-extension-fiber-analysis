@@ -110,6 +110,8 @@ public class FiberAnalysisWorkflow {
 
     /** Notes recorded with the run. */
     private volatile List<String> runNotes = List.of();
+    /** The GLCM range fitted for this run; null while the settings give it. */
+    private volatile GlcmRange.Fit runGlcmRange;
 
     /** False when a batch compares thresholds across the project once, at its end. */
     private volatile boolean checkProjectThresholds = true;
@@ -185,6 +187,17 @@ public class FiberAnalysisWorkflow {
     public FiberAnalysisWorkflow withRunThreshold(double thresholdNorm, String source) {
         this.runThreshold = thresholdNorm;
         this.runThresholdSource = source;
+        return this;
+    }
+
+    /**
+     * Use a GLCM gray range fitted by the caller, so a batch shares one range.
+     *
+     * @param fit the range
+     * @return this workflow
+     */
+    public FiberAnalysisWorkflow withRunGlcmRange(GlcmRange.Fit fit) {
+        this.runGlcmRange = fit;
         return this;
     }
 
@@ -466,6 +479,37 @@ public class FiberAnalysisWorkflow {
                         "Every annotation cuts at {} ({})",
                         String.format(Locale.ROOT, "%.5f", runThreshold),
                         runThresholdSource);
+            }
+            if (params.textureEnabled() && GlcmRange.isAuto(params.glcmRangeMethod())) {
+                try {
+                    if (runGlcmRange == null) {
+                        progress.setMain("Fitting the GLCM gray range...", 0, total);
+                        Double cut = runThreshold;
+                        if (cut == null && "Project Otsu (calibrated)".equals(params.thresholdMethod())) {
+                            cut = loadCalibratedThreshold(params.projectCalibrationName(), projectDirAtLaunch);
+                        }
+                        runGlcmRange = GlcmRange.fit(
+                                params,
+                                zoneRegions(params, imageData, annotations),
+                                cut,
+                                outputRoot.resolve("glcm_range_samples"),
+                                progress::setSub);
+                    }
+                    logger.info("{}", runGlcmRange.source());
+                    List<String> notes = new ArrayList<>(runNotes);
+                    notes.add(runGlcmRange.source());
+                    runNotes = List.copyOf(notes);
+                } catch (IOException e) {
+                    logger.error("Could not fit a GLCM gray range", e);
+                    HeadlessFx.runLater(() -> {
+                        progress.close();
+                        Dialogs.showErrorMessage(
+                                "Fiber Analysis",
+                                "Could not fit a gray range for the run: " + e.getMessage()
+                                        + "\nSet the range by hand to run without it.");
+                    });
+                    return;
+                }
             }
             if (!runNotes.isEmpty()) {
                 for (String note : runNotes) logger.info("Run note: {}", note);
@@ -1690,8 +1734,8 @@ public class FiberAnalysisWorkflow {
         // Texture
         in.put("texture_enabled", p.textureEnabled());
         in.put("quant_levels", p.quantLevels());
-        in.put("glcm_gray_min", p.glcmGrayMin());
-        in.put("glcm_gray_max", p.glcmGrayMax());
+        in.put("glcm_gray_min", runGlcmRange != null ? runGlcmRange.min() : p.glcmGrayMin());
+        in.put("glcm_gray_max", runGlcmRange != null ? runGlcmRange.max() : p.glcmGrayMax());
         in.put("glcm_distances_px", umListToPxCsv(p.glcmDistancesUm(), pixelSizeUm, "GLCM distances"));
         in.put("texture_contrast", p.contrast());
         in.put("texture_correlation", p.correlation());
@@ -2198,6 +2242,7 @@ public class FiberAnalysisWorkflow {
         m.put("quantLevels", p.quantLevels());
         m.put("glcmGrayMin", p.glcmGrayMin());
         m.put("glcmGrayMax", p.glcmGrayMax());
+        m.put("glcmRangeMethod", p.glcmRangeMethod());
         m.put("glcmDistancesUm", p.glcmDistancesUm());
         m.put("contrast", p.contrast());
         m.put("correlation", p.correlation());
@@ -2325,7 +2370,9 @@ public class FiberAnalysisWorkflow {
         ordered.put("textureEnabled", p.textureEnabled());
         ordered.put("quantLevels", p.quantLevels());
         // Only when set, so a full-scale run keeps its hash.
-        if (p.glcmGrayMax() > 0) {
+        if (GlcmRange.isAuto(p.glcmRangeMethod())) {
+            ordered.put("glcmRangeMethod", p.glcmRangeMethod());
+        } else if (p.glcmGrayMax() > 0) {
             ordered.put("glcmGrayMin", p.glcmGrayMin());
             ordered.put("glcmGrayMax", p.glcmGrayMax());
         }

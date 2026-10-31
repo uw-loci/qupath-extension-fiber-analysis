@@ -73,6 +73,7 @@ public final class FiberAnalysisBatchDialog {
     private final FiberAnalysisPanel resultPanel;
     private FiberAnalysisParams loadedParams; // null until user loads a params.json
     private Label paramsStatusLabel;
+    private Label rangeWarning;
 
     private TextField nameFilterField;
     private TextField classFilterField;
@@ -119,6 +120,8 @@ public final class FiberAnalysisBatchDialog {
         root.getChildren().add(new Separator());
 
         root.getChildren().add(buildParamsLoaderRow(dialog));
+        rangeWarning = buildRangeWarning();
+        root.getChildren().add(rangeWarning);
         root.getChildren().add(new Separator());
 
         Label filterHdr = new Label("Filter project images");
@@ -190,6 +193,20 @@ public final class FiberAnalysisBatchDialog {
         dialog.show();
     }
 
+    /** @return the red warning for an automatic gray range, hidden until the loaded params use one */
+    public static Label buildRangeWarning() {
+        Label warning = new Label(GlcmRange.MULTI_IMAGE_WARNING);
+        warning.setWrapText(true);
+        warning.setMaxWidth(Double.MAX_VALUE);
+        warning.setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        // White on a red fill, so it reads the same in light and dark themes.
+        warning.setStyle("-fx-background-color: #b3261e; -fx-text-fill: white; -fx-font-weight: bold;"
+                + " -fx-padding: 8; -fx-background-radius: 4;");
+        warning.setVisible(false);
+        warning.managedProperty().bind(warning.visibleProperty());
+        return warning;
+    }
+
     private javafx.scene.layout.VBox buildCalibrationBanner() {
         javafx.scene.layout.VBox box = new javafx.scene.layout.VBox(6);
         box.setStyle("-fx-background-color: #fff5d6; -fx-border-color: #d4a82a; -fx-border-radius: 4;"
@@ -242,6 +259,7 @@ public final class FiberAnalysisBatchDialog {
                     loadedParams = loadParamsFromJson(f.toPath());
                     paramsStatusLabel.setText(f.getName() + "  (loaded)");
                     paramsStatusLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #060;");
+                    rangeWarning.setVisible(GlcmRange.isAuto(loadedParams.glcmRangeMethod()));
                 } catch (Exception ex) {
                     logger.warn("Could not load params from {}", f, ex);
                     paramsStatusLabel.setText("Load failed: " + ex.getMessage());
@@ -380,7 +398,8 @@ public final class FiberAnalysisBatchDialog {
                 base.collagenObjects(),
                 base.glcmPerDistance(),
                 base.glcmGrayMin(),
-                base.glcmGrayMax());
+                base.glcmGrayMax(),
+                base.glcmRangeMethod());
     }
 
     private void runBatch(FiberAnalysisParams params, List<ProjectImageEntry<BufferedImage>> entries) {
@@ -510,6 +529,37 @@ public final class FiberAnalysisBatchDialog {
                             return;
                         }
                     }
+
+                    GlcmRange.Fit fittedRange = null;
+                    if (GlcmRange.isAuto(runParams.glcmRangeMethod())) {
+                        logger.warn("{}", GlcmRange.MULTI_IMAGE_WARNING);
+                        notes.add(GlcmRange.MULTI_IMAGE_WARNING);
+                        try {
+                            ApposeFiberService.getInstance().initialize(msg -> {});
+                            List<PooledThreshold.ZoneRegion> regions = new ArrayList<>();
+                            for (ProjectImageEntry<BufferedImage> entry : entries) {
+                                ImageData<BufferedImage> data = entry.readImageData();
+                                regions.addAll(FiberAnalysisWorkflow.zoneRegions(
+                                        paramsFor.apply(entry), data, resolveAnnotations(runParams, data)));
+                            }
+                            Double cut = batchThreshold;
+                            if (cut == null && "Project Otsu (calibrated)".equals(runParams.thresholdMethod())) {
+                                cut = FiberAnalysisWorkflow.loadCalibratedThreshold(runParams.projectCalibrationName());
+                            }
+                            Path work = Files.createTempDirectory("fiber-batch-glcm-range");
+                            fittedRange = GlcmRange.fit(runParams, regions, cut, work, null);
+                            logger.info("Batch: {}", fittedRange.source());
+                        } catch (Exception ex) {
+                            logger.error("Batch: could not fit a GLCM gray range", ex);
+                            String msg = ex.getMessage();
+                            HeadlessFx.runLater(() -> Dialogs.showErrorMessage(
+                                    "Fiber Analysis Batch",
+                                    "Could not fit a gray range for the batch: " + msg
+                                            + "\nSet the range by hand to run without it."));
+                            return;
+                        }
+                    }
+                    final GlcmRange.Fit batchRange = fittedRange;
                     List<ProjectImageEntry<BufferedImage>> ran = new ArrayList<>();
                     for (int i = 0; i < entries.size(); i++) {
                         ProjectImageEntry<BufferedImage> entry = entries.get(i);
@@ -544,6 +594,7 @@ public final class FiberAnalysisBatchDialog {
                                     .withoutProjectThresholdCheck()
                                     .withRunNotes(imageNotes);
                             if (batchThreshold != null) workflow.withRunThreshold(batchThreshold, batchThresholdSource);
+                            if (batchRange != null) workflow.withRunGlcmRange(batchRange);
                             Thread worker = workflow.runForAnnotations(imageParams, annotations, data, gui);
                             if (worker != null) {
                                 worker.join();
@@ -682,7 +733,8 @@ public final class FiberAnalysisBatchDialog {
                 bool(obj, "collagenObjects", true),
                 bool(obj, "glcmPerDistance", false),
                 (int) num(obj, "glcmGrayMin", 0),
-                (int) num(obj, "glcmGrayMax", 0));
+                (int) num(obj, "glcmGrayMax", 0),
+                str(obj, "glcmRangeMethod", GlcmRange.BY_HAND));
     }
 
     private static String str(JsonObject o, String key, String def) {

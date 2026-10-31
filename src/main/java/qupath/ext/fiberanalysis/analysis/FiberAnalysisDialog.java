@@ -157,6 +157,7 @@ public final class FiberAnalysisDialog {
     // -- Section 6 --
     private CheckBox textureEnabledCheck;
     private Spinner<Integer> quantLevelsSpinner;
+    private ComboBox<String> glcmRangeMethodCombo;
     private Spinner<Integer> glcmGrayMinSpinner;
     private Spinner<Integer> glcmGrayMaxSpinner;
     private TextField glcmDistancesField;
@@ -1509,10 +1510,25 @@ public final class FiberAnalysisDialog {
                         + " 16-bit). A dim image on full scale lands in one or two levels and its texture reads"
                         + " as flat. Use the same range for every image you compare. A run reports the"
                         + " fibers' own range and warns when too few levels were used.");
-        numericGrid.add(new Label("Gray range minimum:"), 0, 1);
-        numericGrid.add(glcmGrayMinSpinner, 1, 1);
-        numericGrid.add(new Label("Gray range maximum:"), 0, 2);
-        numericGrid.add(glcmGrayMaxSpinner, 1, 2);
+        glcmRangeMethodCombo = new ComboBox<>(FXCollections.observableArrayList(GlcmRange.METHODS));
+        glcmRangeMethodCombo.setValue(
+                FiberAnalysisPreferences.glcmRangeMethodProperty().get());
+        applyTooltip(
+                glcmRangeMethodCombo,
+                "How the gray range is chosen. Set by hand keeps one meaning of a level across every run,"
+                        + " which is what comparison needs. The others fit the range once per run on sampled"
+                        + " fiber pixels, for messy data: the percentiles ignore the brightest and darkest"
+                        + " 1%; Mean +/- 3 SD follows Collewet et al. 2004; minimum to maximum is the IBSI's"
+                        + " fixed-bin-number range, and one bright speck stretches it.");
+        Label glcmRangeNote = new Label(
+                "Fitted once per run. Another run fits its own range, so texture from separate runs does not compare.");
+        glcmRangeNote.setWrapText(true);
+        glcmRangeNote.setStyle("-fx-font-size: 11px;");
+        BooleanBinding autoRange = glcmRangeMethodCombo.valueProperty().isNotEqualTo(GlcmRange.BY_HAND);
+        glcmRangeNote.visibleProperty().bind(autoRange);
+        glcmRangeNote.managedProperty().bind(autoRange);
+        glcmGrayMinSpinner.disableProperty().bind(autoRange);
+        glcmGrayMaxSpinner.disableProperty().bind(autoRange);
 
         glcmDistancesField =
                 new TextField(FiberAnalysisPreferences.glcmDistancesPxProperty().get());
@@ -1524,6 +1540,13 @@ public final class FiberAnalysisDialog {
                         + " texture at multiple scales.");
         numericGrid.add(new Label("GLCM distance(s) (um):"), 0, 1);
         numericGrid.add(glcmDistancesField, 1, 1);
+        numericGrid.add(new Label("Gray range:"), 0, 2);
+        numericGrid.add(glcmRangeMethodCombo, 1, 2);
+        numericGrid.add(glcmRangeNote, 1, 3);
+        numericGrid.add(new Label("Gray range minimum:"), 0, 4);
+        numericGrid.add(glcmGrayMinSpinner, 1, 4);
+        numericGrid.add(new Label("Gray range maximum:"), 0, 5);
+        numericGrid.add(glcmGrayMaxSpinner, 1, 5);
         content.getChildren().add(numericGrid);
 
         Label propLabel = new Label("Properties:");
@@ -1899,7 +1922,8 @@ public final class FiberAnalysisDialog {
                 collagenObjectsCheck.isSelected(),
                 glcmPerDistanceCheck.isSelected(),
                 glcmGrayMinSpinner.getValue(),
-                glcmGrayMaxSpinner.getValue());
+                glcmGrayMaxSpinner.getValue(),
+                glcmRangeMethodCombo.getValue());
     }
 
     /**
@@ -1975,6 +1999,7 @@ public final class FiberAnalysisDialog {
         FiberAnalysisPreferences.glcmPerDistanceProperty().set(glcmPerDistanceCheck.isSelected());
         FiberAnalysisPreferences.glcmGrayMinProperty().set(glcmGrayMinSpinner.getValue());
         FiberAnalysisPreferences.glcmGrayMaxProperty().set(glcmGrayMaxSpinner.getValue());
+        FiberAnalysisPreferences.glcmRangeMethodProperty().set(glcmRangeMethodCombo.getValue());
 
         FiberAnalysisPreferences.outputDirProperty().set(emptyIfNull(outputDirField.getText()));
         FiberAnalysisPreferences.fiberMaskOverlayProperty().set(fiberMaskOverlayCheck.isSelected());

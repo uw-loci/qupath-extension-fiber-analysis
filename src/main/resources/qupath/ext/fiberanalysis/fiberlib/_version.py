@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.6"
+__version__ = "0.4.7"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -558,3 +558,8 @@ __version__ = "0.4.6"
 #     tile, 5 of 16 levels held 99% of fiber pixels at full scale and 15 of 16
 #     on the fibers' own 1st-99th percentile range; a default run's
 #     windows.json is unchanged from 0.4.5.
+#
+# 0.4.7 (2026-10-31):
+#   - texture.range_from_histogram and scripts/fit_glcm_range.py: an automatic
+#     GLCM gray range fitted once on sampled fiber pixels (1st to 99th
+#     percentile, mean +/- 3 SD, or minimum to maximum).

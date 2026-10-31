@@ -4,6 +4,7 @@ one level and every window reads as flat, on a range that fits them they do not.
 The range is the same for every window, so a level keeps one meaning in a run.
 """
 
+import json
 import os
 import sys
 
@@ -108,3 +109,72 @@ def test_an_eight_bit_image_uses_its_own_gray_levels(tmp_path):
     t = _analyze(img, tmp_path, glcm_gray_min=100, glcm_gray_max=235)["result"]["texture"]
     assert t["gray_max"] == 235.0
     assert t["levels_holding_99pct"] == 16
+
+
+def _hist(values):
+    return np.histogram(np.asarray(values) / 65535.0, bins=65536, range=(0.0, 1.0))[0]
+
+
+def test_percentile_range_ignores_a_few_extreme_pixels():
+    v = np.r_[np.linspace(200, 470, 100000), np.full(50, 60000.0)]
+    lo, hi = tex.range_from_histogram(_hist(v), "percentile_1_99", 65535.0)
+    assert lo == pytest.approx(203, abs=2)
+    assert hi == pytest.approx(467, abs=2)
+
+
+def test_mean_sd_range_is_three_sd_each_side_and_stays_on_scale():
+    rng = np.random.default_rng(0)
+    v = rng.normal(5000, 1000, 200000).clip(0, 65535)
+    lo, hi = tex.range_from_histogram(_hist(v), "mean_3sd", 65535.0)
+    assert lo == pytest.approx(2000, abs=40)
+    assert hi == pytest.approx(8000, abs=40)
+    low = tex.range_from_histogram(_hist(rng.normal(100, 200, 50000).clip(0, 65535)), "mean_3sd", 65535.0)
+    assert low[0] == 0
+
+
+def test_min_max_range_takes_the_extremes():
+    assert tex.range_from_histogram(_hist([300.0, 5000.0, 60000.0]), "min_max", 65535.0) == (300, 60000)
+
+
+def test_a_range_cannot_be_fitted_on_nothing_or_on_one_value():
+    empty = np.zeros(65536)
+    with pytest.raises(ValueError, match="No fiber pixels"):
+        tex.range_from_histogram(empty, "percentile_1_99", 65535.0)
+    with pytest.raises(ValueError, match="Unknown"):
+        tex.range_from_histogram(_hist([5.0, 9.0]), "otsu", 65535.0)
+
+
+def test_the_fit_script_uses_the_runs_own_mask_and_zone(tmp_path):
+    from PIL import Image
+
+    img = _dim_image()
+    png = tmp_path / "region.png"
+    Image.fromarray(img).save(png)
+    zone = tmp_path / "zone.png"
+    Image.fromarray(np.full(img.shape, 255, dtype=np.uint8)).save(zone)
+
+    class Task:
+        outputs = {}
+
+    script = os.path.join(PKG_ROOT, "scripts", "fit_glcm_range.py")
+    g = dict(
+        task=Task(),
+        region_paths=[str(png)],
+        mask_paths=[str(zone)],
+        region_pixel_um=[1.0],
+        method="percentile_1_99",
+        seg_channel="Raw intensity",
+        threshold_method="manual",
+        manual_threshold=100,
+        ridge_filter="none",
+        sigma_min_um=1.0,
+        sigma_max_um=4.0,
+        sigma_step_um=1.0,
+        min_fiber_area_um2=4.0,
+    )
+    exec(compile(open(script).read(), script, "exec"), g)
+    out = json.loads(Task.outputs["result_json"])
+    assert "error" not in out
+    assert out["gray_min"] == pytest.approx(200, abs=5)
+    assert out["gray_max"] == pytest.approx(470, abs=5)
+    assert out["n_regions_used"] == 1
