@@ -108,17 +108,27 @@ _OFFS = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
 _RING = [(-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1)]
 
 
-def _ring_stack(skel):
-    """(8, H, W) uint8 stack of the ring neighbours of every pixel."""
+def _ring_codes(skel):
+    """(H, W) uint8, bit k set when ring neighbour ``_RING[k]`` is on."""
     sk = np.asarray(skel, dtype=bool)
     h, w = sk.shape
-    padded = np.pad(sk.astype(np.uint8), 1)
-    return np.stack([padded[1 + dy:1 + dy + h, 1 + dx:1 + dx + w] for dy, dx in _RING], axis=0)
+    padded = np.pad(sk, 1).view(np.uint8)
+    code = np.zeros((h, w), dtype=np.uint8)
+    for k, (dy, dx) in enumerate(_RING):
+        code |= padded[1 + dy:1 + dy + h, 1 + dx:1 + dx + w] << k
+    return code
+
+
+# Set neighbours, and 0->1 transitions walking the ring, for each 8-bit code.
+_POPCOUNT = np.array([bin(m).count("1") for m in range(256)], dtype=np.int32)
+_CROSSINGS = np.array(
+    [sum(1 for k in range(8) if not m >> k & 1 and m >> ((k + 1) % 8) & 1) for m in range(256)], dtype=np.int32
+)
 
 
 def neighbour_counts(skel):
     """(H, W) int, number of set 8-neighbours of each pixel."""
-    return _ring_stack(skel).sum(axis=0).astype(np.int32)
+    return _POPCOUNT[_ring_codes(skel)]
 
 
 def crossing_numbers(skel):
@@ -140,9 +150,7 @@ def crossing_numbers(skel):
     Endpoints are the other way round -- use a neighbour count of 1 for those,
     because a staircase corner has crossing number 1 as well.
     """
-    ring = _ring_stack(skel)
-    nxt = np.roll(ring, -1, axis=0)
-    return ((nxt == 1) & (ring == 0)).sum(axis=0).astype(np.int32)
+    return _CROSSINGS[_ring_codes(skel)]
 
 
 def junction_mask(skel):
@@ -262,7 +270,8 @@ def _trace_links(skel, node):
     node_flat = np.flatnonzero(np.asarray(node, dtype=bool).ravel() & sk.ravel()).tolist()
     is_node = set(node_flat)
 
-    links = []
+    ends = []  # (start, end, offset into flat) per link
+    flat = []  # every link's pixels, one after another
     traced = set()
     for start in node_flat:
         for d0, dy0, dx0 in table[nbits[start]]:
@@ -288,7 +297,18 @@ def _trace_links(skel, node):
                 prev, cur = cur, nxt
             traced.add((start, first))
             traced.add((cur, path[-2]))
-            links.append((divmod(start, w), divmod(cur, w), [divmod(i, w) for i in path]))
+            ends.append((start, cur, len(flat)))
+            flat.extend(path)
+    if not ends:
+        return []
+    # (y, x) for every pixel in one numpy call rather than one divmod each.
+    ys, xs = np.divmod(np.asarray(flat, dtype=np.int64), w)
+    pts = list(zip(ys.tolist(), xs.tolist()))
+    links = []
+    for i, (start, cur, at) in enumerate(ends):
+        stop = ends[i + 1][2] if i + 1 < len(ends) else len(pts)
+        path = pts[at:stop]
+        links.append((path[0], path[-1], path))
     return links
 
 
@@ -361,8 +381,9 @@ def trace_fibers(skel, max_turn_deg=MAX_LINK_TURN_DEG, dir_window_px=LINK_DIR_WI
     sk = np.asarray(skel, dtype=bool)
     if not sk.any():
         return []
-    nb = neighbour_counts(sk)
-    junction = junction_mask(sk)
+    code = _ring_codes(sk)
+    nb = _POPCOUNT[code]
+    junction = sk & (_CROSSINGS[code] >= 3)
     # Mask by the skeleton: a background pixel also has few neighbours, and
     # leaving it in seeds a link from every pixel next to a fiber.
     node = sk & (junction | (nb <= 1))

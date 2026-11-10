@@ -1,5 +1,5 @@
 """
-fiberlib 0.4.4: the faster fibre tracing and curvature give the same answers,
+fiberlib 0.4.4 and 0.4.8: the faster fiber tracing and curvature give the same answers,
 bit for bit, as the code they replaced (kept below as the reference).
 """
 
@@ -147,3 +147,24 @@ def test_a_shared_trace_gives_the_same_values():
     assert a.keys() == b.keys()
     for k in a:
         assert _bits(a[k]) == _bits(b[k]), k
+
+
+def _ref_ring_stack(skel):
+    """fiberlib 0.4.7: the 8 ring neighbours as a stack."""
+    sk = np.asarray(skel, dtype=bool)
+    h, w = sk.shape
+    padded = np.pad(sk.astype(np.uint8), 1)
+    return np.stack([padded[1 + dy:1 + dy + h, 1 + dx:1 + dx + w] for dy, dx in straight._RING], axis=0)
+
+
+def test_ring_lookup_tables_match_the_ring_stack():
+    """fiberlib 0.4.8 reads counts and crossings from one 8-bit code per pixel."""
+    rng = np.random.default_rng(3)
+    for h, w in [(120, 140), (1, 30), (30, 1), (2, 2), (5, 9)]:
+        for density in (0.1, 0.5, 0.9):
+            sk = rng.random((h, w)) < density
+            ring = _ref_ring_stack(sk)
+            want_nb = ring.sum(axis=0).astype(np.int32)
+            want_cn = ((np.roll(ring, -1, axis=0) == 1) & (ring == 0)).sum(axis=0).astype(np.int32)
+            assert np.array_equal(straight.neighbour_counts(sk), want_nb), (h, w, density)
+            assert np.array_equal(straight.crossing_numbers(sk), want_cn), (h, w, density)

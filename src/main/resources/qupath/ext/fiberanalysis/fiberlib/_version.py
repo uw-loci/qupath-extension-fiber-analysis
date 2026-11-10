@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.7"
+__version__ = "0.4.8"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -563,3 +563,10 @@ __version__ = "0.4.7"
 #   - texture.range_from_histogram and scripts/fit_glcm_range.py: an automatic
 #     GLCM gray range fitted once on sampled fiber pixels (1st to 99th
 #     percentile, mean +/- 3 SD, or minimum to maximum).
+#
+# 0.4.8 (2026-11-09):
+#   - straightness: neighbour counts and crossing numbers come from one 8-bit
+#     ring code per pixel and two 256-entry tables; trace_fibers builds the
+#     code once; _trace_links converts flat indices to (y, x) in one numpy
+#     call. Output is bit-identical (198,672 fibers and 729 window traces on a
+#     7830 px PDAC_1 tile); the tile went 85.8 -> 81.6 s on Linux.
