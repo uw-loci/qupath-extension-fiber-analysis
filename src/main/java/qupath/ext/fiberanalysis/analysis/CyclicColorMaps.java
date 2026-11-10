@@ -52,7 +52,7 @@ public final class CyclicColorMaps {
         try {
             ColorMaps.installColorMaps(labCircle(CYCLIC), hueWheel(CYCLIC_VIVID));
         } catch (Exception | LinkageError ex) {
-            logger.warn("Could not install the cyclic angle colour maps: {}", ex.getMessage());
+            logger.warn("Could not install the cyclic angle color maps: {}", ex.getMessage());
         }
     }
 

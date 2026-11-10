@@ -169,7 +169,34 @@ public final class PooledThreshold {
             Consumer<String> progress)
             throws IOException {
         Samples s = sampleZones(regions, zoneMode, borderUm, spec.segChannel(), workDir, maxSamples, progress);
-        return poolSamples(s.pngs(), s.masks(), s.pixelSizes(), spec, s.images());
+        try {
+            return poolSamples(s.pngs(), s.masks(), s.pixelSizes(), spec, s.images());
+        } finally {
+            deleteSamples(s, workDir);
+        }
+    }
+
+    /**
+     * Deletes the sample PNGs once Python has read them, then the folder if it is empty.
+     *
+     * @param s       the samples
+     * @param workDir the folder they were written to
+     */
+    static void deleteSamples(Samples s, Path workDir) {
+        List<String> files = new ArrayList<>(s.pngs());
+        files.addAll(s.masks());
+        for (String f : files) {
+            try {
+                Files.deleteIfExists(Path.of(f));
+            } catch (IOException e) {
+                logger.debug("Could not delete sample {}: {}", f, e.getMessage());
+            }
+        }
+        try {
+            Files.deleteIfExists(workDir);
+        } catch (IOException e) {
+            // Not empty: the caller keeps something else there.
+        }
     }
 
     /**

@@ -138,17 +138,17 @@ public final class DensityOverlayDialog {
         autoBtn = new Button("Auto (1-99%)");
         autoBtn.setTooltip(new javafx.scene.control.Tooltip(
                 "The 1st to 99th percentile of the channel. An angle channel always gets its full period (0-180),"
-                        + " so colours mean the same angle on every image."));
+                        + " so colors mean the same angle on every image."));
         autoBtn.setOnAction(e -> autoRange());
         hideBelowBox = new CheckBox("Hide values at or below the minimum");
         hideBelowBox.setTooltip(new javafx.scene.control.Tooltip(
-                "Leave the lowest values undrawn instead of painting them in the first colour, so the image"
+                "Leave the lowest values undrawn instead of painting them in the first color, so the image"
                         + " shows through where, for example, the slide background has no collagen."));
         brightnessCombo = new ComboBox<>();
         brightnessCombo.setMaxWidth(Double.MAX_VALUE);
         brightnessCombo.setTooltip(new javafx.scene.control.Tooltip(
-                "Darken the colour where this 0-1 channel is low. With an angle channel and 'Order parameter',"
-                        + " well-aligned fibers show bright colour and randomly oriented ones fade to black;"
+                "Darken the color where this 0-1 channel is low. With an angle channel and 'Order parameter',"
+                        + " well-aligned fibers show bright color and randomly oriented ones fade to black;"
                         + " with the predicted class and 'Max probability', uncertain windows fade."));
         status = new Label();
         status.setWrapText(true);
@@ -465,7 +465,7 @@ public final class DensityOverlayDialog {
                                     c.info().sourceWidth(),
                                     c.info().sourceHeight())
                             + (classChannelSelected()
-                                    ? " Drawn in each class's colour; a window the model abstained on is not drawn."
+                                    ? " Drawn in each class's color; a window the model abstained on is not drawn."
                                     : ""));
                     if (autoRangeAfter) autoRange();
                     if (shown != null || showWhenLoaded) render();
@@ -523,7 +523,7 @@ public final class DensityOverlayDialog {
         shown = DensityOverlay.show(
                 viewer, qupath.getOverlayOptions(), loaded, style, wantBrightness ? brightnessLoaded : null);
         if (style.isClasses()) {
-            logger.info("Density overlay: {} in class colours {}", channelCombo.getValue(), style.classNames());
+            logger.info("Density overlay: {} in class colors {}", channelCombo.getValue(), style.classNames());
         } else {
             logger.info(
                     "Density overlay: {} [{}..{}] {}{}",

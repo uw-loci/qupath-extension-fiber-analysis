@@ -103,10 +103,11 @@ public final class FiberAnalysisBatchDialog {
         VBox root = new VBox(10);
         root.setPadding(new Insets(12));
 
-        Label header = new Label("Apply a saved params.json across multiple project images. The Search area\n"
-                + "and class filter saved in params.json (or overridden below) drive which\n"
-                + "annotations are analyzed per image.");
+        Label header = new Label("Apply a saved params.json across multiple project images. The Search area"
+                + " and class filter saved in params.json (or overridden below) drive which"
+                + " annotations are analyzed per image.");
         header.setWrapText(true);
+        header.setMinHeight(Region.USE_PREF_SIZE);
         header.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         root.getChildren().add(header);
 
@@ -219,6 +220,7 @@ public final class FiberAnalysisBatchDialog {
                 + " that every run and density map can reuse, so results from different runs"
                 + " compare.");
         body.setWrapText(true);
+        body.setMinHeight(Region.USE_PREF_SIZE);
         body.setStyle("-fx-font-size: 11px;");
 
         Button calBtn = new Button("Calibrate threshold...");
@@ -238,6 +240,7 @@ public final class FiberAnalysisBatchDialog {
         paramsStatusLabel = new Label("(none loaded -- click Browse...)");
         paramsStatusLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         Button browse = new Button("Browse...");
+        browse.setMinWidth(Region.USE_PREF_SIZE);
         browse.setOnAction(e -> {
             FileChooser chooser = new FileChooser();
             chooser.setTitle("Select fiber-analysis params.json");
@@ -471,12 +474,12 @@ public final class FiberAnalysisBatchDialog {
                         logger.info("Batch: images have different pixel sizes; chose {}\n{}", choice, check.describe());
                         if (choice == PixelSizePrompt.Choice.CANCEL) {
                             HeadlessFx.runLater(() -> Dialogs.showInfoNotification(
-                                    "Fiber Analysis Batch", "Batch cancelled: the images have different pixel sizes."));
+                                    "Fiber Analysis Batch", "Batch canceled: the images have different pixel sizes."));
                             return;
                         }
                         common = choice == PixelSizePrompt.Choice.COMMON;
                         if (!common) {
-                            notes.add("The images of batch " + batchStamp + " were analysed at their own pixel sizes,"
+                            notes.add("The images of batch " + batchStamp + " were analyzed at their own pixel sizes,"
                                     + " so their results are not comparable across sizes:\n" + check.describe());
                             if (textureProblem != null) {
                                 runParams = params.withTextureEnabled(false);
@@ -661,13 +664,17 @@ public final class FiberAnalysisBatchDialog {
 
     /**
      * Reads a params.json (as produced by {@link FiberAnalysisWorkflow#writeParamsFiles})
-     * back into a {@link FiberAnalysisParams}. Tolerates the extra provenance
-     * keys ({@code run_timestamp}, {@code params_hash}, {@code extension_version},
-     * {@code image_name}) by ignoring them.
+     * back into a {@link FiberAnalysisParams}. The settings are under {@code parameters};
+     * {@code meta} is provenance and is ignored.
      */
     static FiberAnalysisParams loadParamsFromJson(Path jsonFile) throws IOException {
         String body = Files.readString(jsonFile);
-        JsonObject obj = new Gson().fromJson(body, JsonObject.class);
+        JsonObject root = new Gson().fromJson(body, JsonObject.class);
+        if (root == null || !root.has("parameters") || !root.get("parameters").isJsonObject()) {
+            throw new IOException(jsonFile.getFileName() + " has no \"parameters\" block; choose the params.json"
+                    + " a fiber-analysis run wrote.");
+        }
+        JsonObject obj = root.getAsJsonObject("parameters");
         return new FiberAnalysisParams(
                 str(obj, "searchArea", "selected"),
                 str(obj, "classFilter", ""),
@@ -690,7 +697,7 @@ public final class FiberAnalysisBatchDialog {
                 bool(obj, "invertIntensity", false),
                 num(obj, "rollingBallRadiusUm", 0.0),
                 str(obj, "maskSource", "Pixel classifier"),
-                str(obj, "classifierName", ""),
+                str(obj, "classifierName", null),
                 str(obj, "objectClass", ""),
                 str(obj, "maskFile", ""),
                 bool(obj, "windowEnabled", true),

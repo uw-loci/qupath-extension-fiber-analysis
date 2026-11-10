@@ -165,7 +165,7 @@ public final class TrainingViability {
                         Level.BLOCK,
                         String.format(
                                 Locale.ROOT,
-                                "Class '%s' has %d labelled window(s), below the minimum of %d.",
+                                "Class '%s' has %d labeled window(s), below the minimum of %d.",
                                 t.className(),
                                 t.windows(),
                                 MIN_WINDOWS_PER_CLASS),
@@ -201,7 +201,7 @@ public final class TrainingViability {
         if (live < 2) {
             blocks.add(new Finding(
                     Level.BLOCK,
-                    "Fewer than two classes have any labelled windows; there is nothing to separate.",
+                    "Fewer than two classes have any labeled windows; there is nothing to separate.",
                     "Select at least two classes that both have annotations covering whole window cores."));
         } else {
             double ratio = largest / (double) smallest;

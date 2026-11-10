@@ -294,7 +294,7 @@ public final class FiberDensityMapDialog {
         densityModeLabel.setStyle("-fx-font-weight: bold;");
         densityModeGroup = new ToggleGroup();
         windowModeRadio = new RadioButton("Per-window (fast; values are constant across each window)");
-        pixelModeRadio = new RadioButton("Per-pixel (smooth; a window centred on every sample)");
+        pixelModeRadio = new RadioButton("Per-pixel (smooth; a window centered on every sample)");
         windowModeRadio.setToggleGroup(densityModeGroup);
         pixelModeRadio.setToggleGroup(densityModeGroup);
         windowModeRadio.setSelected(true);
@@ -303,7 +303,7 @@ public final class FiberDensityMapDialog {
                         "One value per window of the grid, so the map is tiled at that granularity: 15 um windows show 15 um cells. Scales to any slide size."));
         pixelModeRadio.setTooltip(
                 new Tooltip(
-                        "A window centred on each sample point, sampled every 'Output step' microns. Same window size as per-window mode, so the values are comparable; only the spacing differs. Ridge count is not available here."));
+                        "A window centered on each sample point, sampled every 'Output step' microns. Same window size as per-window mode, so the values are comparable; only the spacing differs. Ridge count is not available here."));
         pixelStepSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(0.0, 1000.0, 0.0, 0.5));
         pixelStepSpinner.setEditable(true);
         pixelStepSpinner.setPrefWidth(110);

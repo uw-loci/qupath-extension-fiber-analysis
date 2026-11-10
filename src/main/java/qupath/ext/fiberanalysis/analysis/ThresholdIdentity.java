@@ -310,7 +310,7 @@ public record ThresholdIdentity(
             sb.append("\nRun them together, or use one project calibration. Details are in the log.");
             return sb.toString();
         }
-        sb.append("\nTo compare them, run them together (a batch can analyse images of different pixel sizes")
+        sb.append("\nTo compare them, run them together (a batch can analyze images of different pixel sizes")
                 .append(" at one common size), or use one project calibration.");
         return sb.toString();
     }

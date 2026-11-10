@@ -184,7 +184,7 @@ public final class WindowFeatureMatrix {
         for (int ty = 0; ty < nTilesY; ty++) {
             for (int tx = 0; tx < nTilesX; tx++) {
                 if (cancelled != null && cancelled.getAsBoolean()) {
-                    throw new InterruptedException("Window feature extraction cancelled");
+                    throw new InterruptedException("Window feature extraction canceled");
                 }
                 done++;
                 int localX = tx * tileStep;

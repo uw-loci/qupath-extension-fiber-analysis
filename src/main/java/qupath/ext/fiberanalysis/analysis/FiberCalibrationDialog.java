@@ -128,7 +128,7 @@ public final class FiberCalibrationDialog {
         Label title = new Label("Image-type guidance -- read this before running");
         title.setFont(Font.font("System", FontWeight.BOLD, 13));
         Label body = new Label("Calibration assumes collagen fibers are BRIGHTER than background. That's true for:\n"
-                + "    [OK] Picrosirius polarised / SHG fluorescence\n"
+                + "    [OK] Picrosirius polarized / SHG fluorescence\n"
                 + "    [OK] PPM sum / birefringence images (this lab's primary modality)\n"
                 + "    [OK] Single-channel collagen-targeted fluorescence (col1a1-GFP, etc.)\n\n"
                 + "Brightfield / chromogenic stains need care:\n"
@@ -158,7 +158,7 @@ public final class FiberCalibrationDialog {
         nameField = new TextField("default");
         nameField.setTooltip(new Tooltip("Calibration name -- appears in the main dialog's Calibration combo."
                 + " Useful when you want separate calibrations for different image cohorts"
-                + " (e.g. 'tumour-stroma', 'biopsy', 'shg-only')."));
+                + " (e.g. 'tumor-stroma', 'biopsy', 'shg-only')."));
         nameField.setPrefColumnCount(20);
 
         sampleSpinner = new Spinner<>(new SpinnerValueFactory.IntegerSpinnerValueFactory(1, 5000, 50, 5));

@@ -31,6 +31,7 @@ import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
+import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -1131,6 +1132,7 @@ public final class FiberAnalysisDialog {
                 maskFileField,
                 "Path to a .tif or .npy file containing a binary fiber mask matching the analyzed image dimensions.");
         Button browseMaskBtn = new Button("Browse...");
+        browseMaskBtn.setMinWidth(Region.USE_PREF_SIZE);
         browseMaskBtn.setAccessibleText("Browse for fiber mask file");
         browseMaskBtn.setOnAction(e -> {
             FileChooser chooser = new FileChooser();
@@ -1410,7 +1412,7 @@ public final class FiberAnalysisDialog {
         applyTooltip(
                 gapAnalysisCheck,
                 "Widths of the gaps between fibers: the diameter of the largest empty circle at each gap"
-                        + " centre inside the analysis zone.");
+                        + " center inside the analysis zone.");
 
         checks.add(branchpointsCheck, 0, 0);
         checks.add(endpointsCheck, 1, 0);
@@ -1489,7 +1491,7 @@ public final class FiberAnalysisDialog {
         quantLevelsSpinner.setEditable(true);
         applyTooltip(
                 quantLevelsSpinner,
-                "Number of gray levels the source channel is quantised to before GLCM."
+                "Number of gray levels the source channel is quantized to before GLCM."
                         + " 16 is the scikit-image default; higher = finer texture, slower.");
         numericGrid.add(new Label("Quantization levels:"), 0, 0);
         numericGrid.add(quantLevelsSpinner, 1, 0);
@@ -1523,6 +1525,8 @@ public final class FiberAnalysisDialog {
         Label glcmRangeNote = new Label(
                 "Fitted once per run. Another run fits its own range, so texture from separate runs does not compare.");
         glcmRangeNote.setWrapText(true);
+        glcmRangeNote.setMinWidth(0);
+        glcmRangeNote.setPrefWidth(340);
         glcmRangeNote.setStyle("-fx-font-size: 11px;");
         BooleanBinding autoRange = glcmRangeMethodCombo.valueProperty().isNotEqualTo(GlcmRange.BY_HAND);
         glcmRangeNote.visibleProperty().bind(autoRange);
@@ -1563,7 +1567,7 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.correlationProperty().get());
         applyTooltip(
                 correlationCheck,
-                "GLCM correlation: linear dependence of neighbouring intensities. High = predictable pattern.");
+                "GLCM correlation: linear dependence of neighboring intensities. High = predictable pattern.");
         energyCheck = new CheckBox("energy");
         energyCheck.setSelected(FiberAnalysisPreferences.energyProperty().get());
         applyTooltip(
@@ -1578,7 +1582,7 @@ public final class FiberAnalysisDialog {
                 "GLCM homogeneity (inverse difference moment): closeness of distribution to its diagonal.");
         entropyCheck = new CheckBox("entropy");
         entropyCheck.setSelected(FiberAnalysisPreferences.entropyProperty().get());
-        applyTooltip(entropyCheck, "GLCM entropy: randomness of intensity distribution. High = disorganised.");
+        applyTooltip(entropyCheck, "GLCM entropy: randomness of intensity distribution. High = disorganized.");
         dissimilarityCheck = new CheckBox("dissimilarity");
         dissimilarityCheck.setSelected(
                 FiberAnalysisPreferences.dissimilarityProperty().get());
@@ -1627,6 +1631,7 @@ public final class FiberAnalysisDialog {
                         + " params.json, and (optionally) per-window CSV. Leave blank to use"
                         + " <project>/fiber-analysis/ when a project is open.");
         Button browseDirBtn = new Button("Browse...");
+        browseDirBtn.setMinWidth(Region.USE_PREF_SIZE);
         browseDirBtn.setAccessibleText("Browse for output directory");
         browseDirBtn.setOnAction(e -> {
             DirectoryChooser chooser = new DirectoryChooser();
@@ -2321,6 +2326,11 @@ public final class FiberAnalysisDialog {
         grid.setHgap(10);
         grid.setVgap(6);
         grid.setPadding(new Insets(5));
+        // Labels in the first column keep their full text; a wide control in the
+        // second column must not squeeze them into "Gray range..." ellipses.
+        ColumnConstraints labels = new ColumnConstraints();
+        labels.setMinWidth(Region.USE_PREF_SIZE);
+        grid.getColumnConstraints().add(labels);
         return grid;
     }
 

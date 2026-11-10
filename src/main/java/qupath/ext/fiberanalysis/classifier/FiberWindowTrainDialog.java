@@ -220,7 +220,7 @@ public final class FiberWindowTrainDialog {
         geometryLabel.setText(String.format(
                 Locale.ROOT,
                 "Window %.1f um at %d%% overlap, so each prediction is attributed to a core of"
-                        + " %.1f um at the window's centre. Segmentation: %s on %s.",
+                        + " %.1f um at the window's center. Segmentation: %s on %s.",
                 windowUm,
                 overlap,
                 windowUm * (1.0 - overlap / 100.0),
@@ -229,7 +229,7 @@ public final class FiberWindowTrainDialog {
         thresholdWarning.setText(
                 seg.hasGlobalThreshold() || PooledThreshold.needsPooling(seg.thresholdMethod())
                         ? ""
-                        : "This threshold is recomputed from each tile's own histogram, so neighbouring"
+                        : "This threshold is recomputed from each tile's own histogram, so neighboring"
                                 + " tiles over the same tissue can segment it differently and the model can"
                                 + " learn the seams. Use Otsu, Triangle, a manual threshold or a project"
                                 + " calibration.");
@@ -422,7 +422,7 @@ public final class FiberWindowTrainDialog {
             List<WindowClassifierWorkflow.TrainingContribution> contributions = new ArrayList<>();
             int group = 0;
             for (ImageRow row : images) {
-                if (progress.cancelled()) throw new InterruptedException("cancelled");
+                if (progress.cancelled()) throw new InterruptedException("canceled");
                 progress.status("Features: " + row.entry.getImageName());
                 ImageData<BufferedImage> data = row.entry.readImageData();
                 var region = RegionRequest.createInstance(

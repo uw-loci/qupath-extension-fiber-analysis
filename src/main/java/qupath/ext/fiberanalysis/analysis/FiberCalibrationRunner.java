@@ -145,7 +145,7 @@ public final class FiberCalibrationRunner {
             List<EntryAnn> pool = new ArrayList<>();
             for (ProjectImageEntry<BufferedImage> entry : project.getImageList()) {
                 if (progress != null && progress.isCancelled()) {
-                    throw new IOException("Calibration cancelled");
+                    throw new IOException("Calibration canceled");
                 }
                 String name = entry.getImageName();
                 if (!needle.isEmpty() && (name == null || !name.toLowerCase().contains(needle))) {
@@ -208,7 +208,7 @@ public final class FiberCalibrationRunner {
                         : cfg.onMixedPixelSizes.apply(check, null);
                 logger.info("Calibration: images have different pixel sizes; chose {}\n{}", choice, check.describe());
                 if (choice == PixelSizePrompt.Choice.CANCEL)
-                    throw new IOException("Calibration cancelled: the images have different pixel sizes.");
+                    throw new IOException("Calibration canceled: the images have different pixel sizes.");
                 common = choice == PixelSizePrompt.Choice.COMMON;
             }
             List<PooledThreshold.ZoneRegion> regions = new ArrayList<>();

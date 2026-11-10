@@ -119,6 +119,8 @@ public final class GlcmRange {
             task = ApposeFiberService.getInstance().runTask("fit_glcm_range", in);
         } catch (Exception e) {
             throw new IOException("fit_glcm_range failed: " + e.getMessage(), e);
+        } finally {
+            PooledThreshold.deleteSamples(s, workDir);
         }
         Object out = task.outputs.get("result_json");
         if (out == null) throw new IOException("fit_glcm_range returned no result");

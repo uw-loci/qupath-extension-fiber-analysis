@@ -540,7 +540,7 @@ public class FiberAnalysisWorkflow {
             ProgressEstimator annEstimator = new ProgressEstimator(total);
             for (int i = 0; i < total; i++) {
                 if (progress.isCancelled()) {
-                    logger.info("Fiber Analysis cancelled by user after {} of {} annotations", i, total);
+                    logger.info("Fiber Analysis canceled by user after {} of {} annotations", i, total);
                     break;
                 }
                 PathObject ann = annotations.get(i);
@@ -1054,7 +1054,7 @@ public class FiberAnalysisWorkflow {
 
         for (int t = 0; t < grid.count(); t++) {
             if (progress.isCancelled()) {
-                logger.info("Annotation {}: cancelled after {} of {} tiles", index, t, grid.count());
+                logger.info("Annotation {}: canceled after {} of {} tiles", index, t, grid.count());
                 break;
             }
             TileGrid.Box box = grid.tiles().get(t);
@@ -2207,6 +2207,7 @@ public class FiberAnalysisWorkflow {
         m.put("segSource", p.segSource());
         m.put("internalChannel", p.internalChannel());
         m.put("thresholdMethod", p.thresholdMethod());
+        m.put("projectCalibrationName", p.projectCalibrationName());
         m.put("manualThreshold", p.manualThreshold());
         m.put("manualResponseThreshold", p.manualResponseThreshold());
         m.put("ridgeFilter", p.ridgeFilter());
@@ -2214,6 +2215,8 @@ public class FiberAnalysisWorkflow {
         m.put("sigmaMaxUm", p.sigmaMaxUm());
         m.put("sigmaStepUm", p.sigmaStepUm());
         m.put("minFiberAreaUm2", p.minFiberAreaUm2());
+        m.put("invertIntensity", p.invertIntensity());
+        m.put("rollingBallRadiusUm", p.rollingBallRadiusUm());
         m.put("maskSource", p.maskSource());
         m.put("classifierName", p.classifierName());
         m.put("objectClass", p.objectClass());

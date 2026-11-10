@@ -47,7 +47,7 @@ class TrainingViabilityTest {
     void aClassWithTooFewWindowsIsNamedWithItsCountAndTheThreshold() {
         var rep = TrainingViability.check(List.of(healthy("Dense"), new ClassTally("Rare", 12, 4, 3)), 5);
         assertThat(rep.blocked()).isTrue();
-        assertThat(rep.at(Level.BLOCK).get(0).message()).contains("'Rare' has 12 labelled window(s)", "minimum of 30");
+        assertThat(rep.at(Level.BLOCK).get(0).message()).contains("'Rare' has 12 labeled window(s)", "minimum of 30");
     }
 
     @Test
@@ -74,7 +74,7 @@ class TrainingViabilityTest {
         assertThat(rep.blocked()).isTrue();
         assertThat(rep.at(Level.BLOCK))
                 .extracting(TrainingViability.Finding::message)
-                .anyMatch(m -> m.contains("Fewer than two classes have any labelled windows"));
+                .anyMatch(m -> m.contains("Fewer than two classes have any labeled windows"));
     }
 
     @Test

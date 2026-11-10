@@ -258,7 +258,7 @@ public final class WindowLabelExtractor {
         }
 
         logger.info(
-                "Window labels: {} of {} cores labelled across {} class(es); rejections {}",
+                "Window labels: {} of {} cores labeled across {} class(es); rejections {}",
                 counts.getOrDefault(Reason.LABELLED, 0),
                 n,
                 request.classNames().size(),

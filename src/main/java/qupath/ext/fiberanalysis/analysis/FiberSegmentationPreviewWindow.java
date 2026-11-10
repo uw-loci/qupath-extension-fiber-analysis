@@ -146,7 +146,7 @@ final class FiberSegmentationPreviewWindow {
         ChoiceBox<Integer> sizeChoice = new ChoiceBox<>();
         sizeChoice.getItems().addAll(128, 256, 512);
         sizeChoice.setValue(256);
-        sizeChoice.setTooltip(new Tooltip("Side of the preview region in analysed pixels (at the run's analysis\n"
+        sizeChoice.setTooltip(new Tooltip("Side of the preview region in analyzed pixels (at the run's analysis\n"
                 + "downsample). Centred on the viewer (or the selected annotation's centroid)."));
 
         Slider opacitySlider = new Slider(0.0, 1.0, 0.65);
@@ -165,7 +165,7 @@ final class FiberSegmentationPreviewWindow {
         runCutCheck.setSelected(true);
         runCutCheck.setTooltip(new Tooltip(
                 "Otsu and Triangle: fit the threshold the way the run does, once over the analysis zones of\n"
-                        + "every annotation the run would analyse (Search area), and cut the preview there.\n"
+                        + "every annotation the run would analyze (Search area), and cut the preview there.\n"
                         + "Unticked, the threshold is fitted on this preview square alone: quicker, but the\n"
                         + "run will cut at a different value."));
 
@@ -587,8 +587,8 @@ final class FiberSegmentationPreviewWindow {
     /** @return the strongest ridge response in view, and a warning when the cut is above it */
     static String peakNote(double cut, double peak, boolean ridge) {
         if (!ridge) return "";
-        String note = String.format(Locale.ROOT, "; strongest response here %.4g", peak);
-        return cut > peak ? note + ", so this cut finds no fibers" : note;
+        String note = String.format(Locale.ROOT, " The strongest response here is %.4g", peak);
+        return (cut > peak ? note + ", so this cut finds no fibers" : note) + ".";
     }
 
     private static <T> T onFx(java.util.concurrent.Callable<T> work) throws Exception {

@@ -30,7 +30,9 @@ class SourceChannelTest {
     void thePreviewSaysWhenTheResponseCutIsOutOfReach() {
         assertThat(FiberSegmentationPreviewWindow.peakNote(0.1, 0.0043, true))
                 .contains("0.0043")
-                .contains("finds no fibers");
+                .contains("finds no fibers")
+                .startsWith(" The strongest")
+                .endsWith(".");
         assertThat(FiberSegmentationPreviewWindow.peakNote(0.002, 0.0043, true)).doesNotContain("finds no fibers");
         assertThat(FiberSegmentationPreviewWindow.peakNote(0.1, 0.0043, false)).isEmpty();
     }
