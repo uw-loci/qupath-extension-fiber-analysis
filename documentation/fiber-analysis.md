@@ -10,8 +10,14 @@ line to expand. The math notes (sections 5-8) are the source of truth
 for what the Python module computes; the README parameter table is
 the source of truth for the dialog.
 
+The **?** button (or F1) in the Run dialog opens this file with your
+system's default program for `.md` files. That is often a plain text
+editor, which shows the `<details>` and `<summary>` tags as text with
+every section expanded; the sections collapse when the file is viewed
+on GitHub or in a Markdown viewer.
+
 Framing note (per the Phase 0 Lead correction): this extension
-analyses **segmented collagen fibers**, not raw birefringence hue.
+analyzes **segmented collagen fibers**, not raw birefringence hue.
 Orientation, where it appears at all, is the geometric tangent of the
 fiber skeleton. There is no hue-to-angle calibration.
 
@@ -21,7 +27,7 @@ fiber skeleton. There is no hue-to-angle calibration.
 <summary><strong>1. Overview</strong></summary>
 
 This extension is a research **testbed** for quantifying collagen
-fiber organisation around a user-drawn annotation. It takes a
+fiber organization around a user-drawn annotation. It takes a
 segmented fiber mask (either produced internally from intensity
 thresholding plus optional ridge filtering, or supplied by the user
 from a pixel classifier / object class / file) over a **dilated
@@ -29,21 +35,24 @@ border zone** around the annotation, and reports three families of
 metrics: **straightness / persistence**, **morphometrics** (the
 cheap, segmentation-only subset of TWOMBLI), and **GLCM / Haralick
 texture**. The headline use case is the wavy-to-straight axis of
-collagen organisation -- the same axis underlying TACS-3 in breast
+collagen organization -- the same axis underlying TACS-3 in breast
 pathology (Conklin et al. 2011) and, more broadly, fiber
-reorganisation in tumour invasion, arterial adventitia, sclera,
-alveolar wall, and cardiac fibrosis. The PS-TACS workflow shipped by
+reorganization in tumor invasion, arterial adventitia, sclera,
+alveolar wall, and cardiac fibrosis. Collagen density promotes mammary
+tumor initiation and progression (Provenzano et al. 2008), and
+oriented collagen fibers direct tumor cell intravasation (Han et al.
+2016). The PS-TACS workflow shipped by
 the production `qupath-extension-ppm` is a related but distinct
 analysis (Qian et al. 2025): PS-TACS scores **perpendicularity** of
 fibers relative to the boundary using a hue-calibrated orientation
 field, whereas this extension scores **shape and texture of the
 segmented fibers themselves**, with no hue calibration.
 
-The four outputs from one analysed region -- here a border zone about
+The four outputs from one analyzed region -- here a border zone about
 120 microns wide -- are the segmented fiber mask, a morphometrics HDM
 map, a GLCM entropy map, and a straightness map:
 
-![Segmented mask, morphometrics HDM, GLCM entropy, and straightness map for one analysed region.](images/output-maps-border-zone.png)
+![Segmented mask, morphometrics HDM, GLCM entropy, and straightness map for one analyzed region.](images/output-maps-border-zone.png)
 
 Read the document in order if you are setting up the workflow for
 the first time. Section 2 explains how an annotation becomes
@@ -95,7 +104,7 @@ below:
 
 ![Fiber Analysis Run dialog with the Search area, Fiber segmentation, and Window analysis sections expanded.](images/run-dialog.png)
 
-The Java side reads the annotation geometry, rasterises the dilated
+The Java side reads the annotation geometry, rasterizes the dilated
 border zone, and dispatches an Appose task with the parameter dict.
 The Python module (`fiberlib/`) is bundled inside the JAR; it loads
 from JAR resources at run time so the analysis code is always in
@@ -126,14 +135,16 @@ To re-run from disk with no GUI:
 
 The Groovy templates use the existing extension entry points (the same
 `runForAnnotations` / `runForEntries` / `FiberCalibrationRunner.run` the
-GUI dialogs call). Output goes to the same on-disk location as the
-original GUI-driven run -- a re-run replaces the previous run's files in
-place.
+GUI dialogs call). A per-annotation re-run writes a new timestamped run
+folder next to the original (under `<project>/fiber-analysis/`, or the
+Output directory recorded in `params.json`); it does not replace the
+original run's files. A re-run fits its own threshold and, with an
+automatic gray range, its own range, from the same settings.
 
 ## Which threshold a result was cut at
 
 Fiber coverage, skeleton length and every other fiber measurement depend on
-the threshold the mask was cut at and on the pixel size the image was analysed
+the threshold the mask was cut at and on the pixel size the image was analyzed
 at, so two results are comparable only when both match. Every result records
 them in one line:
 
@@ -147,7 +158,7 @@ filter). The second says how it was obtained: pooled in which run or batch,
 `calibration '<name>'`, or `set by hand`. The third is a fingerprint of the
 settings that decide what the cut means (source channel, ridge filter and its
 sigmas, invert, rolling ball, minimum fiber area) and the pixel size the image
-was analysed at: its own pixel size times the analysis downsample. Two results
+was analyzed at: its own pixel size times the analysis downsample. Two results
 are comparable when the cut and fingerprint match and the pixel sizes are
 within 2%, however the cut was obtained.
 
@@ -173,7 +184,7 @@ finished. The log has the full text, which also says how each cut was obtained:
 Results in this project were cut at 2 different thresholds or pixel sizes, so they are not all comparable:
   Otsu 0.08337 at 0.1725 um/px, settings d176f3aa (Otsu pooled over 2 annotation(s) ..., run 20261021_121322_9afbe194) [this run]: liver_L002
   Otsu 0.09620 at 0.345 um/px, settings d176f3aa (pooled over 1 annotation(s) on 1 image(s), run 20261020_090000_1a2b3c4d): coarse copy
-To compare them, run them together (a batch can analyse images of different pixel sizes at one common size), or use one project calibration.
+To compare them, run them together (a batch can analyze images of different pixel sizes at one common size), or use one project calibration.
 ```
 
 A batch run makes this comparison once, at its end. To make a whole project
@@ -190,7 +201,7 @@ px at 0.35 um/px. So every run over several images checks their pixel sizes
 first (sizes within 2% count as the same):
 
 - **Batch runs** ask what to do when the images differ:
-  - **Analyse all at X um/px** brings every image to the coarsest one, using a
+  - **Analyze all at X um/px** brings every image to the coarsest one, using a
     larger analysis downsample on the finer images. Their results then compare,
     and each run folder's `run_notes.txt` records the common size and the
     downsample used on that image.
@@ -250,7 +261,7 @@ Region: <where the map was computed; see "Computing only inside annotations">
 ```
 
 Grid pixel (i, j) covers image pixels `x0 + i*cell_px` to `x0 + (i+1)*cell_px`
-across (and the same with `y0` down): the block centred on the window that
+across (and the same with `y0` down): the block centered on the window that
 produced it, so the map sits over the tissue it describes. `render` says how to
 draw between cells (below, **Smooth**). The `Mean angle (deg)` channel row ends
 in `; axial=180`: it is averaged and interpolated as an angle of period 180. Image pixels outside the grid have no
@@ -267,7 +278,7 @@ Three ways to use a map:
   adds a `Density: <channel>` measurement per channel to each selected object
   (or every annotation): the mean of the map inside the object, read every
   quarter cell (the mean angle as an axial mean). An object smaller than that
-  takes the value at its centre. Each object also gets the map's threshold as
+  takes the value at its center. Each object also gets the map's threshold as
   metadata (`fiber_analysis.map_threshold`).
 - **Add it as channels in a new image**: `Add density channels as a new image`,
   or the first output option in the dialog for every image in the run. This
@@ -349,31 +360,31 @@ shows the region in its **Region** row. Maps made before this option have no
 
 `Extensions > Fiber Analysis > Show density map as overlay...` draws one channel
 of a density map (or of a window-classifier probability map) over the open
-image in colour, without changing the image. Pick the map, the channel, one of
-QuPath's colour maps and a value range (**Auto** uses the 1st to 99th
+image in color, without changing the image. Pick the map, the channel, one of
+QuPath's color maps and a value range (**Auto** uses the 1st to 99th
 percentile). The list holds the open image's own maps first, then maps made on
 any other project image of the same size, marked `(from <image>)`: other images
 of the same slide, such as a map computed on the birefringence image shown over
-the brightfield one. No-data areas are transparent. The overlay is coloured from
+the brightfield one. No-data areas are transparent. The overlay is colored from
 the grid at screen resolution each time the view changes, so it is exact at any
 zoom, and the viewer's location bar shows the map value under the cursor.
 **Hide values at or below the minimum** leaves the lowest values undrawn instead
-of painting them in the first colour, so the image shows through where there is
+of painting them in the first color, so the image shows through where there is
 nothing to see, such as the slide background around the tissue. Set the minimum
 to the background level first. The **Threshold** row shows what the map's fibers
 were cut at; maps made before 2026-10-21 say it was not recorded.
 
 **Mean angle (deg)** is an orientation, where 1 and 179 degrees are two degrees
-apart. A linear colour map paints those two at opposite ends of the scale, so
+apart. A linear color map paints those two at opposite ends of the scale, so
 choosing that channel switches to the cyclic map **Angle (cyclic)**, whose last
-colour is its first, and fixes the range to 0-180 so a colour means the same
+color is its first, and fixes the range to 0-180 so a color means the same
 angle on every image (**Auto** keeps 0-180 for this channel). **Angle (cyclic
 vivid)** is the saturated hue wheel: easier to read, but yellow looks brighter
 than blue, so use it to show results rather than judge them. Both maps come from
 TME Quant and keep its names, so with both extensions installed each appears
-once. **Brightness from** darkens the colour where a 0-1 channel is low; for the
+once. **Brightness from** darkens the color where a 0-1 channel is low; for the
 angle it defaults to **Order parameter**, so well-aligned fibers show strong
-colour and randomly oriented ones fade to black instead of getting a confident
+color and randomly oriented ones fade to black instead of getting a confident
 hue. (Order parameter needs fibers; **Intensity coherence** works without a
 threshold.) Where the map is drawn smooth, the angle is interpolated as an
 angle, so 170 and 10 degrees blend through 0, not 90; the same holds for
@@ -383,7 +394,7 @@ pixel classification** (`C`) control it, and showing it replaces a pixel
 classifier overlay. An RGB image keeps its normal look.
 
 A window-classifier map's **Predicted class index** channel is drawn in the
-colour each class already has in QuPath, not on a colour map, so the colour map,
+color each class already has in QuPath, not on a color map, so the color map,
 range and hide controls are switched off for it. The class names come from the
 map's `P(<class>)` channels. A window the model abstained on is not drawn, and
 the location bar names the class under the cursor. For a classifier map,
@@ -394,7 +405,7 @@ model was least sure of.
 
 - **Per-window** gives one value per window of the grid, so the map shows
   cells the size of the window stride.
-- **Per-pixel** centres a window of the same size on each sample point, so
+- **Per-pixel** centers a window of the same size on each sample point, so
   values are comparable with per-window mode; only their spacing differs.
   The **Output step (um)** sets that spacing. At 0 (automatic) it is one
   eighth of the window, made coarser if the map would not fit in half of
@@ -410,7 +421,7 @@ model was least sure of.
   and an angle made of rounding noise, which showed as streaks in angle maps;
   regenerate per-pixel maps made before then.
 - **Smooth** is recorded in the map rather than baked into it: the overlay,
-  the channels entry and sampling interpolate between cell centres when it is
+  the channels entry and sampling interpolate between cell centers when it is
   on and fill each cell when it is off. The file is the same size either way.
 
 ### Collagen presence without a threshold
@@ -445,7 +456,7 @@ No code was taken from it.
 
 With **Otsu** or **Triangle** selected, the density map does not let each tile
 pick its own threshold: a nearly empty tile would cut into background noise
-while its neighbour clipped faint fibers, so coverage would jump at tile edges
+while its neighbor clipped faint fibers, so coverage would jump at tile edges
 and could not be compared between slides. Instead it samples a 4 x 4 grid of
 tiles (up to 1024 px each) spread over every selected image, runs the chosen
 method once on the pooled histogram (65536 bins on the channel's full scale),
@@ -477,7 +488,7 @@ skeleton length) are not local, because a fiber can run any distance, so they
 can still differ slightly at tile seams.
 
 The optional object-density and pixel-positivity channels are computed on the
-same tiles and the same windows as the fiber channels. Each tile rasterises
+same tiles and the same windows as the fiber channels. Each tile rasterizes
 only the annotations and detections that reach it, or reads and thresholds
 only its own pixels, so memory stays at one tile whatever the slide size.
 
@@ -510,15 +521,21 @@ windows = out["window_grid"]         # per-window arrays (or None)
 its docstring), returns `result` / `window_grid` / `fiber_mask` /
 `analysis_mask` / `skeleton`, and only writes sidecar files when
 `output_dir=` is given. A repo-root `pyproject.toml` exposes `fiberlib`
-via `pip install -e .`. Note the analysis runs inside the dilated zone
+via `pip install -e .`. Its defaults are not the Run dialog's: for
+example 50 um windows, Radon off, GLCM entropy and dissimilarity off, no
+coverage gate, a minimum fiber area of 20 px, and box sizes and GLCM
+distances given in pixels (`lac_box_sizes_px`, `fractal_box_sizes_px`,
+`glcm_distances_px`). Pass every setting a comparison depends on. Note the analysis runs inside the dilated zone
 around the boundary mask, so for a whole-image baseline pass a full
 boundary with `zone_mode="inside"` and a large `border_zone_width_um`.
 
 Outputs land in the per-annotation subfolder under the output
-directory and are also surfaced as buttons on the results panel
-card. At most one overlay is shown on the image at a time -- clicking
-a different `[Show ...]` button replaces the current overlay;
-`[Hide overlay]` clears it.
+directory and are also surfaced on the annotation's card in the
+**Fiber Analysis Results** panel: the toggles **Fiber mask** and
+**Straightness**, the lists **Morph:** and **GLCM:**, and **Summary**.
+At most one overlay is shown on the image at a time -- choosing another
+replaces the current one; **Hide overlay** at the top of the panel
+clears it (**Open folder** and **Export PNG...** sit beside it).
 
 </details>
 
@@ -541,8 +558,8 @@ the dialog):
     tissue you want measured, which is the case for a pathologist-marked
     region or an acquired-area mask.
   - `outside` -- the band on the stromal side only. The right choice when
-    the annotation encloses a tumour and the question is about the
-    peritumoural stroma.
+    the annotation encloses a tumor and the question is about the
+    peritumoral stroma.
   - `inside` -- the band just inside the annotation boundary.
   - `both` -- a symmetric band straddling the boundary.
 
@@ -577,7 +594,7 @@ focus but increase per-window noise (fewer fibers per window).
 
 The extension supports two segmentation modes selected by the
 top-of-section radio button. The choice is binary at runtime; the
-disabled mode's controls stay visible but greyed.
+disabled mode's controls stay visible but grayed.
 
 **Mode A: Segment within extension (Internal).** The image is
 projected onto a scalar **source channel** -- Raw intensity by default,
@@ -598,7 +615,10 @@ annotation never enters the fit. The value and how it was obtained are written
 to `threshold.json` in the run folder and logged as "Every annotation cuts
 at". A different run fits its own value; to compare separate runs, calibrate
 once and choose **Project Otsu (calibrated)** (see "Which threshold a result
-was cut at" for how results record their cut). Calibration fits the same way,
+was cut at" for how results record their cut). A calibration is made with
+**Calibrate threshold...** in `Extensions > Fiber Analysis > Run on project
+images...`; the README section "Project batch runs and calibration" lists both
+dialogs' controls. Calibration fits the same way,
 with the run's zone mode, zone width, analysis downsample and ridge-filter
 sizes, and skips images with no pixel size and channels entries this
 extension made.
@@ -617,13 +637,13 @@ The clean mask is the fiber segmentation.
 ### Previewing the segmentation
 
 **Preview segmentation...** (under the internal segmentation settings)
-segments a 128, 256 or 512 px square around the viewer centre, or around the
+segments a 128, 256 or 512 px square around the viewer center, or around the
 selected annotation, and shows the mask in magenta over it. It reads the way
 the run does: at the **Analysis downsample**, with the run's pixel size, and it
 re-runs when a setting in the Run dialog changes (pan or zoom, then click
 **Refresh**). A cyan locked rectangle, `Fiber-Preview-Region`, marks the square
 on the image while the window is open; it is never selected and no run
-analyses it.
+analyzes it.
 
 The window states the cut it used and whether the run will cut at the same
 value:
@@ -631,7 +651,7 @@ value:
 - **Manual** and **Project Otsu**: one value, the same in the preview and the
   run.
 - **Otsu** and **Triangle**: the run fits one value over the analysis zones of
-  all the annotations it would analyse (the **Search area**). With **Cut at
+  all the annotations it would analyze (the **Search area**). With **Cut at
   the run's threshold** ticked (the default) the preview fits that same value
   first, which takes a few seconds and is reused until a setting that moves it
   changes, and cuts the square there. Unticked, it fits Otsu or Triangle on
@@ -642,54 +662,88 @@ value:
 ### Large annotations are tiled automatically
 
 A region larger than 64 megapixels at the read scale is split into
-tiles and analysed a tile at a time, so tissue size is not a limit.
+tiles and analyzed a tile at a time, so tissue size is not a limit.
 Two limits made this necessary: Java cannot allocate a raster above
-`Integer.MAX_VALUE` samples, and PIL warns above roughly 89 MP. A
-15.5 x 12.5 mm SHG sample at 0.1732 um/px is 7.16 gigapixels, which is
-3.3x past the Java cap on its own.
+`Integer.MAX_VALUE` (2,147,483,647) samples, and PIL warns above roughly
+89 MP. A 15.5 x 12.5 mm SHG sample at 0.1732 um/px is 89,492 x 72,171 px
+-- 6.5 gigapixels, three times the Java cap on its own.
 
-Tiles are placed on the window lattice and overlap by one window, so
-every window position an untiled run would produce is produced exactly
-once, at identical coordinates. The merged `windows.json` is therefore
-the one an untiled run would have written.
+Once the run has finished, the results panel does not say it was tiled
+(the progress line shows `Tile N of M` while it runs); the annotation-level
+`results.json` does (`"result_kind": "tiled_aggregate"`, with a `tiling`
+block), and so does the merged `windows.json` (`"meta": {"tiled": true,
+...}`).
 
-Two consequences worth knowing:
+**What is the same as an untiled run.** Tiles are placed on the window
+lattice and overlap by one window, so the merged `windows.json` has
+exactly the window positions an untiled run would have, at the same
+coordinates, each once. Each window's values come from the tile that
+owns the window's center. With Otsu or Triangle every tile cuts at the
+run's one threshold (above), so the segmentation threshold is the same.
 
-- **Per-fibre metrics are approximated.** A fibre crossing a tile seam
-  is truncated in both tiles, so tortuosity and fibre counts are
-  aggregated across tiles rather than measured end to end. Per-window
-  metrics (coverage, orientation, order parameter, GLCM) are exact.
-- **One threshold for all tiles.** With Otsu or Triangle every tile cuts
-  at the run's one threshold (above).
-- **Totals are exact; ratios come from them.** Pixel counts and lengths
-  are summed over the rectangle each tile alone owns, and coverage and HDM
-  are recomputed from those sums. Gap widths combine by gap count, and a
-  gap larger than about a window that crosses a tile edge is not seen.
+**What can differ, per window.** A tile is read with no margin beyond
+the one-window overlap, so each tile segments, filters and skeletonizes
+only its own pixels. Away from the seams the per-window values match an
+untiled run. A window whose pixels sit next to a seam can differ
+slightly: a ridge filter, the rolling ball and the mask cleanup see the
+tile edge there, a small fiber fragment cut by the seam can fall under
+**Min fiber area**, and the skeleton (and with it the orientation,
+tortuosity, ridge count and branch points of that window) ends at the
+seam. A fiber crossing a seam is traced in two pieces.
+
+**What differs at the annotation level.** The tiles' summaries are
+combined as follows (`results.json` repeats this under `tiling`):
+
+- **Summed**, over the rectangle each tile alone owns, so the overlap is
+  counted once: the pixel counts and areas (`fiber_pixels`,
+  `zone_pixels`, `fiber_in_zone_pixels`, `region_pixels`,
+  `zone_area_um2`, `fiber_in_zone_area_um2`), `total_length_px` /
+  `total_length_um` and `gap_count`. Coverage and HDM are recomputed
+  from those sums.
+- **Gap widths** combine by gap count (mean) and as the largest
+  (maximum); a gap larger than about a window that crosses a tile edge
+  is not seen.
+- **Omitted** (listed under `tiling.omitted_scalars`): fractal
+  dimension, branch points and endpoints (cutting a fiber at a seam
+  makes endpoints the annotation does not have), the straightness
+  10th percentile, median and SD, the median traced fiber length, and
+  every key ending in `_deg`.
+- **No Radon scalar.** The Radon profile of an annotation is not the
+  average of its tiles' profiles, and a tile's Radon transform was half
+  the run time of a PDAC_1 tile (291 of 583 s, measured on one tile),
+  so a tiled run skips it; `results.json` says so under `tiling.radon`.
+- **Everything else is a mean of the tiles' values weighted by the
+  windows each contributed** -- including counts that are not additive
+  this way, such as `straightness.n_segments`, and means such as
+  `mean_tortuosity`, mean curvature, `lacunarity_mean` and the texture
+  means. These are approximations, not what an untiled run would
+  report.
+
+So annotation-level numbers from a tiled and an untiled run do not
+compare directly; the per-window values in `windows.json` are the ones
+to compare across annotation sizes.
+
+Also:
+
 - **No annotation-level overlays for a tiled run.** At this size a
   single full-resolution PNG cannot be allocated either. Per-tile
   overlays are kept under `tiles/`.
 - **Tiles with no part of the analysis zone are skipped.** A tile in an
   empty corner of the bounding box holds no window that counts, so it is
-  neither read nor analysed. On the MH_FNA2 PDAC_1 tissue outline, 54 of
+  neither read nor analyzed. On the MH_FNA2 PDAC_1 tissue outline, 54 of
   130 tiles were empty and cost about a minute each. The windows are the
   same either way. `results.json` records the number under
   `tiling.tiles_skipped_outside_zone`. The region totals (`region_pixels`
-  and the region coverage) count only the tiles that were analysed.
-- **No Radon scalar for a tiled run.** The Radon profile of an annotation
-  is not the average of its tiles' profiles. A tile's Radon transform was
-  also half the run time of a PDAC_1 tile (291 of 583 s, measured on one
-  tile), so a tiled run skips it.
-  `results.json` says so under `tiling.radon`. Radon is a per-annotation
-  number and never a window measurement, so the windows do not change.
-- **The input image of each region is deleted once it has been analysed.**
+  and the region coverage) count only the tiles that were analyzed.
+- **The input image of each region is deleted once it has been analyzed.**
   `region.png`, the channel read from the image, is re-readable from the
   image at any time and was most of a run folder (112 MB for one tile of an
   MH_FNA2 pilot run). A region or tile that fails keeps it, for checking.
 
 `Analysis downsample` remains the lever for trading detail against
-time. Note it runs out quickly for SHG: at 0.1732 um/px a 1 um fibre
+time. Note it runs out quickly for SHG: at 0.1732 um/px a 1 um fiber
 spans about 6 px, so a downsample of 2 already leaves under 3 px
-across the thinnest fibres.
+across the thinnest fibers.
 
 Two limits worth knowing before choosing Manual:
 
@@ -721,8 +775,9 @@ Practical guidance for mode A:
 - **Brightfield Picrosirius Red.** Value channel + Otsu + ridge
   filter `None` is the usual starting point. The collagen signal is
   high-Value, so Value-Otsu separates it well. Add a Frangi sweep
-  (sigma 1-3 px) if fibers are dim and partially merged.
-- **Polarised-light / PPM birefringence.** Saturation channel +
+  (set the sigma range, in um, to span the fibers' half-widths) if
+  fibers are dim and partially merged.
+- **Polarized-light / PPM birefringence.** Saturation channel +
   Otsu often works because birefringent collagen produces high
   saturation. Threshold rarely needs ridge filtering here.
 - **Picrosirius Red on H&E counter-stain (PSR+H&E).** Hue-channel
@@ -733,13 +788,13 @@ Practical guidance for mode A:
 **Mode B: Use existing fiber mask.** Three sub-sources:
 
 - **Pixel classifier** -- pick a classifier trained in the current
-  project. The classifier output is rasterised to a binary fiber
+  project. The classifier output is rasterized to a binary fiber
   mask on the dilated-zone region.
-- **Object class** -- pick a PathClass; the Java side rasterises all
+- **Object class** -- pick a PathClass; the Java side rasterizes all
   objects of that class into a binary mask before dispatching the
   Appose task.
 - **File on disk** -- a `.tif` or `.npy` file with a binary mask
-  matching the analysed image dimensions.
+  matching the analyzed image dimensions.
 
 Practical guidance for mode B: if you have already trained a pixel
 classifier on this image type, **prefer Mode B** -- the classifier
@@ -754,7 +809,7 @@ the breaks are shorter and straighter individually, but there are
 more of them). Check the `fiber_mask_overlay.png` against the raw
 image before interpreting straightness or morphometrics. Texture is
 slightly less segmentation-sensitive because GLCM operates on the
-quantised scalar image rather than the binary mask -- but
+quantized scalar image rather than the binary mask -- but
 segmentation still gates which windows have enough fibers to score.
 
 </details>
@@ -805,10 +860,16 @@ equivalent to vector coherence after angle doubling, and the same
 OS reported by PPM's Phase-2 windowed analysis -- so the two
 extensions can be compared directly.
 
-A window is considered **non-empty** if its fiber-pixel count
-exceeds a small floor (the same `min_pixels` floor PPM uses);
-metrics for empty windows are written as `NaN` in `windows.json` and
-shown as transparent in the heatmaps.
+Two gates decide which windows carry numbers:
+
+- **Min coverage per window (%)** (default 5). A window whose fiber
+  coverage is below it is dropped: in `windows.json` it is a stub with
+  `"included": false` and no metrics, it is transparent in every
+  heatmap, and it gets no detection object.
+- **Orientation floor.** `mean_angle_deg` and `order_parameter` need
+  angled fiber pixels in at least 10% of the window (`min_pixels`, 10%
+  of the window area); below that they are `null` in `windows.json`
+  (NaN in `window_metrics.npz`) and transparent in the heatmaps.
 
 </details>
 
@@ -852,22 +913,23 @@ waviness by a third. `median_fiber_len_px` is reported alongside the
 straightness statistics precisely so you can see which of the two you
 are looking at.
 
-Junctions are found with the Rutovitz crossing number, not a neighbour
-count. A rasterised diagonal runs as a staircase, and a staircase corner
-has three neighbours while being topologically ordinary -- 65% to 97% of
-the "branch points" a neighbour count reports on these phantoms are
+Junctions are found with the Rutovitz crossing number, not a neighbor
+count. A rasterized diagonal runs as a staircase, and a staircase corner
+has three neighbors while being topologically ordinary -- 65% to 97% of
+the "branch points" a neighbor count reports on these phantoms are
 corners. `morphometrics.branch_points` was inflated by 2x to 30x before
-this was fixed. Endpoints keep the neighbour-count test, which is right
+this was fixed. Endpoints keep the neighbor-count test, which is right
 for them and which the crossing number is not.
 
-The **per-window** branch count was fixed one release later, in v0.3.5.
+The **per-window** branch count was fixed one release later, in fiberlib 0.3.5 (the
+Python module's version, recorded in `results.json` under `versions`).
 Until then the per-annotation scalar used the crossing number while the
-per-window array still counted neighbours, so the same skeleton gave two
+per-window array still counted neighbors, so the same skeleton gave two
 different answers: 2,493 branches per-annotation against 7,296
 per-window on the wav-25 phantom. Both now use the same rule, and a test
 asserts the per-window counts sum to the per-annotation total over a
 tiled region. **If you have `Branch points` measurements from a run made
-before v0.3.5, they are inflated and should be recomputed.**
+before fiberlib 0.3.5, they are inflated and should be recomputed.**
 
 Summary statistics beside the mean: `mean_straightness_len`
 (length-weighted, so a 3-px stub does not count as much as a 300-px
@@ -879,16 +941,17 @@ at Spearman |rho| = 1.000.
 
 **Math note -- per-ROI Radon.** scikit-image
 `radon(biref_intensity * fiber_mask, theta=arange(0, 180), circle=True)`
-over the largest disk inscribed in the region. Chord-normalise (divide
+over the largest disk inscribed in the region. Chord-normalize (divide
 each row by the chord length `2*sqrt(R^2 - rho^2)` through the
 aperture) to suppress the spurious 45 deg peak, then keep
 `|rho| <= 0.8R`: that divisor goes to zero at the rim, so the
-outermost rows amplify noise without bound. Scalars (Schaub & Gilbert
-2011; see also Despotovic & Cosic 2022 for additional method support):
+outermost rows amplify noise without bound. Measuring fiber alignment
+with the Radon transform follows Schaub et al. (2011); the scalars below
+are this extension's own definitions:
 
 ```
 E(theta) = var_rho R(., theta)        the angular profile
-p(theta) = E(theta) / sum_theta E     normalised to a distribution
+p(theta) = E(theta) / sum_theta E     normalized to a distribution
 PMR      = max_theta E / mean_theta E
 AI       = sum of the largest 10% of p   (0.1 = isotropic, 1 = aligned)
 FWHM(theta*) of E   (narrower = more strongly aligned)
@@ -900,7 +963,7 @@ theta*   = (90 - argmax_theta E) mod 180, in image-angle convention
 **The profile must be a spread, not a total.** The Radon transform
 conserves mass: every column of the sinogram integrates to the same
 image total, so `sum_rho R` is constant in theta (measured CV 0.04%
-raw, 0.6% after chord normalisation) and carries no orientation
+raw, 0.6% after chord normalization) and carries no orientation
 information at all. Orientation lives in how *concentrated* each
 projection is. `sum_rho R^2` -- which earlier revisions of this note
 specified -- does vary with theta, but only as the variance plus that
@@ -910,9 +973,7 @@ reason AI is the top-decile mass rather than `(max E - min E) /
 (max E + min E)`: the min/max form rests on two order statistics and
 inverted on the sweep (Spearman 0.905 against 0.976).
 
-PMR is the headline straightness scalar per dilated-border segment;
-entropy detects misalignment to ~+/-2 deg vs FFT's +/-4 deg (Schaub
-2011).
+PMR is the headline Radon scalar for an annotation.
 
 **Validation.** Measured against the synthetic phantoms in
 `tools/collagen-phantom-creation`, whose generator inputs are the
@@ -928,9 +989,8 @@ because it varies smoothly across the zone and tracks waviness on
 the scale of individual fibers. The Radon scalar is per-ROI and per-
 **bulk-alignment**; it is the right number for a **single rigidity
 score** on the annotation (one number, comparable between
-annotations and samples). Han et al. 2025 (npj Breast Cancer) report
-useful TACS scoring at 150-180 um ROIs, which is the natural Radon
-unit; per-window tortuosity scales below that.
+annotations and samples). Because it is one number over the whole
+inscribed disk, compare it only between annotations of similar size.
 
 </details>
 
@@ -962,22 +1022,26 @@ straightness pipeline already computes.
   channel.
 - **Total fiber length:** skeleton pixel count * pixel size; skeleton
   reused from the straightness pipeline.
-- **Branch / end-point counts:** 8-neighbour count per skeleton
-  pixel -- `n >= 3` = branch, `n == 1` = end-point.
-- **Curvature:** mean tangent rotation per skeleton segment of length
-  `L_segment` (default 5 px).
+- **Branch / end-point counts:** a branch point is a skeleton pixel
+  whose Rutovitz crossing number is >= 3 (see section 6); an end point
+  is a skeleton pixel with exactly one 8-neighbor.
+- **Curvature:** for each traced fiber, the angle between the tangent
+  averaged over its first and its last ~2 um (rounded to whole pixels,
+  at least 2 px; not a dialog setting), divided by the fiber's arc
+  length; then the mean over fibers. Reported in rad/um.
 - **Fractal dimension** (box-counting): for `b = 2, 4, 8, 16, ...`,
   count `N(b)` boxes intersecting the skeleton; fit
   `log N(b) = -D_fractal * log b + c`. Expect parameter sensitivity
-  (see Caveats in the README); the default box sizes
-  `0.25,0.5,1,2,4,8,16` um give a stable D for collagen networks but are
-  worth varying if you suspect dimension drift.
-- **Lacunarity** (gliding-box): mean / variance of box mass `M(r)`
-  over positions; `L(r) = var(M) / mean(M)^2 + 1`. Reported per `r`,
-  aggregated by area-under-curve.
+  (see Caveats in the README). The default box sizes are
+  `0.25,0.5,1,2,4,8,16` um, rounded to whole pixels; vary them if you
+  suspect dimension drift.
+- **Lacunarity** (gliding box): `M(r)` is the number of fiber pixels in
+  an `r x r` box at each position; `L(r) = var(M) / mean(M)^2 + 1`.
+  Reported per `r` (`lacunarity_per_box`) and summarized as the mean
+  over the box sizes (`lacunarity_mean`).
 - **Gap analysis:** distance from each fiber-free pixel to the nearest
-  fiber; a gap centre is a local maximum of that distance, and its **width**
-  is twice it, the diameter of the largest empty circle there. Only centres
+  fiber; a gap center is a local maximum of that distance, and its **width**
+  is twice it, the diameter of the largest empty circle there. Only centers
   inside the analysis zone count, and distances are measured to every fiber,
   including those just outside the zone. A gap whose empty circle reaches
   the edge of the read region (or of a tile) is left out, because the fiber
@@ -988,10 +1052,10 @@ straightness pipeline already computes.
   empty margin around an annotation counted as gaps.)
 
 **Out-of-v1 scope.** Steger ridge detection (Steger 1998, *IEEE TPAMI*
-20(2):113-125) supplies a width-annotated centreline and is the
+20(2):113-125) supplies a width-annotated centerline and is the
 basis for TWOMBLI's fiber-WIDTH distribution. We do not include it
 in v1; the ridge filters in Section 4 (Frangi / Sato / Meijering)
-supply a binary mask, not a width-annotated centreline. Fiber-width
+supply a binary mask, not a width-annotated centerline. Fiber-width
 distributions are therefore not reported. This may graduate to v2 if
 fiber width becomes a hard requirement; see the 2026-05-22
 feasibility brief.
@@ -1006,9 +1070,14 @@ Per-window GLCM / Haralick features via
 Cites Aerts et al. 2014 (radiomics feature set) and Depeursinge et
 al. 2014 (3-D texture review -- we use the 2-D math, not 3-D).
 
-**Math note -- GLCM and Haralick features.** Compute on a single
-derived scalar channel (biref intensity, or grayscale of the RGB),
-not raw RGB.
+**Math note -- GLCM and Haralick features.** Computed on one scalar
+image: the region's Value, the brightest of R, G and B at each pixel.
+For a single-channel image, or a named channel chosen as **Source
+channel**, that is the channel itself. On an RGB image it is Value
+whichever **Source channel** is chosen (Hue and Saturation choose the
+fiber mask, not the texture image). **Invert intensity** and the
+rolling ball are not applied to it. Only pixels in the fiber mask
+(inside the zone) take part.
 
 1. **Quantize** fiber pixels to `L = 16` (or up to 256) gray levels,
    uniform over the **gray range**, which is the channel's full scale unless
@@ -1056,9 +1125,24 @@ not raw RGB.
    counted, so the features describe the fibers, not how much of the window
    they cover. (Before fiberlib 0.4.0 background was gray level 0 and its
    pairs dominated, so contrast and entropy mostly tracked coverage.)
-   `d in {1, 2, 3}` (`d <= window_side / 8`), `theta in {0, 45, 90, 135
-   deg}`, averaged over the offsets that have at least one pair; a window
-   with none is NaN.
+   `d` is each **GLCM distance(s) (um)** value divided by the effective
+   pixel size (image pixel size x analysis downsample), rounded to the
+   nearest whole pixel (at least 1), with duplicates merged; `theta in
+   {0, 45, 90, 135 deg}`. Features are averaged over the offsets that
+   have at least one pair; a window with none is NaN. For the default
+   `0.1, 0.2, 0.3` um:
+
+   | Effective pixel size | Distances used |
+   |---|---|
+   | 0.1 um/px | 1, 2, 3 px |
+   | 0.1732 um/px | 1, 2 px |
+   | 0.25 um/px and coarser (0.345, 0.5, ...) | 1 px only |
+
+   So at half-micron pixels the three requested scales are one offset.
+   The log warns when distances merge (`... collapse to N distinct pixel
+   offset(s)`), and `results.json` records the pixel distances used
+   under `texture.distances_px`. Nothing limits a distance against the
+   window size.
 
    With **Also one value per distance** ticked (off by default) and more
    than one distance, each window detection also gets the value at each
@@ -1068,7 +1152,7 @@ not raw RGB.
    distance is the pixel offset times the pixel size, so 10 um at
    0.1732 um/px is 58 px, or 10.05 um. In `windows.json` these values are
    under `texture_by_distance`, keyed by the distance in pixels.
-3. **Features** (scikit-image `graycoprops`) on normalised
+3. **Features** (scikit-image `graycoprops`) on normalized
    `P(i, j)`:
 
 ```
@@ -1084,18 +1168,23 @@ entropy       = - sum_{i,j} P(i,j) log P(i,j)
 edges (sharp fiber boundaries, sparse clumps). Homogeneity / energy
 rise with uniform fields (dense mats). Correlation rises with
 oriented structure (aligned bundles). Entropy rises with disorder --
-intratumour-heterogeneity proxy per Aerts 2014. Li et al. 2021
-(*BMC Medicine*) report prognostic value for texture-augmented
-collagen signatures along the same lines. Reported per window;
-per-property heatmaps available -- one per run, via the **GLCM
-heatmap property** dropdown in the output section.
+intratumor-heterogeneity proxy per Aerts 2014. Related evidence that
+collagen organization carries prognostic information comes from an
+orientation measure rather than texture: Li et al. 2021 found
+collagen fiber orientation disorder in tumor-associated stroma,
+measured on H&E images, prognostic of disease-free survival in early
+stage ER+ breast cancer. Reported per window; one heatmap PNG is
+written per enabled property. (The **Property** choice next to **Write
+GLCM heatmap PNG** is recorded in `params.json` but currently does not
+limit the PNGs to that one.)
 
-**Choosing parameters.** Quantisation `L = 16` is appropriate for
+**Choosing parameters.** Quantization `L = 16` is appropriate for
 small windows (15-30 um); `L = 32` is appropriate for larger windows
 (50+ um) where each window has enough samples to populate the
-larger GLCM stably. The default distance set `0.1, 0.2, 0.3` um captures texture at
-multiple scales without exceeding the recommended `d <= window_side
-/ 8` rule of thumb. The six properties are independent calculations
+larger GLCM stably. The default distances `0.1, 0.2, 0.3` um give
+three scales only at pixel sizes of about 0.1 um/px (table above);
+choose distances that are distinct whole pixels at your pixel size.
+The six properties are independent calculations
 -- turn off ones you do not need to reduce `windows.json` size; the
 runtime cost is dominated by GLCM construction, not property
 extraction.
@@ -1110,56 +1199,73 @@ feature math transfers.
 <details>
 <summary><strong>9. Outputs</strong></summary>
 
-Each annotation gets a per-annotation subfolder under the output
-directory. Filenames are ASCII; conventions parallel PPM's
-per-annotation outputs.
+Each run writes a folder `<base>/YYYYMMDD_HHMMSS_<hash>/` under the
+output directory (README, Outputs): the run's `params.json`,
+`params.txt`, `rerun.groovy`, `threshold.json`, `run_notes.txt` when
+there is something to note, and one subfolder per annotation,
+`annotation_NNN_<name>/`. Filenames are ASCII.
 
-**Files.**
+**Per-annotation files.**
 
-- `windows.json` -- per-window records (centre, size, fiber-pixel
-  count, one column per enabled metric). Schema:
-
-```
-{
-  "x": int,                     # top-left x in image pixels
-  "y": int,                     # top-left y in image pixels
-  "w": int,                     # window width in pixels
-  "h": int,                     # window height in pixels
-  "n_fiber_px": int,            # fiber-pixel count inside the window
-  "mean_angle_deg": float,      # axial mean fiber orientation, 0-180 (0 = horizontal)
-  "order_parameter": float,     # axial OS in [0, 1]; 1 = perfectly aligned
-  "tortuosity_median": float,   # per-window median chord/arc (1.0 = straight)
-  "n_fibers": int,              # path count contributing to tortuosity
-  "glcm_<prop>": float,         # one field per enabled GLCM property
-  "hdm": float,                 # fiber in zone / zone pixels in this window
-  ...
-}
-```
-
-- `fiber_mask_overlay.png` -- segmented fiber mask as a translucent
-  RGBA overlay (Greys colormap; transparent outside the dilated
-  zone).
+- `windows.json` -- the window grid, a wrapper object around a list of
+  one record per grid cell. The full schema and a pandas loader are in
+  the README, Outputs. In short: top-level `meta`, `window_px`,
+  `stride_px`, `window_um`, `grid_shape` (untiled runs) and `windows`;
+  each record has `x`, `y`, `w`, `h` (read-scale pixels from the region
+  origin), `included`, `n_fiber_px` and `fiber_coverage_percent`, and,
+  when `included` is true, `n_fibers`, `hdm`, `mean_angle_deg`,
+  `order_parameter`, `tortuosity_median`, a nested `texture` object
+  (one key per enabled property), `texture_by_distance` (with **Also
+  one value per distance**) and the per-window morphometrics as flat
+  keys (`total_length_px`, `total_length_um`, `branch_points`,
+  `endpoints`, `mean_curvature_per_px`, `mean_curvature_per_um`,
+  `fractal_dimension`, `lacunarity_box_<b>`, `lacunarity_mean`,
+  `gap_mean_px`, `gap_max_px`, `gap_mean_um`, `gap_max_um`). Values
+  that could not be computed are `null`.
+- `fiber_mask_overlay.png` -- the fiber mask inside the zone, magenta
+  at alpha 200, transparent elsewhere.
 - `straightness_overlay.png` -- viridis heatmap of per-window
-  tortuosity / Radon scalar (alpha-masked outside the dilated zone).
-- `texture_<prop>_overlay.png` -- magma heatmap of the selected
-  GLCM property (one per run).
-- `morphometrics_overlay.png` -- per-window morphometric heatmap.
+  tortuosity (chord/arc).
+- `texture_<prop>_overlay.png` -- magma heatmap, one per enabled GLCM
+  property.
+- `morphometrics_overlay.png` (per-window HDM) and one
+  `morph_<metric>_overlay.png` per per-window morphometric, written
+  with the fiber-mask overlay.
+- `morphometrics_summary.txt` -- annotation-level morphometrics.
+- `results.json` -- the annotation-level result dictionary: provenance
+  (`versions`, `run`, `parameters`), `region` (`width`, `height`,
+  `offset_x`, `offset_y`), coverage, and the `straightness`,
+  `morphometrics` and `texture` blocks. A tiled run's is a summary
+  instead (`result_kind`, `tiling`, `summary`; section 4).
+- `window_metrics.npz` -- optional (**Write per-window arrays (.npz)**,
+  off by default). One 2-D array per metric, shape `grid_shape`, for
+  non-JSON consumers:
+  - from the window grid: `mean_angle_deg`, `order_parameter`,
+    `n_pixels` (fiber pixels), `centers_px`, `hdm`, and, with
+    straightness on, `tortuosity` and `n_fibers`;
+  - `texture_<prop>` for each enabled GLCM property;
+  - `morph_<metric>` for each per-window morphometric
+    (`morph_total_length_px`, `morph_branch_points`,
+    `morph_lacunarity_box_<b>`, `morph_gap_max_um`, ...);
+  - `_invalid_below_coverage`, a boolean grid, True where the window
+    fell below **Min coverage per window** (its float arrays are NaN
+    there).
 
-**Optional sidecars.**
+  It holds no scalars (`window_px`, `stride_px` are in `windows.json`)
+  and no per-distance texture.
+- `boundary_mask.png`, `zone_mask.png` -- the rasterized annotation and
+  zone. A tiled run keeps each tile's files under `tiles/tile_NNNNN/`.
 
-- `window_metrics.npz` -- raw per-window numpy arrays
-  (`mean_angle_deg`, `order_parameter`, `n_pixels`, `centers_px`,
-  `tortuosity_median`, `n_fibers`, `glcm_<prop>` per enabled
-  property, `hdm`, plus scalar metadata `window_px`, `stride_px`,
-  `min_pixels`). For non-JSON consumers (e.g. matplotlib analysis
-  scripts).
-- `results.json` -- the full result dictionary (per-annotation
-  scalars, parameter echo, and a copy of the windows table for
-  self-contained reproducibility).
-- Per-window **PathObjects** in the QuPath hierarchy -- one
-  rectangular `PathDetectionObject` per non-empty window, carrying
-  the same measurements as the `windows.json` record. **Off by
-  default** because at 15 um windows on a 100 um band, a few
+**In the QuPath hierarchy.**
+
+- With **Create collagen detection objects** (on by default), one
+  `CollagenAnalysis` detection per connected fiber blob, under the
+  source annotation.
+- With **Create per-window detection objects** (off by default), one
+  rectangular `FiberAnalysis-Window` detection per included window,
+  carrying the window's measurements (`Fiber coverage (%)`, `Mean angle
+  (deg)`, `Order parameter`, `Tortuosity`, `Ridge count`, `HDM`, the
+  morphometrics and texture). At 15 um windows on a 100 um band, a few
   thousand objects are easy to produce.
 
 </details>
@@ -1171,16 +1277,16 @@ per-annotation outputs.
 |---|---|---|
 | "No fibers found" or empty mask overlay | Threshold method does not match staining; ridge filter sigma range off | Open `fiber_mask_overlay.png` -- if blank, switch source channel or try a different threshold method (Otsu -> Triangle, or Manual at ~30% of the dynamic range). On Picrosirius+H&E, switch to a pixel classifier (Mode B). |
 | Blocky heatmap with visible window edges | Window overlap too low; window size too large for the structure | Increase overlap to 50%; reduce window size (15 um -> 7-10 um); but watch for NaN windows. |
-| Per-window metric NaN in `windows.json` | Window had fewer fiber pixels than `min_pixels` floor | Either accept the gaps (they appear transparent in the heatmap) or lower the window size so each window has enough fibers. |
-| Appose env will not build / build hangs | Stale `pixi.lock`; corrupted env; pixi cache permissions | `Extensions > Fiber Analysis > Setup environment...` to rebuild; or delete `~/.local/share/appose/qupath-fiber-analysis/pixi.lock` and `.pixi/` and rerun. |
-| Appose env build fails on Windows | Pixi cache directory not writable; firewall blocking conda-forge | Run `Extensions > Fiber Analysis > Setup environment...` to rebuild; check that the Pixi cache directory (`%LOCALAPPDATA%\rattler\cache`) is writable and that conda-forge is reachable. |
+| Window has no metrics (`"included": false`), or a metric is `null`, in `windows.json` | Below **Min coverage per window (%)** (default 5), or, for mean angle and order parameter, fewer than 10% of the window's pixels are angled fiber | Accept the gaps (transparent in the heatmaps), lower **Min coverage per window**, or use larger windows so each holds enough fiber. |
+| Appose env will not build / build hangs | Stale `pixi.lock`; corrupted env; pixi cache permissions | `Extensions > Fiber Analysis > Setup environment...`, then **Rebuild environment**; or delete `~/.local/share/appose/qupath-fiber-analysis/pixi.lock` and `.pixi/` and rerun. |
+| Appose env build fails on Windows | Pixi cache directory not writable; firewall blocking conda-forge | Run `Extensions > Fiber Analysis > Setup environment...`, then **Rebuild environment**; check that the Pixi cache directory (`%LOCALAPPDATA%\rattler\cache`) is writable and that conda-forge is reachable. |
 | Windows cp1252 crash on a class name with non-ASCII characters | A user-supplied class name or annotation name contains non-ASCII characters that the logger cannot encode | Logs are ASCII-only by design; rename the offending class or annotation to ASCII (the analysis itself does not care, but the log line that mentions it will crash). |
 | Fractal dimension or lacunarity oscillates between runs on similar images | Box-size choices not robust for the fiber scale | Widen the **Fractal box sizes** range (add larger sizes); for lacunarity, ensure the box sizes span the largest gap visible in the image. |
 | Straightness near 1.0 across all windows | Skeleton noise spurs are being walked as short, straight paths | Increase **Min branch length** to 8-10 um to prune more aggressively. |
 
-If a non-listed failure mode comes up, save the QuPath log file
-(`Help > Show log...`) and the Python script output from the
-`results.json` sidecar; both are needed to diagnose Appose issues.
+If a non-listed failure mode comes up, save the QuPath log (`View >
+Show log`) and the output of `Extensions > Fiber Analysis > Python
+console`; both are needed to diagnose Appose issues.
 
 </details>
 
@@ -1195,6 +1301,7 @@ in internal artifacts, per the project's
 Aerts H J W L, Velazquez E R, Leijenaar R T H, et al. (2014).
   Decoding tumour phenotype by noninvasive imaging using a
   quantitative radiomics approach. *Nature Communications* 5:4006.
+  [doi:10.1038/ncomms5006](https://doi.org/10.1038/ncomms5006)
   -- Texture feature set framing (section 8, README "What the
   analyses tell you").
 
@@ -1207,40 +1314,39 @@ Bredfeldt J S, Liu Y, Pehlke C A, Conklin M W, Szulczewski J M,
   Inman D R, Keely P J, Nowak R D, Mackie T R, Eliceiri K W (2014).
   Computational segmentation of collagen fibers from second-harmonic
   generation images of breast cancer. *Journal of Biomedical Optics*
-  19(1):016007. -- CT-FIRE chord/arc straightness convention
-  (section 6, README "What the analyses tell you").
+  19(1):016007.
+  [doi:10.1117/1.JBO.19.1.016007](https://doi.org/10.1117/1.JBO.19.1.016007)
+  -- CT-FIRE chord/arc straightness convention (section 6, README
+  "What the analyses tell you").
+
+Collewet G, Strzelecki M, Mariette F (2004). Influence of MRI
+  acquisition protocols and image intensity normalization methods on
+  texture classification. *Magnetic Resonance Imaging* 22(1):81-91.
+  [doi:10.1016/j.mri.2003.09.001](https://doi.org/10.1016/j.mri.2003.09.001)
+  -- The mean +/- 3 SD gray range (section 8).
 
 Conklin M W, Eickhoff J C, Riching K M, Pehlke C A, Eliceiri K W,
   Provenzano P P, Friedl A, Keely P J (2011). Aligned collagen is a
   prognostic signature for survival in human breast carcinoma.
-  *American Journal of Pathology* 178(3):1221-1232. -- TACS-3
-  prognostic axis, HR 3.0-3.9 (section 1, section 6, README).
+  *American Journal of Pathology* 178(3):1221-1232.
+  [doi:10.1016/j.ajpath.2010.11.076](https://doi.org/10.1016/j.ajpath.2010.11.076)
+  -- TACS-3 prognostic axis; hazard ratios 3.0-3.9 for
+  disease-specific and disease-free survival (section 1, README).
 
 Depeursinge A, Foncubierta-Rodriguez A, Van De Ville D, Muller H
   (2014). Three-dimensional solid texture analysis in biomedical
   imaging: review and opportunities. *Medical Image Analysis*
-  18(1):176-196. -- 3-D texture framing; we use the 2-D math only
-  (section 8, README).
-
-Despotovic I, Cosic D (2022). Radon transform-based methods for
-  fiber alignment analysis. *Frontiers in Physics* 10:915644.
-  -- Additional method support for Radon-based fiber alignment
-  (section 6).
-
-Han B, Sun K Y, et al. (2025). Computer-assisted TACS scoring of
-  collagen organisation in breast cancer at 150-180 um ROIs.
-  *npj Breast Cancer*. -- ROI sizing for TACS scoring (section 6).
+  18(1):176-196.
+  [doi:10.1016/j.media.2013.10.005](https://doi.org/10.1016/j.media.2013.10.005)
+  -- 3-D texture framing; we use the 2-D math only (section 8,
+  README).
 
 Han W, Chen S, Yuan W, Fan Q, Tian J, Wang X, Chen L, Zhang X, Wei
   W, Liu R, et al. (2016). Oriented collagen fibers direct tumor
   cell intravasation. *Proceedings of the National Academy of
-  Sciences* 113(40):11208-11213. -- Mechanical/biological framing
-  for waviness loss (section 1, section 6).
-
-Hapach L A, Carey S P, Schwager S C, Taufalele P V, Wang W, Mosier
-  J A, et al. (2022). Phenotypic heterogeneity of breast cancer
-  cells motility and migration. *Communications Biology* 5:1051.
-  -- Mechanical/biological framing (section 1, section 6).
+  Sciences* 113(40):11208-11213.
+  [doi:10.1073/pnas.1610347113](https://doi.org/10.1073/pnas.1610347113)
+  -- Biological framing for fiber alignment (section 1).
 
 Kulkarni A (2023). PyTextureAnalysis v1.0. Zenodo.
   [doi:10.5281/zenodo.7562833](https://doi.org/10.5281/zenodo.7562833)
@@ -1248,16 +1354,27 @@ Kulkarni A (2023). PyTextureAnalysis v1.0. Zenodo.
   GPL-3.0; acknowledged for the idea, no code taken). -- Prompted the
   threshold-free signal density and coherence density channels.
 
-Li H, Bera K, Toro P, et al. (2021). Collagen fiber orientation
-  disorder from H&E images is prognostic for early stage breast
-  cancer: clinical trial validation study. *npj Breast Cancer*
-  7:104. (related framing in *BMC Medicine* series) -- Prognostic
-  value of texture-augmented collagen signatures (section 8).
+Li H, Bera K, Toro P, Fu P, Zhang Z, Lu C, Feldman M, Ganesan S,
+  Goldstein L J, Davidson N E, et al. (2021). Collagen fiber
+  orientation disorder from H&E images is prognostic for early stage
+  breast cancer: clinical trial validation. *npj Breast Cancer* 7:104.
+  [doi:10.1038/s41523-021-00310-z](https://doi.org/10.1038/s41523-021-00310-z)
+  -- Prognostic value of collagen orientation disorder (section 8).
 
-Provenzano P P, Inman D R, Eliceiri K W, et al. (2008). Collagen
-  density promotes mammary tumor initiation and progression. *BMC
-  Medicine* 6:11. -- Foundational framing for collagen-density and
-  organisation in tumour biology (section 1, section 6).
+Provenzano P P, Inman D R, Eliceiri K W, Knittel J G, Yan L, Rueden
+  C T, White J G, Keely P J (2008). Collagen density promotes mammary
+  tumor initiation and progression. *BMC Medicine* 6:11.
+  [doi:10.1186/1741-7015-6-11](https://doi.org/10.1186/1741-7015-6-11)
+  -- Biological framing for collagen density (section 1).
+
+Qian G, Zhang H, Liu Y, Shribak M, Eliceiri K W, Provenzano P P
+  (2025). Computationally enabled polychromatic polarized imaging
+  enables mapping of matrix architectures that promote pancreatic
+  ductal adenocarcinoma dissemination. *American Journal of
+  Pathology* 195(7):1242-1253.
+  [doi:10.1016/j.ajpath.2025.04.017](https://doi.org/10.1016/j.ajpath.2025.04.017)
+  -- The PS-TACS method in `qupath-extension-ppm`; related to but
+  distinct from this extension (section 1).
 
 Qian S, Wang G, Meng J, Jiang S, Zhou L, Lu J, et al. (2022).
   Identification of human ovarian cancer relying on collagen fiber
@@ -1267,43 +1384,50 @@ Qian S, Wang G, Meng J, Jiang S, Zhou L, Lu J, et al. (2022).
   collagen density as a box mean of intensity (the basis of
   PyTextureAnalysis's density map).
 
-Qian X, Guhan R, et al. (2025). Perpendicularity Score for Tumor-
-  Associated Collagen Signatures (PS-TACS). *American Journal of
-  Pathology* 195(7):1242-1255. -- Boundary-referenced PS-TACS
-  method; related but distinct from this extension (section 1
-  relationship note only).
-
-Schaub N J, Gilbert R J (2011). Radon transform-based methods for
-  characterizing fiber alignment in tissue-engineered scaffolds.
-  *Proceedings of SPIE* 7897:78970M. -- Radon entropy detects
-  misalignment to ~+/-2 deg vs FFT's +/-4 deg (section 6, README).
-
 Rezakhaniha R, Agianniotis A, Schrauwen J T C, Griffa A, Sage D,
-  Bouten C V C, van de Vosse F N, Unser M, Stergiopulos N (2011).
+  Bouten C V C, van de Vosse F N, Unser M, Stergiopulos N (2012).
   Experimental investigation of collagen waviness and orientation in
   the arterial adventitia using confocal laser scanning microscopy.
-  *Biomechanics and Modeling in Mechanobiology* 11:461-473.
+  *Biomechanics and Modeling in Mechanobiology* 11(3-4):461-473.
   [doi:10.1007/s10237-011-0325-z](https://doi.org/10.1007/s10237-011-0325-z)
   -- Structure-tensor coherency applied to collagen (OrientationJ).
 
+Schaub N J, Gilbert R J, Kirkpatrick S J (2011). Electrospun fiber
+  alignment using the Radon transform. *Proceedings of SPIE*, Optical
+  Interactions with Tissue and Cells XXII.
+  [doi:10.1117/12.875019](https://doi.org/10.1117/12.875019)
+  -- Radon-transform measurement of fiber alignment (section 6,
+  README).
+
 scikit-image (van der Walt S, Schonberger J L, Nunez-Iglesias J, et
   al.; 2014). scikit-image: image processing in Python. *PeerJ*
-  2:e453. Specifically `feature.graycomatrix`, `feature.graycoprops`,
+  2:e453. [doi:10.7717/peerj.453](https://doi.org/10.7717/peerj.453)
+  Specifically `feature.graycomatrix`, `feature.graycoprops`,
   `morphology.skeletonize`, `transform.radon`, and the Frangi /
   Sato / Meijering ridge filters under `filters`. (sections 6, 7, 8).
 
 Steger C (1998). An unbiased detector of curvilinear structures.
   *IEEE Transactions on Pattern Analysis and Machine Intelligence*
-  20(2):113-125. -- Ridge detection (deferred reference for v2
-  fiber-width distributions; not implemented in v1; section 7).
+  20(2):113-125.
+  [doi:10.1109/34.659930](https://doi.org/10.1109/34.659930)
+  -- Ridge detection (not implemented; section 7).
 
-Wershof E, Park D, Barry D J, Jenkins R P, Rullan A, Wilkins A, Schlegelmilch K,
-  Roxanis I, Anderson K I, Bates P A, Sahai E (2021). A FIJI macro
-  for quantifying pattern in extracellular matrix (TWOMBLI).
+Wershof E, Park D, Barry D J, Jenkins R P, Rullan A, Wilkins A,
+  Schlegelmilch K, Roxanis I, Anderson K I, Bates P A, Sahai E (2021).
+  A FIJI macro for quantifying pattern in extracellular matrix.
   *Life Science Alliance* 4(3):e202000880.
+  [doi:10.26508/lsa.202000880](https://doi.org/10.26508/lsa.202000880)
   ([github.com/wershofe/TWOMBLI](https://github.com/wershofe/TWOMBLI),
   cited for provenance, not copied). -- TWOMBLI morphometric panel:
   HDM, length, branch/endpoint counts, fractal dimension,
   lacunarity, gap analysis (section 7, README).
+
+Zwanenburg A, Vallieres M, Abdalah M A, Aerts H J W L, et al. (2020).
+  The Image Biomarker Standardization Initiative: standardized
+  quantitative radiomics for high-throughput image-based phenotyping.
+  *Radiology* 295(2):328-338.
+  [doi:10.1148/radiol.2020191145](https://doi.org/10.1148/radiol.2020191145)
+  -- The minimum-to-maximum gray range of a fixed bin number
+  (section 8).
 
 </details>

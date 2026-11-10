@@ -171,7 +171,7 @@ public final class DensityOverlayDialog {
         grid.setVgap(6);
         grid.addRow(0, new Label("Map"), mapCombo);
         grid.addRow(1, new Label("Channel"), channelCombo);
-        grid.addRow(2, new Label("Colour map"), colourCombo);
+        grid.addRow(2, new Label("Color map"), colourCombo);
         grid.addRow(3, new Label("Range"), new HBox(6, minField, new Label("to"), maxField, autoBtn));
         grid.add(hideBelowBox, 1, 4);
         grid.addRow(5, new Label("Brightness from"), brightnessCombo);

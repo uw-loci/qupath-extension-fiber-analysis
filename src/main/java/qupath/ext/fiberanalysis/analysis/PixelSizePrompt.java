@@ -77,7 +77,7 @@ public final class PixelSizePrompt {
         if (commonOffered) {
             sb.append(String.format(
                     Locale.ROOT,
-                    "Analyse all at %s um/px reads every image at that size (a larger analysis downsample on the"
+                    "Analyze all at %s um/px reads every image at that size (a larger analysis downsample on the"
                             + " finer ones), so their results compare. Each at its own size keeps the detail of the"
                             + " finer images, but their numbers are not comparable with the coarser ones.",
                     PixelSizeCheck.um(check.commonPixelUm())));
@@ -94,7 +94,7 @@ public final class PixelSizePrompt {
 
     private static Choice show(Window owner, String title, PixelSizeCheck check, boolean commonOffered, String text) {
         ButtonType common = new ButtonType(
-                "Analyse all at " + PixelSizeCheck.um(check.commonPixelUm()) + " um/px", ButtonBar.ButtonData.OK_DONE);
+                "Analyze all at " + PixelSizeCheck.um(check.commonPixelUm()) + " um/px", ButtonBar.ButtonData.OK_DONE);
         ButtonType own =
                 new ButtonType(commonOffered ? "Each at its own size" : "Run anyway", ButtonBar.ButtonData.OTHER);
         Label body = new Label(text);
@@ -113,7 +113,7 @@ public final class PixelSizePrompt {
                 : builder.buttons(own, ButtonType.CANCEL);
         var dialog = builder.build();
         // ButtonBar gives every button the widest one's width by default and then truncates
-        // "Analyse all at ... um/px"; let each size to its own text.
+        // "Analyze all at ... um/px"; let each size to its own text.
         for (ButtonType bt : dialog.getDialogPane().getButtonTypes()) {
             var node = dialog.getDialogPane().lookupButton(bt);
             if (node != null) {

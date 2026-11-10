@@ -581,7 +581,7 @@ public final class FiberAnalysisBatchDialog {
                             if (commonF) {
                                 imageNotes.add(String.format(
                                         java.util.Locale.ROOT,
-                                        "Analysed at the common pixel size %s um/px of batch %s: analysis downsample"
+                                        "Analyzed at the common pixel size %s um/px of batch %s: analysis downsample"
                                                 + " %s on this image (its own pixel size %s um/px), so it compares"
                                                 + " with the batch's other images.",
                                         PixelSizeCheck.um(check.commonPixelUm()),

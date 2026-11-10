@@ -133,7 +133,7 @@ public final class BatchPixelSizeScenario {
                                 != common.get(1).getAsJsonObject("settings").get("analysis_downsample").getAsDouble(),
                 "the finer image gets a larger downsample");
         List<String> notes = runNotes(outDir.resolve("common"));
-        check(notes.size() == 2 && notes.stream().allMatch(n -> n.contains("Analysed at the common pixel size")),
+        check(notes.size() == 2 && notes.stream().allMatch(n -> n.contains("Analyzed at the common pixel size")),
                 "each run records the common-size decision");
         var labels = List.of(
                 fine.getMetadata().get(ThresholdIdentity.META_ANNOTATIONS),

@@ -438,7 +438,7 @@ public class FiberAnalysisWorkflow {
             // Per-run output dir: <baseRoot>/<timestamp>_<paramsHash[:8]>/. The
             // base root prefers an explicit user setting, falls back to
             // <projectDir>/fiber-analysis/, and finally to ~/QuPath/fiber-out/.
-            Path baseRoot = resolveBaseOutputRoot(params, imageData);
+            Path baseRoot = resolveBaseOutputRoot(params, projectDirAtLaunch);
             String runStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
             String runFolder = runStamp + "_" + paramsHash.substring(0, Math.min(8, paramsHash.length()));
             Path outputRoot = baseRoot.resolve(runFolder);
@@ -2027,14 +2027,17 @@ public class FiberAnalysisWorkflow {
      * </ol>
      * The returned path is the *base* -- the workflow appends a per-run
      * timestamped subdirectory under it.
+     *
+     * @param p       the run's parameters
+     * @param projDir the project folder, resolved on the thread that started the run (a script's
+     *                batch project is per thread), or null
+     * @return the base folder
      */
-    static Path resolveBaseOutputRoot(FiberAnalysisParams p, ImageData<BufferedImage> imageData) {
+    static Path resolveBaseOutputRoot(FiberAnalysisParams p, Path projDir) {
         String configured = p.outputDir();
         if (configured != null && !configured.isBlank()) {
             return Paths.get(configured);
         }
-        // Try the open project before the home fallback, GUI or not.
-        Path projDir = resolveProjectDir();
         if (projDir != null) {
             return projDir.resolve("fiber-analysis");
         }

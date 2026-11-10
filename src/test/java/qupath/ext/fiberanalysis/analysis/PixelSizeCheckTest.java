@@ -66,7 +66,7 @@ class PixelSizeCheckTest {
         var c = check(1, 0.1732, 0.3464);
         String m = PixelSizePrompt.message(c, true, "Each at its own size leaves texture out: x.");
         assertThat(m).contains("0.1732 um/px: 1 image(s) (img0)").contains("0.3464 um/px: 1 image(s) (img1)");
-        assertThat(m).contains("not comparable").contains("Analyse all at 0.3464 um/px");
+        assertThat(m).contains("not comparable").contains("Analyze all at 0.3464 um/px");
         assertThat(m).contains("leaves texture out");
         assertThat(PixelSizePrompt.message(c, false, null)).contains("cannot bring them to one size");
     }
