@@ -641,27 +641,10 @@ public class FiberAnalysisWorkflow {
                     d.getMetadata().put(ThresholdIdentity.META_OBJECT, identity.label());
             }
 
-            // Add all window detections to the hierarchy in one shot.
-            if (!allWindowDetections.isEmpty() && imageData.getHierarchy() != null) {
-                final PathObjectHierarchy hierarchy = imageData.getHierarchy();
-                final List<PathObject> toAdd = new ArrayList<>(allWindowDetections);
-                HeadlessFx.runLater(() -> {
-                    hierarchy.addObjects(toAdd);
-                    logger.info("Added {} window detection objects to hierarchy", toAdd.size());
-                });
-            }
-
-            // Add all collagen (mask-derived) detections to the hierarchy in
-            // one shot. Hierarchy.addObjects resolves the parent annotation
-            // by containment.
-            if (!allCollagenDetections.isEmpty() && imageData.getHierarchy() != null) {
-                final PathObjectHierarchy hierarchy = imageData.getHierarchy();
-                final List<PathObject> toAdd = new ArrayList<>(allCollagenDetections);
-                HeadlessFx.runLater(() -> {
-                    hierarchy.addObjects(toAdd);
-                    logger.info("Added {} CollagenAnalysis detection objects to hierarchy", toAdd.size());
-                });
-            }
+            // Window and collagen detections, each list in one shot. addObjects
+            // resolves the parent annotation by containment.
+            addToHierarchy(imageData.getHierarchy(), allWindowDetections, "window detection");
+            addToHierarchy(imageData.getHierarchy(), allCollagenDetections, "CollagenAnalysis detection");
 
             long ms = System.currentTimeMillis() - t0;
             logger.info("Fiber Analysis run complete: {} ok, {} failed, {} ms", completed, failed, ms);
@@ -2330,6 +2313,37 @@ public class FiberAnalysisWorkflow {
      * (TreeMap), takes SHA-256, returns the first 12 hex chars (~48 bits ->
      * birthday collision at 16.8M runs, well beyond v1 testbed scale).
      */
+    /**
+     * Adds objects to a hierarchy and returns once they are in it: on the JavaFX thread when it
+     * runs (the hierarchy may be on screen), directly when there is no display. A batch saves
+     * the image right after a run, so the objects must be there by then.
+     *
+     * @param hierarchy the image's hierarchy; nothing happens when null
+     * @param objects   the objects; nothing happens when empty
+     * @param what      log label
+     */
+    static void addToHierarchy(PathObjectHierarchy hierarchy, List<PathObject> objects, String what) {
+        if (hierarchy == null || objects.isEmpty()) return;
+        List<PathObject> toAdd = new ArrayList<>(objects);
+        Runnable add = () -> {
+            hierarchy.addObjects(toAdd);
+            logger.info("Added {} {} objects to hierarchy", toAdd.size(), what);
+        };
+        if (!HeadlessFx.isReady() || javafx.application.Platform.isFxApplicationThread()) {
+            add.run();
+            return;
+        }
+        java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(add, null);
+        javafx.application.Platform.runLater(task);
+        try {
+            task.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (java.util.concurrent.ExecutionException e) {
+            logger.error("Could not add {} objects", what, e.getCause());
+        }
+    }
+
     static String computeParamsHash(FiberAnalysisParams p) {
         Map<String, Object> ordered = new TreeMap<>();
         ordered.put("borderZoneUm", p.borderZoneUm());

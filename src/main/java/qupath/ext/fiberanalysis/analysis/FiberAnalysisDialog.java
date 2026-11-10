@@ -1692,8 +1692,7 @@ public final class FiberAnalysisDialog {
         straightnessHeatmapCheck = new CheckBox("Write straightness heatmap PNG");
         straightnessHeatmapCheck.setSelected(
                 FiberAnalysisPreferences.straightnessHeatmapProperty().get());
-        applyTooltip(
-                straightnessHeatmapCheck, "Save a viridis heatmap of per-window tortuosity / Radon scalar values.");
+        applyTooltip(straightnessHeatmapCheck, "Save a viridis heatmap of per-window straightness (chord / arc).");
         content.getChildren().add(straightnessHeatmapCheck);
 
         glcmHeatmapCheck = new CheckBox("Write GLCM heatmap PNG");

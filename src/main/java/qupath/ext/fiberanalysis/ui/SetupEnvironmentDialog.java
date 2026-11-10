@@ -120,11 +120,11 @@ public class SetupEnvironmentDialog {
                         }
                         svc.initialize(this::updateStatus);
                         Platform.runLater(() -> {
+                            refreshStatus();
                             statusLabel.setText("Setup complete. fiberlib " + svc.getInstalledFiberlibVersion());
                             progressBar.setVisible(false);
                             rebuildButton.setDisable(false);
                             closeButton.setDisable(false);
-                            refreshStatus();
                         });
                     } catch (Exception ex) {
                         logger.error("Setup failed", ex);

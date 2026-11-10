@@ -172,8 +172,8 @@ public final class FiberAnalysisBatchDialog {
             if (loadedParams == null) {
                 Dialogs.showErrorMessage(
                         "Fiber Analysis Batch",
-                        "Load a params.json first (Browse...). Use the dialog's 'Save defaults'"
-                                + " after a single-image run to produce one.");
+                        "Load a params.json first (Browse...). Every run of 'Run analysis...' writes one"
+                                + " in its output folder.");
                 return;
             }
             FiberAnalysisParams paramsForRun = mergeOverrides(loadedParams);
@@ -569,7 +569,7 @@ public final class FiberAnalysisBatchDialog {
                         String name = entry.getImageName();
                         logger.info("Batch [{}/{}]: {}", i + 1, entries.size(), name);
                         try {
-                            ImageData<BufferedImage> data = entry.readImageData();
+                            ImageData<BufferedImage> data = openOrRead(gui, entry);
                             List<PathObject> annotations = resolveAnnotations(runParams, data);
                             if (annotations.isEmpty()) {
                                 logger.info("Skipping '{}': no matching annotations", name);
@@ -602,6 +602,8 @@ public final class FiberAnalysisBatchDialog {
                             if (worker != null) {
                                 worker.join();
                             }
+                            // The run added its detections to this ImageData; keep them.
+                            entry.saveImageData(data);
                             ok++;
                             ran.add(entry);
                         } catch (InterruptedException ie) {
@@ -633,6 +635,19 @@ public final class FiberAnalysisBatchDialog {
         t.setDaemon(true);
         t.start();
         return t;
+    }
+
+    /**
+     * The entry's ImageData: the viewer's own when the entry is open, so the batch's objects and
+     * the user's view are one hierarchy and a later save does not drop either.
+     */
+    private static ImageData<BufferedImage> openOrRead(QuPathGUI gui, ProjectImageEntry<BufferedImage> entry)
+            throws IOException {
+        if (gui != null && gui.getProject() != null) {
+            ImageData<BufferedImage> open = gui.getImageData();
+            if (open != null && entry.equals(gui.getProject().getEntry(open))) return open;
+        }
+        return entry.readImageData();
     }
 
     /** @return the image's own pixel size, or NaN when it has none */
