@@ -369,11 +369,11 @@ public final class FiberDensityMapWorkflow {
 
                     progress.setSub("Tile " + doneTiles + " of " + totalTiles + " (" + coreX + "," + coreY + ")");
 
-                    Path tilePng = workDir.resolve(String.format("tile_%04d_%04d.png", tx, ty));
+                    Path tilePng = workDir.resolve(String.format(Locale.ROOT, "tile_%04d_%04d.png", tx, ty));
                     RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, readX, readY, readW, readH);
                     writeTileImage(server, req, spec.segChannel, tilePng, coreX, coreY);
 
-                    Path tileNpz = workDir.resolve(String.format("tile_%04d_%04d.npz", tx, ty));
+                    Path tileNpz = workDir.resolve(String.format(Locale.ROOT, "tile_%04d_%04d.npz", tx, ty));
                     Map<String, Object> in = buildTileInputs(spec, pxUm, tilePng, readW, readH, tileNpz);
                     in.put("crop_x", coreX - readX);
                     in.put("crop_y", coreY - readY);
@@ -932,7 +932,7 @@ public final class FiberDensityMapWorkflow {
             this.rollingBallRadiusUm = rollingBallRadiusUm;
             this.projectThresholdNorm = projectThresholdNorm;
             this.smoothInterpolation = smoothInterpolation;
-            String mode = densityMode == null ? "window" : densityMode.trim().toLowerCase();
+            String mode = densityMode == null ? "window" : densityMode.trim().toLowerCase(Locale.ROOT);
             if (!"window".equals(mode) && !"pixel".equals(mode)) {
                 throw new IllegalArgumentException(
                         "densityMode must be 'window' or 'pixel', got '" + densityMode + "'");

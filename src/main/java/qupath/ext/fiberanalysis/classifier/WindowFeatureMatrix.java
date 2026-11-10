@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -206,8 +207,8 @@ public final class WindowFeatureMatrix {
                     progress.accept("Tile " + done + " of " + totalTiles);
                 }
 
-                Path tilePng = workDir.resolve(String.format("wf_%04d_%04d.png", tx, ty));
-                Path tileNpz = workDir.resolve(String.format("wf_%04d_%04d.npz", tx, ty));
+                Path tilePng = workDir.resolve(String.format(Locale.ROOT, "wf_%04d_%04d.png", tx, ty));
+                Path tileNpz = workDir.resolve(String.format(Locale.ROOT, "wf_%04d_%04d.npz", tx, ty));
                 RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, readX, readY, readW, readH);
                 try {
                     SourceChannel.writeRegionPng(

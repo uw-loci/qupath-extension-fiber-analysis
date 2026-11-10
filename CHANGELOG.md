@@ -4,6 +4,16 @@ All notable changes to the Fiber Analysis extension. Versions name the
 extension jar; the bundled Python package `fiberlib` has its own version,
 recorded in every result file.
 
+## Unreleased
+
+### Fixed
+
+- **Works when QuPath's language or number format is Turkish, German, French or another
+  non-English locale.** With QuPath's language set to Turkish, the image-name filter in the batch
+  dialog and in calibration no longer misses names with an upper-case `I`, and the threshold and
+  ridge-filter names sent to Python are lowered with `Locale.ROOT`. Temporary tile file names
+  (`tile_0001_0002.png`, `wf_...`, `pool_...`) never take local digits.
+
 ## 0.3.0 (2026-11-09)
 
 First release since 0.1.1. 0.2.0 was never released. fiberlib 0.4.8.

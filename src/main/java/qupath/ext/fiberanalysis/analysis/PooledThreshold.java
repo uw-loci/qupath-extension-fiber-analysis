@@ -18,6 +18,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
 import org.apposed.appose.Service.Task;
@@ -115,7 +116,7 @@ public final class PooledThreshold {
                 if (cal == null || !cal.hasPixelSizeMicrons()) continue;
                 int k = 0;
                 for (int[] b : sampleBoxes(server.getWidth(), server.getHeight(), GRID, SAMPLE_PX)) {
-                    Path png = workDir.resolve(String.format("pool_%03d_%02d.png", images, k++));
+                    Path png = workDir.resolve(String.format(Locale.ROOT, "pool_%03d_%02d.png", images, k++));
                     RegionRequest req = RegionRequest.createInstance(server.getPath(), 1.0, b[0], b[1], b[2], b[3]);
                     SourceChannel.writeRegionPng(server, req, spec.segChannel(), png);
                     pngs.add(png.toString());

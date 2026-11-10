@@ -72,3 +72,30 @@ jobs:
             build/test-results/**/*.xml
             build/reports/tests/**
           if-no-files-found: ignore
+
+  # Runs the Java unit tests with a Turkish default locale, which has both a
+  # dotless i (toLowerCase/toUpperCase without Locale.ROOT) and a decimal comma
+  # (String.format without a locale), so a locale bug fails a test here. The
+  # fiberlib pytest suite runs in the build job; Python is locale-independent.
+  test-turkish-locale:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Test (Turkish locale)
+        run: xvfb-run ./gradlew test --stacktrace
+        env:
+          DISPLAY: ':99'
+          JAVA_TOOL_OPTIONS: -Duser.language=tr -Duser.country=TR
