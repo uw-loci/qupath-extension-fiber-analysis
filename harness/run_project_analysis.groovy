@@ -33,7 +33,7 @@ for (entry in project.getImageList()) {
     for (u in entry.getURIs()) {
         def m = (u.toString() =~ /file:\/{2,}([A-Za-z]):\/(.*)/)
         if (m.find()) {
-            def f = new File("/mnt/" + m.group(1).toLowerCase() + "/" +
+            def f = new File("/mnt/" + m.group(1).toLowerCase(Locale.ROOT) + "/" +
                     java.net.URLDecoder.decode(m.group(2), "UTF-8"))
             if (f.exists()) map[u] = f.toURI()
         }
@@ -90,7 +90,7 @@ int done = 0, failed = 0, skipped = 0
 long tAll = System.currentTimeMillis()
 for (entry in project.getImageList()) {
     def name = entry.getImageName()
-    if (filter != null && !name.toLowerCase().contains(filter.toLowerCase())) continue
+    if (filter != null && !name.toLowerCase(Locale.ROOT).contains(filter.toLowerCase(Locale.ROOT))) continue
     def imageData
     try { imageData = entry.readImageData() }
     catch (Exception e) { println "FAIL|${name}|readImageData: ${e.getMessage()}"; failed++; continue }

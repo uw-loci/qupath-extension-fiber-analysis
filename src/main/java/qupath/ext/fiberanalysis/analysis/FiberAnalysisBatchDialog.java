@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.collections.FXCollections;
@@ -299,10 +300,11 @@ public final class FiberAnalysisBatchDialog {
     private void refreshList() {
         String needle = nameFilterField == null || nameFilterField.getText() == null
                 ? ""
-                : nameFilterField.getText().toLowerCase().trim();
+                : nameFilterField.getText().toLowerCase(Locale.ROOT).trim();
         ObservableList<EntryRow> filtered = FXCollections.observableArrayList();
         for (EntryRow row : allRows) {
-            if (needle.isEmpty() || row.entry.getImageName().toLowerCase().contains(needle)) {
+            if (needle.isEmpty()
+                    || row.entry.getImageName().toLowerCase(Locale.ROOT).contains(needle)) {
                 filtered.add(row);
             }
         }

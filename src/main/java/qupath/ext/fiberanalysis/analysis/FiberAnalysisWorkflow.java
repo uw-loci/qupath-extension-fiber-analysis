@@ -1611,10 +1611,10 @@ public class FiberAnalysisWorkflow {
         // Segmentation
         in.put("seg_source", p.segSource());
         in.put("seg_channel", p.internalChannel());
-        in.put("threshold_method", p.thresholdMethod().toLowerCase());
+        in.put("threshold_method", p.thresholdMethod().toLowerCase(Locale.ROOT));
         in.put("manual_threshold", p.manualThreshold());
         in.put("manual_response_threshold", p.manualResponseThreshold());
-        in.put("ridge_filter", p.ridgeFilter().toLowerCase());
+        in.put("ridge_filter", p.ridgeFilter().toLowerCase(Locale.ROOT));
         // All spatial inputs are exposed to the user in microns. Convert to
         // pixels here using this image's measured pixel size so the Python
         // side (which fundamentally operates in pixel-domain arrays) can stay

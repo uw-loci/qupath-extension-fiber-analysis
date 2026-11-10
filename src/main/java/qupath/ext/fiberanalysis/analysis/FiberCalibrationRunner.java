@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -139,8 +140,9 @@ public final class FiberCalibrationRunner {
 
         try {
             // Phase 1: collect (entry, annotation) pairs that match the filters.
-            String needle =
-                    cfg.nameFilter == null ? "" : cfg.nameFilter.toLowerCase().trim();
+            String needle = cfg.nameFilter == null
+                    ? ""
+                    : cfg.nameFilter.toLowerCase(Locale.ROOT).trim();
             var classPredicate = cfg.classFilter.isEmpty() ? null : AnnotationClassFilter.predicate(cfg.classFilter);
             List<EntryAnn> pool = new ArrayList<>();
             for (ProjectImageEntry<BufferedImage> entry : project.getImageList()) {
@@ -148,7 +150,8 @@ public final class FiberCalibrationRunner {
                     throw new IOException("Calibration canceled");
                 }
                 String name = entry.getImageName();
-                if (!needle.isEmpty() && (name == null || !name.toLowerCase().contains(needle))) {
+                if (!needle.isEmpty()
+                        && (name == null || !name.toLowerCase(Locale.ROOT).contains(needle))) {
                     continue;
                 }
                 // A channels entry this extension made is derived from another

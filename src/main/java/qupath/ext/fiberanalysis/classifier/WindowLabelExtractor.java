@@ -15,6 +15,7 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.locationtech.jts.geom.Envelope;
@@ -140,7 +141,7 @@ public final class WindowLabelExtractor {
                 int c = counts.getOrDefault(r, 0);
                 if (c == 0) continue;
                 sb.append(String.format(
-                        java.util.Locale.ROOT, "%-20s %,d%n", r.name().toLowerCase(), c));
+                        java.util.Locale.ROOT, "%-20s %,d%n", r.name().toLowerCase(Locale.ROOT), c));
             }
             return sb.toString().trim();
         }

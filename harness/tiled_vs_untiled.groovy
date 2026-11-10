@@ -64,7 +64,7 @@ println "THRESHOLD ${thrMode}"
 
 for (entry in project.getImageList()) {
     def name = entry.getImageName()
-    if (!name.toLowerCase().contains(filter.toLowerCase())) continue
+    if (!name.toLowerCase(Locale.ROOT).contains(filter.toLowerCase(Locale.ROOT))) continue
     def imageData = entry.readImageData()
     def anns = new ArrayList(imageData.getHierarchy().getAnnotationObjects())
     if (anns.isEmpty()) { println "SKIP|${name}|no annotations"; continue }

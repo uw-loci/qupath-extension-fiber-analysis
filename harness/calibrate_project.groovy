@@ -32,7 +32,7 @@ for (entry in project.getImageList()) {
     for (u in entry.getURIs()) {
         def m = (u.toString() =~ /file:\/{2,}([A-Za-z]):\/(.*)/)
         if (m.find()) {
-            def f = new File("/mnt/" + m.group(1).toLowerCase() + "/" +
+            def f = new File("/mnt/" + m.group(1).toLowerCase(Locale.ROOT) + "/" +
                     java.net.URLDecoder.decode(m.group(2), "UTF-8"))
             if (f.exists()) map[u] = f.toURI()
         }
