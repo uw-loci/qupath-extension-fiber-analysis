@@ -8,6 +8,12 @@ recorded in every result file.
 
 ### Fixed
 
+- **The Python worker runs in UTF-8 mode on every host.** It starts with `PYTHONUTF8=1` (unless
+  QuPath was started with `PYTHONUTF8` set), so on Windows files it reads or writes without an
+  explicit encoding, paths and its error output use UTF-8 like the Linux and macOS workers,
+  instead of the ANSI code page. Shared Appose plumbing; the same change is in QP-CAT, the DL
+  Pixel Classifier, cellAPpose and PPM.
+
 - **Works when QuPath's language or number format is Turkish, German, French or another
   non-English locale.** With QuPath's language set to Turkish, the image-name filter in the batch
   dialog and in calibration no longer misses names with an upper-case `I`, and the threshold and
