@@ -408,7 +408,12 @@ final class FiberSegmentationPreviewWindow {
                     return;
                 }
                 in.put("project_threshold_norm", thr);
-                fitNote = "from calibration '" + p.projectCalibrationName() + "'. The run cuts at the same value.";
+                String mismatch = CalibrationCheck.mismatch(
+                        p.projectCalibrationName(),
+                        FiberAnalysisWorkflow.resolveProjectDir(),
+                        CalibrationCheck.Target.of(p, readPxUm));
+                fitNote = calibrationNote(p.projectCalibrationName(), mismatch);
+                matchesRun = mismatch == null;
             } else if (!pools) {
                 fitNote = "set by hand. The run cuts at the same value.";
             } else if (runCut && !annotations.isEmpty()) {
@@ -639,6 +644,16 @@ final class FiberSegmentationPreviewWindow {
                 }
             }
         });
+    }
+
+    /**
+     * @param calibrationName the calibration the preview cuts with
+     * @param mismatch        why it does not apply to the run, or null
+     * @return what completes "Cut: value, ..."
+     */
+    static String calibrationNote(String calibrationName, String mismatch) {
+        if (mismatch == null) return "from calibration '" + calibrationName + "'. The run cuts at the same value.";
+        return "from calibration '" + calibrationName + "', which the run will refuse. " + mismatch;
     }
 
     /** @return true for the preview's own region marker, which no run should analyse */

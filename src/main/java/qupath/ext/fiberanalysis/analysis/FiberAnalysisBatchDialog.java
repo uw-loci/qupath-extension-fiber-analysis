@@ -238,7 +238,16 @@ public final class FiberAnalysisBatchDialog {
         calBtn.setTooltip(new javafx.scene.control.Tooltip(
                 "Open the calibration dialog: explanation, image-type guidance (including DAB /"
                         + " brightfield warnings), settings, and a Run Calibration button."));
-        calBtn.setOnAction(e -> new FiberCalibrationDialog(gui).show());
+        calBtn.setOnAction(e -> {
+            if (loadedParams == null) {
+                Dialogs.showErrorMessage(
+                        "Fiber Analysis Batch",
+                        "Load the params.json the batch will run with first (Browse...). The calibration"
+                                + " fits the zone, downsample and filter settings in it.");
+                return;
+            }
+            new FiberCalibrationDialog(gui, mergeOverrides(loadedParams)).show();
+        });
         javafx.scene.layout.HBox btnRow = new javafx.scene.layout.HBox(calBtn);
         btnRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
 
@@ -653,7 +662,7 @@ public final class FiberAnalysisBatchDialog {
      * The entry's ImageData: the viewer's own when the entry is open, so the batch's objects and
      * the user's view are one hierarchy and a later save does not drop either.
      */
-    private static ImageData<BufferedImage> openOrRead(QuPathGUI gui, ProjectImageEntry<BufferedImage> entry)
+    static ImageData<BufferedImage> openOrRead(QuPathGUI gui, ProjectImageEntry<BufferedImage> entry)
             throws IOException {
         if (gui != null && gui.getProject() != null) {
             ImageData<BufferedImage> open = gui.getImageData();

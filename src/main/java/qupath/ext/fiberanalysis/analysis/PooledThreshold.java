@@ -20,6 +20,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import org.apposed.appose.Service.Task;
 import org.locationtech.jts.geom.Envelope;
@@ -169,8 +171,32 @@ public final class PooledThreshold {
             int maxSamples,
             Consumer<String> progress)
             throws IOException {
-        Samples s = sampleZones(regions, zoneMode, borderUm, spec.segChannel(), workDir, maxSamples, progress);
+        return poolZones(regions, zoneMode, borderUm, spec, workDir, maxSamples, progress, () -> false);
+    }
+
+    /**
+     * As above, stopping between sample regions and before the Python pass once {@code cancelled}
+     * says so.
+     *
+     * @param cancelled polled between steps
+     * @return the pooled threshold
+     * @throws IOException if nothing could be sampled or the task failed
+     * @throws java.util.concurrent.CancellationException once canceled
+     */
+    public static Result poolZones(
+            List<ZoneRegion> regions,
+            String zoneMode,
+            double borderUm,
+            Settings spec,
+            Path workDir,
+            int maxSamples,
+            Consumer<String> progress,
+            BooleanSupplier cancelled)
+            throws IOException {
+        Samples s =
+                sampleZones(regions, zoneMode, borderUm, spec.segChannel(), workDir, maxSamples, progress, cancelled);
         try {
+            if (cancelled.getAsBoolean()) throw new CancellationException("Canceled before the threshold was fitted");
             return poolSamples(s.pngs(), s.masks(), s.pixelSizes(), spec, s.images());
         } finally {
             deleteSamples(s, workDir);
@@ -232,6 +258,20 @@ public final class PooledThreshold {
             int maxSamples,
             Consumer<String> progress)
             throws IOException {
+        return sampleZones(regions, zoneMode, borderUm, channel, workDir, maxSamples, progress, () -> false);
+    }
+
+    /** As above, stopping between regions once {@code cancelled} says so. */
+    static Samples sampleZones(
+            List<ZoneRegion> regions,
+            String zoneMode,
+            double borderUm,
+            String channel,
+            Path workDir,
+            int maxSamples,
+            Consumer<String> progress,
+            BooleanSupplier cancelled)
+            throws IOException {
         Files.createDirectories(workDir);
         List<ZoneRegion> chosen = regions;
         if (regions.size() > maxSamples) {
@@ -246,6 +286,10 @@ public final class PooledThreshold {
         java.util.Set<String> images = new java.util.HashSet<>();
         int k = 0;
         for (int r = 0; r < chosen.size(); r++) {
+            if (cancelled.getAsBoolean()) {
+                deleteSamples(new Samples(pngs, masks, pixelSizes, 0), workDir);
+                throw new CancellationException("Canceled while sampling");
+            }
             ZoneRegion z = chosen.get(r);
             if (progress != null) progress.accept("Sampling the run: region " + (r + 1) + " of " + chosen.size());
             ROI zoneRoi = AnalysisZone.roi(z.roi(), zoneMode, borderUm / z.pixelSizeUm());

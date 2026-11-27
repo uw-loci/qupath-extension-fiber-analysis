@@ -10,6 +10,14 @@
 package qupath.ext.fiberanalysis.analysis;
 
 import java.awt.image.BufferedImage;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -36,13 +44,16 @@ import javafx.scene.text.FontWeight;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
+import qupath.lib.images.servers.ImageServer;
+import qupath.lib.images.servers.ImageServerMetadata;
 import qupath.lib.projects.Project;
+import qupath.lib.projects.ProjectImageEntry;
 
 /**
- * Dialog that explains and launches a project-wide threshold calibration.
+ * Dialog that explains and launches a project-wide threshold calibration for
+ * the settings of one run (the batch's loaded params.json).
  *
  * <p>Why this exists: per-annotation Otsu gives each region its own threshold,
  * so sparse regions threshold noise as fiber and dense regions clip dim
@@ -56,8 +67,10 @@ import qupath.lib.projects.Project;
 public final class FiberCalibrationDialog {
 
     private static final Logger logger = LoggerFactory.getLogger(FiberCalibrationDialog.class);
+    private static final String TITLE = "Fiber Analysis Calibration";
 
     private final QuPathGUI gui;
+    private final FiberAnalysisParams runParams;
     private TextField nameField;
     private Spinner<Integer> sampleSpinner;
     private CheckBox sampleAllCheck;
@@ -66,15 +79,23 @@ public final class FiberCalibrationDialog {
     private CheckBox invertCheck;
     private Spinner<Double> rollingBallSpinner;
     private ComboBox<String> channelCombo;
+    private Label channelNote;
     private ComboBox<String> ridgeCombo;
     private Spinner<Double> borderZoneSpinner;
     private Label statusLabel;
     private ProgressBar progressBar;
     private Button runBtn;
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
+    /** Each project image's metadata, by image name, filled in the background. */
+    private final Map<String, ImageServerMetadata> metadataByImage = new LinkedHashMap<>();
 
-    public FiberCalibrationDialog(QuPathGUI gui) {
+    /**
+     * @param gui       the QuPath window
+     * @param runParams the parameters of the run the calibration is for
+     */
+    public FiberCalibrationDialog(QuPathGUI gui, FiberAnalysisParams runParams) {
         this.gui = gui;
+        this.runParams = runParams;
     }
 
     public void show() {
@@ -99,11 +120,12 @@ public final class FiberCalibrationDialog {
         scroller.setFitToWidth(true);
         scroller.setStyle("-fx-background-color: transparent;");
 
-        Scene scene = new Scene(scroller, 680, 720);
+        Scene scene = new Scene(scroller, 680, 760);
         dialog.setScene(scene);
         dialog.setMinWidth(560);
         dialog.setMinHeight(480);
         dialog.show();
+        loadChannelChoices();
     }
 
     private VBox buildExplanation() {
@@ -114,10 +136,11 @@ public final class FiberCalibrationDialog {
                 + " a batch), so one run is comparable within itself. A different run, on other"
                 + " annotations or images, fits its own, and the two are NOT directly comparable.\n\n"
                 + "Project calibration fits one threshold the same way, on a random subsample of"
-                + " project annotations: samples of their analysis zones at the run's analysis"
-                + " downsample, zone and filter settings. It is saved as a named JSON file under"
+                + " project annotations: samples of their analysis zones at the zone, downsample and"
+                + " filter settings of the loaded params.json. It is saved as a named JSON file under"
                 + " <project>/fiber-analysis/, and every run that picks 'Project Otsu (calibrated)'"
-                + " in the main dialog uses that one value.");
+                + " in the main dialog uses that one value. A run whose settings differ from the"
+                + " calibration's refuses it.");
         body.setWrapText(true);
         box.getChildren().addAll(title, body);
         return box;
@@ -176,38 +199,41 @@ public final class FiberCalibrationDialog {
         nameFilterField.setPromptText("(blank = all images)");
         nameFilterField.setTooltip(
                 new Tooltip("Only consider project images whose name contains this substring (case-insensitive)."));
+        nameFilterField.textProperty().addListener((o, a, b) -> refreshChannelChoices());
 
-        classFilterField = new TextField("");
+        classFilterField = new TextField(
+                "class".equals(runParams.searchArea()) && runParams.classFilter() != null
+                        ? runParams.classFilter()
+                        : "");
         classFilterField.setPromptText("(blank = all classes; e.g. Tumor, Stroma)");
         classFilterField.setTooltip(
                 new Tooltip("Comma-separated PathClass names. Only annotations with one of these classes"
                         + " are included in the calibration pool. 'Unclassified' matches annotations with"
                         + " no class assigned."));
 
-        channelCombo = new ComboBox<>(
-                FXCollections.observableArrayList("Raw intensity", "Hue (HSV)", "Saturation (HSV)", "Value (HSV)"));
-        channelCombo.setValue(FiberAnalysisPreferences.internalChannelProperty().get());
-        channelCombo.setTooltip(
-                new Tooltip("Same source channel the run will use. Calibration only transfers cleanly when"
-                        + " this matches the channel in Section 2 of the main dialog."));
+        channelCombo =
+                new ComboBox<>(FXCollections.observableArrayList(SourceChannel.choices((ImageServerMetadata) null)));
+        channelCombo.setValue(runParams.internalChannel());
+        channelCombo.setTooltip(new Tooltip("Same source channel the run will use. Lists the choices every image"
+                + " the calibration reads offers, as the Run dialog does for one image."));
+        channelNote = new Label("");
+        channelNote.setWrapText(true);
+        channelNote.setStyle("-fx-font-size: 11px; -fx-text-fill: #e07a10;");
+        channelNote.setVisible(false);
+        channelNote.managedProperty().bind(channelNote.visibleProperty());
 
         ridgeCombo = new ComboBox<>(FXCollections.observableArrayList("None", "Frangi", "Sato", "Meijering"));
-        ridgeCombo.setValue(FiberAnalysisPreferences.ridgeFilterProperty().get());
+        ridgeCombo.setValue(runParams.ridgeFilter());
         ridgeCombo.setTooltip(new Tooltip("Same ridge filter the run will use. Calibration histograms the post-filter"
                 + " scalar, so the threshold transfers cleanly only when filters match."));
 
         invertCheck = new CheckBox("Invert intensity (DAB / dark-fiber-on-bright)");
-        invertCheck.setSelected(
-                FiberAnalysisPreferences.invertIntensityProperty().get());
-        invertCheck.setTooltip(
-                new Tooltip(
-                        "Tick for DAB, trichrome blue, or any stain where fibers are darker than background. Set it the same way in Section 2 of the Run dialog."));
+        invertCheck.setSelected(runParams.invertIntensity());
+        invertCheck.setTooltip(new Tooltip("Tick for DAB, trichrome blue, or any stain where fibers are darker than"
+                + " background. Set it the same way in Section 2 of the Run dialog."));
 
-        rollingBallSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
-                0.0,
-                50.0,
-                FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
-                0.5));
+        rollingBallSpinner = new Spinner<>(
+                new SpinnerValueFactory.DoubleSpinnerValueFactory(0.0, 50.0, runParams.rollingBallRadiusUm(), 0.5));
         rollingBallSpinner.setEditable(true);
         rollingBallSpinner.setPrefWidth(100);
         rollingBallSpinner.setTooltip(
@@ -215,13 +241,13 @@ public final class FiberCalibrationDialog {
                         + " width to flatten uneven illumination before thresholding. Converted to"
                         + " pixels with each image's own pixel size."));
 
-        borderZoneSpinner = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(
-                1.0, 500.0, FiberAnalysisPreferences.borderZoneUmProperty().get(), 5.0));
+        borderZoneSpinner = new Spinner<>(
+                new SpinnerValueFactory.DoubleSpinnerValueFactory(1.0, 500.0, runParams.borderZoneUm(), 5.0));
         borderZoneSpinner.setEditable(true);
         borderZoneSpinner.setPrefWidth(100);
-        borderZoneSpinner.setTooltip(
-                new Tooltip("Dilation around each annotation when extracting the region for calibration."
-                        + " Match the value in Section 1 of the main dialog."));
+        borderZoneSpinner.setDisable("whole".equals(runParams.zoneMode()));
+        borderZoneSpinner.setTooltip(new Tooltip("Width of the analysis zone around each annotation, as in"
+                + " Section 1 of the Run dialog. A run with another width refuses the calibration."));
 
         javafx.scene.layout.GridPane grid = new javafx.scene.layout.GridPane();
         grid.setHgap(8);
@@ -236,7 +262,7 @@ public final class FiberCalibrationDialog {
         grid.add(new Label("Class filter:"), 0, r);
         grid.add(classFilterField, 1, r++);
         grid.add(new Label("Source channel:"), 0, r);
-        grid.add(channelCombo, 1, r++);
+        grid.add(new VBox(4, channelCombo, channelNote), 1, r++);
         grid.add(new Label("Ridge filter:"), 0, r);
         grid.add(ridgeCombo, 1, r++);
         grid.add(invertCheck, 0, r, 2, 1);
@@ -246,8 +272,95 @@ public final class FiberCalibrationDialog {
         grid.add(new Label("Border zone width (um):"), 0, r);
         grid.add(borderZoneSpinner, 1, r++);
 
-        box.getChildren().add(grid);
+        Label fixedTitle = new Label("From the loaded params.json (change them there):");
+        fixedTitle.setStyle("-fx-font-weight: bold;");
+        Label fixed = new Label(describeFixedSettings(runParams));
+        fixed.setWrapText(true);
+        fixed.setStyle("-fx-font-size: 11px;");
+
+        box.getChildren().addAll(grid, fixedTitle, fixed);
         return box;
+    }
+
+    /**
+     * @param p the run's parameters
+     * @return the settings the calibration takes from the run unchanged, one per line
+     */
+    static String describeFixedSettings(FiberAnalysisParams p) {
+        String pixel = p.useImagePixelSize()
+                ? "each image's own (" + PixelSizeCheck.um(p.pixelSizeOverrideUm()) + " um/px for an image with none)"
+                : PixelSizeCheck.um(p.pixelSizeOverrideUm()) + " um/px for every image";
+        return String.format(
+                Locale.ROOT,
+                "Zone mode: %s\nAnalysis downsample: %s\nRidge sigmas: %s-%s um, step %s um\nPixel size: %s",
+                p.zoneMode(),
+                PixelSizeCheck.um(Math.max(1.0, p.analysisDownsample())),
+                PixelSizeCheck.um(p.sigmaMinUm()),
+                PixelSizeCheck.um(p.sigmaMaxUm()),
+                PixelSizeCheck.um(p.sigmaStepUm()),
+                pixel);
+    }
+
+    /** Reads every project image's metadata in the background, then fills the channel choices. */
+    private void loadChannelChoices() {
+        Project<BufferedImage> project = getProject();
+        if (project == null) return;
+        List<ProjectImageEntry<BufferedImage>> entries = new ArrayList<>(project.getImageList());
+        Thread t = new Thread(
+                () -> {
+                    Map<String, ImageServerMetadata> found = new LinkedHashMap<>();
+                    for (ProjectImageEntry<BufferedImage> entry : entries) {
+                        if (DensityChannelAttacher.isChannelsEntry(entry)) continue;
+                        ImageServerMetadata md = metadataOf(entry);
+                        if (md != null) found.put(entry.getImageName(), md);
+                    }
+                    Platform.runLater(() -> {
+                        metadataByImage.putAll(found);
+                        refreshChannelChoices();
+                    });
+                },
+                "FiberCalibrationChannels");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static ImageServerMetadata metadataOf(ProjectImageEntry<BufferedImage> entry) {
+        try {
+            var stored = entry.getServerBuilder().getMetadata();
+            if (stored.isPresent()) return stored.get();
+            try (ImageServer<BufferedImage> server = entry.getServerBuilder().build()) {
+                return server.getMetadata();
+            }
+        } catch (Exception ex) {
+            logger.debug("Could not read the channels of {}: {}", entry.getImageName(), ex.getMessage());
+            return null;
+        }
+    }
+
+    /** Offers the source channels every image the name filter selects has. */
+    private void refreshChannelChoices() {
+        if (metadataByImage.isEmpty()) return;
+        String needle = nameFilterField.getText() == null
+                ? ""
+                : nameFilterField.getText().toLowerCase(Locale.ROOT).trim();
+        List<ImageServerMetadata> selected = new ArrayList<>();
+        for (var e : metadataByImage.entrySet()) {
+            if (needle.isEmpty()
+                    || (e.getKey() != null
+                            && e.getKey().toLowerCase(Locale.ROOT).contains(needle))) selected.add(e.getValue());
+        }
+        List<String> choices = SourceChannel.commonChoices(selected);
+        String current = channelCombo.getValue();
+        boolean missing = current != null && !choices.contains(current);
+        if (missing) choices.add(current);
+        channelCombo.getItems().setAll(choices);
+        channelCombo.setValue(current);
+        channelNote.setText(
+                missing
+                        ? "'" + current + "' is not a choice on every image the calibration reads; those images would"
+                                + " fall back to the brightest band or fail."
+                        : "");
+        channelNote.setVisible(missing);
     }
 
     private VBox buildFooter(Stage dialog) {
@@ -261,6 +374,7 @@ public final class FiberCalibrationDialog {
 
         Button cancelBtn = new Button("Cancel");
         cancelBtn.setCancelButton(true);
+        cancelBtn.setTooltip(new Tooltip("Close this window. A calibration in progress stops and writes nothing."));
         cancelBtn.setOnAction(e -> {
             cancelled.set(true);
             dialog.close();
@@ -268,7 +382,7 @@ public final class FiberCalibrationDialog {
 
         runBtn = new Button("Run calibration");
         runBtn.setDefaultButton(true);
-        runBtn.setOnAction(e -> runCalibration(dialog));
+        runBtn.setOnAction(e -> runCalibration());
 
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -278,14 +392,13 @@ public final class FiberCalibrationDialog {
         return box;
     }
 
-    private void runCalibration(Stage dialog) {
+    private void runCalibration() {
         Project<BufferedImage> project = getProject();
-        if (project == null) {
-            Dialogs.showErrorMessage(
-                    "Calibration", "A QuPath project must be open. Create or open a project and try again.");
+        if (project == null || project.getPath() == null) {
+            Dialogs.showErrorMessage(TITLE, "A QuPath project must be open. Create or open a project and try again.");
             return;
         }
-        FiberCalibrationRunner.CalibrationConfig cfg = new FiberCalibrationRunner.CalibrationConfig();
+        FiberCalibrationRunner.CalibrationConfig cfg = FiberCalibrationRunner.CalibrationConfig.fromRun(runParams);
         cfg.calibrationName = nameField.getText() == null ? "default" : nameField.getText();
         cfg.sampleSize = sampleAllCheck.isSelected() ? 0 : sampleSpinner.getValue();
         cfg.nameFilter = nameFilterField.getText() == null ? "" : nameFilterField.getText();
@@ -295,17 +408,28 @@ public final class FiberCalibrationDialog {
         cfg.invertIntensity = invertCheck.isSelected();
         cfg.rollingBallRadiusUm = rollingBallSpinner.getValue();
         cfg.borderZoneUm = borderZoneSpinner.getValue();
-        // The rest of the run's settings, so the calibration fits what the run will cut.
-        cfg.zoneMode = FiberAnalysisPreferences.zoneModeProperty().get();
-        cfg.analysisDownsample =
-                FiberAnalysisPreferences.analysisDownsampleProperty().get();
-        cfg.sigmaMinUm = FiberAnalysisPreferences.sigmaMinProperty().get();
-        cfg.sigmaMaxUm = FiberAnalysisPreferences.sigmaMaxProperty().get();
-        cfg.sigmaStepUm = FiberAnalysisPreferences.sigmaStepProperty().get();
+        // The open image's own hierarchy, so its unsaved annotations count.
+        cfg.imageSource = entry -> FiberAnalysisBatchDialog.openOrRead(gui, entry);
         javafx.stage.Window owner =
                 runBtn.getScene() == null ? null : runBtn.getScene().getWindow();
         cfg.onMixedPixelSizes =
                 (check, note) -> PixelSizePrompt.ask(owner, "Fiber Analysis -- Calibration", check, true, note);
+
+        try {
+            Path existing =
+                    FiberCalibrationRunner.calibrationFile(project.getPath().getParent(), cfg.calibrationName);
+            if (Files.isRegularFile(existing)
+                    && !Dialogs.showConfirmDialog(
+                            TITLE,
+                            "A calibration named '" + FiberCalibrationRunner.safeName(cfg.calibrationName)
+                                    + "' already exists. Runs that use it will cut at the new threshold"
+                                    + " instead. Replace it?")) {
+                return;
+            }
+        } catch (java.io.IOException ex) {
+            Dialogs.showErrorMessage(TITLE, ex.getMessage());
+            return;
+        }
 
         runBtn.setDisable(true);
         progressBar.setVisible(true);
@@ -340,11 +464,20 @@ public final class FiberCalibrationDialog {
                                     result.pixelsUsed,
                                     result.calibrationFile.getFileName()));
                             Dialogs.showInfoNotification(
-                                    "Fiber Analysis Calibration",
+                                    TITLE,
                                     String.format(
                                             "Saved calibration '%s' -- threshold=%.4f across %d regions",
                                             cfg.calibrationName, result.thresholdNormalised, result.regionsUsed));
                             runBtn.setDisable(false);
+                        });
+                    } catch (CancellationException ce) {
+                        logger.info("Calibration '{}' canceled: {}", cfg.calibrationName, ce.getMessage());
+                        Platform.runLater(() -> {
+                            progressBar.setProgress(0);
+                            statusLabel.setText("Canceled. Nothing was written.");
+                            runBtn.setDisable(false);
+                            Dialogs.showInfoNotification(
+                                    TITLE, "Calibration '" + cfg.calibrationName + "' canceled. Nothing was written.");
                         });
                     } catch (Exception ex) {
                         logger.error("Calibration failed", ex);
@@ -352,7 +485,7 @@ public final class FiberCalibrationDialog {
                             progressBar.setProgress(0);
                             statusLabel.setText("Calibration failed: " + ex.getMessage());
                             runBtn.setDisable(false);
-                            Dialogs.showErrorMessage("Fiber Analysis Calibration", ex.getMessage());
+                            Dialogs.showErrorMessage(TITLE, ex.getMessage());
                         });
                     }
                 },

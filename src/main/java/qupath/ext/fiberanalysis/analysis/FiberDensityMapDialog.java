@@ -579,16 +579,18 @@ public final class FiberDensityMapDialog {
                                 + " threshold method.");
                 return;
             }
-            String mismatch = FiberAnalysisWorkflow.calibrationMismatch(
+            String mismatch = CalibrationCheck.mismatch(
                     calName,
                     FiberAnalysisWorkflow.resolveProjectDir(),
-                    FiberAnalysisPreferences.internalChannelProperty().get(),
-                    FiberAnalysisPreferences.ridgeFilterProperty().get(),
-                    FiberAnalysisPreferences.invertIntensityProperty().get(),
-                    FiberAnalysisPreferences.rollingBallRadiusUmProperty().get(),
-                    FiberAnalysisPreferences.sigmaMinProperty().get(),
-                    FiberAnalysisPreferences.sigmaMaxProperty().get(),
-                    FiberAnalysisPreferences.sigmaStepProperty().get());
+                    CalibrationCheck.Target.segmentation(
+                            FiberAnalysisPreferences.internalChannelProperty().get(),
+                            FiberAnalysisPreferences.ridgeFilterProperty().get(),
+                            FiberAnalysisPreferences.invertIntensityProperty().get(),
+                            FiberAnalysisPreferences.rollingBallRadiusUmProperty()
+                                    .get(),
+                            FiberAnalysisPreferences.sigmaMinProperty().get(),
+                            FiberAnalysisPreferences.sigmaMaxProperty().get(),
+                            FiberAnalysisPreferences.sigmaStepProperty().get()));
             if (mismatch != null) {
                 Dialogs.showErrorMessage("Fiber density map", mismatch);
                 return;

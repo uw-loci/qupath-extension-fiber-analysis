@@ -15,11 +15,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import javax.imageio.ImageIO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.lib.images.servers.ImageChannel;
 import qupath.lib.images.servers.ImageServer;
+import qupath.lib.images.servers.ImageServerMetadata;
 import qupath.lib.images.servers.PixelType;
 import qupath.lib.regions.RegionRequest;
 
@@ -56,18 +59,46 @@ public final class SourceChannel {
      *     no Hue or Saturation on a multi-channel image that is not RGB
      */
     static List<String> choices(ImageServer<BufferedImage> server) {
-        List<String> out = new ArrayList<>(DERIVED);
-        if (server == null) return out;
+        if (server == null) return new ArrayList<>(DERIVED);
         try {
-            if (!server.isRGB() && server.nChannels() > 1) out.removeAll(List.of(HUE, SATURATION));
-            for (int i = 0; i < server.nChannels(); i++) {
-                String name = server.getChannel(i).getName();
+            return choices(server.getMetadata());
+        } catch (Exception ex) {
+            logger.debug("Could not list channels: {}", ex.getMessage());
+            return new ArrayList<>(DERIVED);
+        }
+    }
+
+    /**
+     * @param metadata an image's metadata; may be null
+     * @return the choices for that image, as {@link #choices(ImageServer)}
+     */
+    static List<String> choices(ImageServerMetadata metadata) {
+        List<String> out = new ArrayList<>(DERIVED);
+        if (metadata == null) return out;
+        try {
+            if (!metadata.isRGB() && metadata.getSizeC() > 1) out.removeAll(List.of(HUE, SATURATION));
+            for (ImageChannel channel : metadata.getChannels()) {
+                String name = channel.getName();
                 if (name != null && !name.isBlank() && !out.contains(name)) out.add(name);
             }
         } catch (Exception ex) {
             logger.debug("Could not list channels: {}", ex.getMessage());
         }
         return out;
+    }
+
+    /**
+     * @param images the metadata of every image a multi-image pass reads
+     * @return the choices every one of them offers, in the first image's order
+     */
+    static List<String> commonChoices(Collection<ImageServerMetadata> images) {
+        List<String> out = null;
+        for (ImageServerMetadata md : images) {
+            List<String> mine = choices(md);
+            if (out == null) out = mine;
+            else out.retainAll(mine);
+        }
+        return out == null ? new ArrayList<>(DERIVED) : out;
     }
 
     /**

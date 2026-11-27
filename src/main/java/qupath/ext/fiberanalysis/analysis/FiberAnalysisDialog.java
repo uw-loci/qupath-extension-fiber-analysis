@@ -112,6 +112,9 @@ public final class FiberAnalysisDialog {
     private Label manualThreshLabel;
     private Spinner<Double> manualResponseSpinner;
     private Label calibrationWarning;
+    /** True once every section exists, so the parameters can be read from the controls. */
+    private boolean sectionsBuilt;
+
     private ComboBox<String> ridgeFilterCombo;
     private Spinner<Double> sigmaMinSpinner;
     private Spinner<Double> sigmaMaxSpinner;
@@ -226,6 +229,8 @@ public final class FiberAnalysisDialog {
         sections.getChildren().add(buildMorphSection());
         sections.getChildren().add(buildTextureSection());
         sections.getChildren().add(buildOutputSection());
+        sectionsBuilt = true;
+        refreshCalibrationWarning();
 
         ScrollPane scrollPane = new ScrollPane(sections);
         scrollPane.setFitToWidth(true);
@@ -445,22 +450,20 @@ public final class FiberAnalysisDialog {
 
     /** Shows why the chosen calibration does not fit the current settings, if it does not. */
     private void refreshCalibrationWarning() {
-        if (calibrationWarning == null || invertIntensityCheck == null || rollingBallSpinner == null) return;
+        if (!sectionsBuilt || calibrationWarning == null) return;
         String msg = null;
         if ("Project Otsu (calibrated)".equals(thresholdMethodCombo.getValue())
                 && gui != null
                 && gui.getProject() != null
                 && gui.getProject().getPath() != null) {
-            msg = FiberAnalysisWorkflow.calibrationMismatch(
+            FiberAnalysisParams p = buildParams();
+            double analyzedPx = gui.getImageData() == null
+                    ? Double.NaN
+                    : resolveDialogPixelSizeUm() * Math.max(1.0, p.analysisDownsample());
+            msg = CalibrationCheck.mismatch(
                     calibrationCombo.getValue(),
                     gui.getProject().getPath().getParent(),
-                    internalChannelCombo.getValue(),
-                    ridgeFilterCombo.getValue(),
-                    invertIntensityCheck.isSelected(),
-                    rollingBallSpinner.getValue(),
-                    sigmaMinSpinner.getValue(),
-                    sigmaMaxSpinner.getValue(),
-                    sigmaStepSpinner.getValue());
+                    CalibrationCheck.Target.of(p, analyzedPx));
         }
         calibrationWarning.setText(msg == null ? "" : msg);
         calibrationWarning.setVisible(msg != null);
@@ -1029,10 +1032,14 @@ public final class FiberAnalysisDialog {
                 rollingBallSpinner.valueProperty(),
                 sigmaMinSpinner.valueProperty(),
                 sigmaMaxSpinner.valueProperty(),
-                sigmaStepSpinner.valueProperty())) {
+                sigmaStepSpinner.valueProperty(),
+                zoneModeGroup.selectedToggleProperty(),
+                borderZoneSpinner.valueProperty(),
+                analysisDownsampleSpinner.valueProperty(),
+                useImagePixelSizeCheck.selectedProperty(),
+                pixelSizeOverrideSpinner.valueProperty())) {
             prop.addListener((o, a, b) -> refreshCalibrationWarning());
         }
-        refreshCalibrationWarning();
         previewBtn.disableProperty().bind(segInternalRadio.selectedProperty().not());
         HBox previewRow = new HBox(previewBtn);
         previewRow.setAlignment(Pos.CENTER_LEFT);
