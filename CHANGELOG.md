@@ -6,6 +6,37 @@ recorded in every result file.
 
 ## Unreleased
 
+### Read before upgrading
+
+- **"Use existing fiber mask" now works** (pixel classifier, object class, mask file). If you
+  hit issue #1, upgrade; the user guide, section 4, has a step-by-step "Use a pixel classifier
+  as the fiber mask".
+- **Results that change:**
+  - Density maps differ from 0.3.0 maps made with default settings: windows below the Run's
+    "Min coverage per window" (default 5 %) are empty in the fiber channels, ridge count leaves
+    out traced fibers shorter than the Run's "Min branch length" (default 5 um; it was a fixed
+    2 um), and object density reads 0 where a class has no objects (it read as no data).
+    Make maps you compare again with one version.
+  - With "Window overlap" above 0, per-window tortuosity and ridge count (heatmaps, detections,
+    `windows.json`, density maps) change: a traced fiber now counts in every window that holds
+    its center. At the default 0 % overlap nothing changes.
+  - Run folder names change for the same settings: the settings hash no longer includes the
+    removed GLCM heatmap "Property" choice. Scripts that find a run folder by its hash need
+    updating.
+  - Apply window classifier segments with the settings stored in the model; in 0.3.0 it used
+    the current Run settings, so its maps can differ.
+- **Files that stop working:**
+  - A density `rerun.groovy` written by 0.3.0 no longer runs; make the map again to get a new
+    one.
+  - Calibrations made by 0.1.x are refused (they do not record zone mode, border zone width,
+    analysis downsample and pixel size); calibrate again.
+  - A mask file made for one region is now read as a mask of the whole image. It is refused
+    unless its proportions match the image's, and then it gives the wrong mask with no error.
+    Remake it as a mask of the whole image.
+- **Removed from the Run dialog:** the GLCM heatmap "Property" choice (one heatmap is written
+  per enabled property, as before) and the "Value (HSV)" source channel. Saved settings that use
+  them still load; "Value (HSV)" counts as "Raw intensity", which computes the same pixels.
+
 ### Fixed
 
 - **"Use existing fiber mask" works** ([#1](https://github.com/uw-loci/qupath-extension-fiber-analysis/issues/1)).

@@ -30,8 +30,11 @@ annotation.
 
 The extension needs QuPath 0.7.
 
-**Migration:** not applicable -- new extension. No prior preferences,
-project metadata, or UI surfaces are being replaced.
+**Upgrading:** read the "Read before upgrading" notes in
+[`CHANGELOG.md`](CHANGELOG.md) for each release you skip. Coming from
+0.3.0: run-folder names change for the same settings, density
+`rerun.groovy` scripts written by 0.3.0 no longer run (make the map
+again), and calibrations made by 0.1.x are refused (calibrate again).
 
 ## Quick start
 
@@ -53,6 +56,13 @@ project metadata, or UI surfaces are being replaced.
    threshold / ridge filter; **Use existing fiber mask** = a pixel
    classifier, the objects of one class, or a mask file); pick which families
    to run (straightness, morphometrics, texture); click **Run**.
+   **Zone mode** starts at `outside`, a band outside the annotation;
+   choose `whole annotation` to measure everything inside a region you
+   outlined. To use a pixel classifier you trained in QuPath as the
+   fiber mask, follow the user guide, section 4,
+   [Use a pixel classifier as the fiber mask](documentation/fiber-analysis.md#use-a-pixel-classifier-as-the-fiber-mask);
+   for a mask made outside QuPath, see
+   [Use a mask file made outside QuPath](documentation/fiber-analysis.md#use-a-mask-file-made-outside-qupath).
 6. The Python module runs via Appose and writes per-annotation
    overlays + a `windows.json` sidecar. Results appear in the **Fiber
    Analysis Results** panel, and, with **Create collagen detection
@@ -136,20 +146,20 @@ reference. Sections 4-6 start collapsed.
 | Override pixel size (um/px) | 1. Search area | 0.5 | um/px | Pixel size used when the box above is unticked. |
 | Analysis downsample | 1. Search area | 1.0 | -- | Read the region at 1/N resolution. Pixels read fall by N squared. Lengths and areas are converted with the effective pixel size (image pixel size x N), but fibers thinner than a downsampled pixel are lost, and every setting that is rounded to whole pixels (window size, GLCM distances, box sizes) is rounded at the coarser size, so results at different downsamples do not compare. |
 | Source | 2. Fiber segmentation | Segment within extension | -- | `Segment within extension` (threshold, optional ridge filter) or `Use existing fiber mask`. |
-| Source channel | 2. Fiber segmentation | Raw intensity | -- | Scalar channel the internal segmenter thresholds: `Raw intensity`, `Hue (HSV)`, `Saturation (HSV)`, `Value (HSV)`, or one of the image's own channels by name. On an RGB image Raw intensity is the same as Value (the brightest of R, G, B). On a multi-channel image that is not RGB, Raw intensity and Value use the brightest channel at each pixel, and Hue and Saturation are not offered. 16-bit sources keep their full precision. **Refresh** re-reads the channels. |
+| Source channel | 2. Fiber segmentation | Raw intensity | -- | Scalar channel the internal segmenter thresholds: `Raw intensity`, `Hue (HSV)` and `Saturation (HSV)` (RGB images only), or one of the image's own channels by name. Raw intensity is the brightest channel at each pixel: on an RGB image, the HSV value (the brightest of R, G, B); on a multi-channel image, every channel competes, so a bright nuclear or autofluorescence channel counts too, and choosing the collagen channel by name is safer. Settings and calibrations saved with `Value (HSV)` load as Raw intensity, which computes the same pixels. 16-bit sources keep their full precision. **Refresh** re-reads the channels. |
 | Threshold method | 2. Fiber segmentation | Otsu | -- | `Otsu`, `Triangle`, `Manual`, or `Project Otsu (calibrated)`. Otsu and Triangle are fitted once per run over all its annotations. |
 | Calibration | 2. Fiber segmentation | last used, else the first found | -- | Which saved project calibration `Project Otsu (calibrated)` applies; enabled only for that method. Make one with **Calibrate threshold...** in `Run on project images...`. A red note appears when the calibration was fitted with other settings. |
 | Manual threshold (0-N) | 2. Fiber segmentation | 128 | gray level | Cutoff in the source image's own gray levels; on a single-channel 16-bit image the spinner runs 0-65535. Enabled only for Manual. With a ridge filter selected it becomes **Response cutoff (0-1)** (default 0.1), a cut on the filter's response, where 1 is a fiber at full contrast; a dim image can respond far below 0.1, and **Preview segmentation** shows the strongest response in view. |
 | Ridge filter | 2. Fiber segmentation | None | -- | Optional line filter before the threshold: `None`, `Frangi`, `Sato`, `Meijering`. |
 | Sigma range (um): Min / Max / Step | 2. Fiber segmentation | 1.0 / 4.0 / 1.0 | um | Fiber half-widths the ridge filter looks for. |
-| Min fiber area (um2) | 2. Fiber segmentation | 1.0 | um2 | Connected components smaller than this are removed. |
+| Min fiber area (um2) | 2. Fiber segmentation | 1.0 | um2 | Connected components smaller than this are removed. Internal segmenter only: an existing fiber mask is used as given. |
 | Invert intensity (DAB / dark-fiber-on-bright) | 2. Fiber segmentation | unchecked | -- | Flip bright and dark before thresholding. Tick it when fibers are darker than the background (DAB, trichrome blue). |
 | Rolling-ball radius (um) | 2. Fiber segmentation | 0.0 | um | Background subtraction (morphological top-hat) before thresholding; 0 turns it off. |
 | Preview segmentation... | 2. Fiber segmentation | -- | -- | Button: segments a small square around the viewer center with the current settings and shows the mask. |
 | Mask source | 2. Fiber segmentation | Pixel classifier | -- | With `Use existing fiber mask`: `Pixel classifier`, `Object class` or `File on disk`. |
 | Classifier name | 2. Fiber segmentation | first in the project | -- | A pixel classifier saved in the project. It runs on each region at its own resolution. |
-| Fiber class | 2. Fiber segmentation | a class named like fiber or collagen | -- | With `Pixel classifier`: the classifier's class that marks fibers (the list shows that classifier's classes). With `Object class`: the class of the fiber objects (annotations or detections); their outlines are filled to make the mask. |
-| Mask file | 2. Fiber segmentation | (empty) | -- | A binary mask of the **whole image** (`.png`, `.tif`, `.npy` or `.npz`; any non-zero pixel is fiber), at full resolution or at one downsample of it. Each annotation's region is cut from it. One file belongs to one image, so a batch over several images refuses this source. |
+| Fiber class | 2. Fiber segmentation | the last-used class; else, for a classifier, one named like fiber, fibre or collagen (else its first class not starting with Ignore); for objects, the alphabetically first class of the open image's area objects | -- | With `Pixel classifier`: the classifier's class that marks fibers (the list shows that classifier's classes). With `Object class`: the class of the fiber objects (annotations or detections); the outlines of every area object of that class are filled to make the mask, so give the analyzed annotation a different class. |
+| Mask file | 2. Fiber segmentation | (empty) | -- | A binary mask of the **whole image** (`.png`, `.tif`, `.npy` or `.npz`; a pixel is fiber when any color channel is non-zero, and an alpha channel is ignored; an `.npz` uses its first array), at full resolution or at one downsample of it. Each annotation's region is cut from it. One file belongs to one image, so a batch over several images refuses this source. |
 | Create collagen detection objects (split, classed CollagenAnalysis) | 2. Fiber segmentation | **checked** | -- | Adds one `CollagenAnalysis` detection per connected fiber blob under the source annotation. On by default, so a run changes the image's hierarchy. |
 | Enable moving-window analysis | 3. Window analysis | checked | -- | Divide the analyzed zone into a grid of windows and report per-window metrics. |
 | Window size (um) | 3. Window analysis | 15.0 | um | Side length of each square window, rounded to whole pixels. |
@@ -159,7 +169,7 @@ reference. Sections 4-6 start collapsed.
 | Enable straightness analysis | 4. Straightness | checked | -- | Master toggle for tortuosity and Radon. |
 | Per-window skeleton tortuosity | 4. Straightness | checked | -- | Chord/arc ratio along traced fibers (CT-FIRE convention; 1 = straight). |
 | Per-ROI Radon scalar (peak/mean, FWHM) | 4. Straightness | checked | -- | One set of Radon alignment scalars per annotation. Skipped on a tiled run. |
-| Min branch length (um) | 4. Straightness | 5.0 | um | Skeleton branches shorter than this are pruned as noise. |
+| Min branch length (um) | 4. Straightness | 5.0 | um | Traced fibers shorter than this are left out of the straightness measurements and the per-window ridge count. The skeleton itself is not pruned: branch points, endpoints, length and curvature use all of it. Enabled only with **Per-window skeleton tortuosity**. |
 | Enable morphometrics | 5. Morphometrics (TWOMBLI-derived) | checked | -- | Master toggle for the TWOMBLI-derived metrics. |
 | Branch-point count | 5. Morphometrics | checked | -- | Skeleton junctions (Rutovitz crossing number >= 3). |
 | Endpoint count | 5. Morphometrics | checked | -- | Skeleton end points (one neighbor). |
@@ -179,10 +189,10 @@ reference. Sections 4-6 start collapsed.
 | Gray range maximum | 6. Texture | 0 | gray level | Top of the gray range; 0 means the image's full scale. A dim image on full scale lands in one or two levels and its texture reads as flat, so set the range to fit the fibers and use the same range for every image you compare. A run reports the fibers' own range and warns when too few levels were used. |
 | Properties: contrast, correlation, energy, homogeneity, entropy, dissimilarity | 6. Texture | all checked | -- | Which GLCM features to compute. |
 | Also one value per distance | 6. Texture | unchecked | -- | With two or more distances, also report each feature at each distance, e.g. `Contrast (GLCM, 10.05 um)`, next to the average over all distances. |
-| Output directory | 7. Output | (blank) | -- | Base folder for the run. Blank means `<project>/fiber-analysis/` with a project open, otherwise `~/QuPath/fiber-out/`. Each run writes a timestamped subfolder. |
+| Output directory | 7. Output | (blank) | -- | Base folder for the run. Blank means `<project>/fiber-analysis/`; with no project open, choose a folder (a script run with no project falls back to `~/QuPath/fiber-out/`). Each run writes a timestamped subfolder. |
 | Write fiber-mask overlay PNG | 7. Output | checked | -- | Save the segmented mask as a magenta overlay PNG. Written anyway when collagen detection objects are on, because they are built from it. |
 | Write straightness heatmap PNG | 7. Output | checked | -- | Save a heatmap of per-window tortuosity (chord/arc). |
-| Write GLCM heatmap PNG + Property | 7. Output | checked, contrast | -- | Save per-window texture heatmaps. **Currently every enabled GLCM property gets its own PNG**; the **Property** choice is recorded in `params.json` but does not limit what is written. |
+| Write GLCM heatmap PNG | 7. Output | checked | -- | Save one per-window heatmap PNG for each GLCM property checked in Section 6 (`texture_<property>_overlay.png`). |
 | Write morphometric summary text | 7. Output | checked | -- | Write `morphometrics_summary.txt` with the annotation-level morphometrics. |
 | Write results.json sidecar | 7. Output | checked | -- | Write the annotation-level result dictionary as `results.json`. |
 | Write per-window arrays (.npz) | 7. Output | unchecked | -- | Write `window_metrics.npz` (per-window NumPy arrays). |
@@ -200,7 +210,9 @@ the user guide, also F1; see the note at the top of the guide).
 
 Each run writes a folder `<base>/YYYYMMDD_HHMMSS_<hash>/` under the
 output directory, holding `params.json`, `params.txt`, `rerun.groovy`
-and `threshold.json` (see the next section), `run_notes.txt` when the
+and `threshold.json` (see the next section; a run with **Use existing
+fiber mask** has no threshold and writes `existing_mask.json` instead,
+which records what made the mask), `run_notes.txt` when the
 run has something to report (a batch's pixel-size choice, a texture
 warning), and one subfolder per annotation, `annotation_NNN_<name>/`.
 Filenames are ASCII.
@@ -218,8 +230,8 @@ Per-annotation files (the PNGs only when their Output box is ticked):
 - `morphometrics_overlay.png` -- per-window HDM heatmap, plus one
   `morph_<metric>_overlay.png` per per-window morphometric (coverage,
   HDM, ridge count, length, branch points, endpoints, curvature,
-  fractal dimension, lacunarity, gap widths). These are written with the
-  fiber-mask overlay.
+  fractal dimension, lacunarity, gap widths). These are written
+  whenever morphometrics and window analysis are on.
 - `morphometrics_summary.txt` -- annotation-level morphometrics as text.
 - `results.json` -- the annotation-level result dictionary.
 - `window_metrics.npz` -- per-window NumPy arrays (off by default).
@@ -229,9 +241,15 @@ Per-annotation files (the PNGs only when their Output box is ticked):
 
 A **tiled** run (an annotation over 64 megapixels at the read scale)
 writes the merged `windows.json` and, with the sidecar on, a summary
-`results.json` at the annotation level, and keeps every tile's own
-files under `tiles/tile_NNNNN/`. It writes no annotation-level PNGs.
-See the user guide, "Large annotations are tiled automatically".
+`results.json` at the annotation level. With **Write fiber-mask overlay
+PNG** on it also writes `fiber_mask_overlay_stitched.png`, the fiber
+mask of the whole annotation at a coarser scale (at most 16
+megapixels), which the card's **Fiber mask** toggle shows. Heatmaps,
+`morphometrics_summary.txt` and `window_metrics.npz` stay per tile under
+`tiles/tile_NNNNN/`, and `run_notes.txt` lists what the tiled annotation
+lacks. Collagen objects are traced per tile, so a fiber blob that
+crosses a tile seam becomes one object on each side. See the user
+guide, "Large annotations are tiled automatically".
 
 **`windows.json` schema.** A wrapper object, not a bare list:
 
@@ -252,7 +270,8 @@ See the user guide, "Large annotations are tiled automatically".
       "n_fiber_px": int,        # fiber pixels in the window
       "fiber_coverage_percent": float,   # n_fiber_px / window area * 100
       # the rest only when included is true:
-      "n_fibers": int,          # traced fibers in the window ("Ridge count")
+      "n_fibers": int,          # traced fibers whose center is in the window ("Ridge count");
+                                #   with overlap a fiber counts in every window holding it
       "hdm": float,             # fiber in zone / zone pixels in this window
       "mean_angle_deg": float,  # axial mean fiber orientation, 0-180 (0 = horizontal)
       "order_parameter": float, # 0 = isotropic, 1 = perfectly aligned
@@ -326,14 +345,18 @@ Per analysis, the files land as follows:
 
 | Analysis | Output dir | Files |
 |---|---|---|
-| Per-annotation fiber analysis | `<base>/YYYYMMDD_HHMMSS_<hash>/` | `params.json`, `params.txt`, `rerun.groovy`, and `threshold.json` (the cut every annotation in the run used, how it was obtained, and the settings it applies to) |
+| Per-annotation fiber analysis | `<base>/YYYYMMDD_HHMMSS_<hash>/` | `params.json`, `params.txt`, `rerun.groovy`, and `threshold.json` (the cut every annotation in the run used, how it was obtained, and the settings it applies to) or, with **Use existing fiber mask**, `existing_mask.json` (the mask source; for a classifier its name, fiber class, output type, pixel size and a SHA-256 of the classifier; for a file its path, size in bytes, modified time and SHA-256) |
 | Project density map | `<project>/fiber-analysis/density-maps/` | `<image>_density_params.json`, `<image>_density_params.txt`, `<image>_density_rerun.groovy` (one set per image) |
 | Project calibration | `<project>/fiber-analysis/` | `calibration_<name>_params.txt`, `calibration_<name>_rerun.groovy` (the existing `calibration_<name>.json` is itself the params record the rerun reads) |
 
-The rerun scripts use the project + image names recorded in the params at
-write time. If you move the project to a different machine or path, open
-the `.groovy` file and adjust the `projectPath` (and `imageName(s)`) at the
-top of the file.
+The rerun scripts use the paths recorded at write time. If you move the
+project to a different machine or path, edit the paths at the top of the
+`.groovy` file: `paramsJsonPath` (the params file beside the script, or
+`calibration_<name>.json` for a calibration) and `projectPath` (the
+project's `project.qpproj`). A per-annotation rerun finds its image by
+the project entry ID first, so `imageName` only matters when the entry
+was removed and added again; a density script lists its images by name
+in `imageNames`.
 
 </details>
 
@@ -348,10 +371,15 @@ to bottom:
 
 1. A yellow box, **Calibrate threshold across this project
    (recommended)**, with the **Calibrate threshold...** button (below).
+   It needs a params.json loaded first (item 2): the calibration fits
+   that run's settings.
 2. **Params:** click **Browse...** and pick the `params.json` of an
    earlier run (it is in that run's `YYYYMMDD_HHMMSS_<hash>/` folder).
    The batch uses those settings, including the Search area and class
-   filter. To make one, set up the Run dialog on one image and run it.
+   filter. A batch has no viewer selection, so a saved Search area of
+   **Selected annotations** analyzes every annotation on each image;
+   enter classes in **Class override** to narrow it. To make a
+   params.json, set up the Run dialog on one image and run it.
 3. If those settings use an automatic **Gray range**, a red box warns:
    the range is fitted to these images' own pixels, so texture may be
    inconsistent between images and with any other run; do not use it
@@ -388,22 +416,27 @@ maps can share it through **Project Otsu (calibrated)**. Its settings:
 | Sample size | 50 | Annotations sampled at random (1-5000). |
 | Use all available annotations | unchecked | Use every matching annotation instead of a sample. |
 | Image name filter | (blank = all images) | Only images whose name contains this text (case-insensitive). |
-| Class filter | (blank = all classes) | Comma-separated classes; `Unclassified` matches annotations with no class. |
-| Source channel | the Run dialog's | `Raw intensity`, `Hue (HSV)`, `Saturation (HSV)` or `Value (HSV)`. |
-| Ridge filter | the Run dialog's | Must match the run's, or the run refuses the calibration. |
-| Invert intensity (DAB / dark-fiber-on-bright) | the Run dialog's | Tick for stains where fibers are darker than background. |
-| Rolling-ball radius (um) | the Run dialog's | Background subtraction before the fit. |
-| Border zone width (um) | the Run dialog's | Zone width the samples are taken from. |
+| Class filter | the loaded params.json's classes when its Search area is `Annotations of class...`, else blank (= all classes) | Comma-separated classes; `Unclassified` matches annotations with no class. |
+| Source channel | the loaded params.json's | The choices every image the calibration reads offers, as in the Run dialog: `Raw intensity`, `Hue (HSV)` and `Saturation (HSV)` on RGB images, and the images' named channels. An orange note appears when the chosen channel is missing from some image. |
+| Ridge filter | the loaded params.json's | Must match the run's, or the run refuses the calibration. |
+| Invert intensity (DAB / dark-fiber-on-bright) | the loaded params.json's | Tick for stains where fibers are darker than background. |
+| Rolling-ball radius (um) | the loaded params.json's | Background subtraction before the fit. |
+| Border zone width (um) | the loaded params.json's | Zone width the samples are taken from. |
 
-Zone mode, analysis downsample and the ridge-filter sigmas come from
-the Run dialog's saved settings. **Run calibration** writes
+Zone mode, analysis downsample, the ridge-filter sigmas and the
+pixel-size choice come from the loaded params.json and are shown
+read-only under **From the loaded params.json (change them there):**.
+**Run calibration** writes
 `<project>/fiber-analysis/calibration_<name>.json` (the threshold as
 `threshold_normalised`, a fraction of the channel's full scale, with
 the filters, seed, regions used and histogram counts), plus
 `calibration_<name>_params.txt` and `calibration_<name>_rerun.groovy`.
 A run with **Project Otsu (calibrated)** refuses a calibration fitted
 with a different source channel, ridge filter, sigmas, invert or
-rolling-ball setting, and the Run dialog says so in red.
+rolling-ball setting, zone mode, border zone width, analysis downsample
+or analyzed pixel size (pixel sizes within 2% match), and the Run
+dialog and the segmentation preview say so. A calibration made by 0.1.x
+does not record the last four and is refused; calibrate again.
 
 </details>
 
@@ -420,12 +453,19 @@ each selected image, runs the same per-window analysis the regular
 Show it as an overlay, sample it into object measurements, or add it as
 channels in a new project entry; the original image is never changed.
 
+The window size, overlap, **Min coverage per window** and **Min branch
+length** come from the Run dialog's saved settings, and the dialog shows
+them. Windows below the minimum coverage (default 5%) are empty (NaN)
+in the six fiber channels; `Signal density (no threshold)` and
+`Intensity coherence (no threshold)` keep them.
+
 Menu: `Extensions > Fiber Analysis > Project density map...`
 
 ### Output (you pick at dialog time)
 
-- **Map file only** (default). Use `Show density map as overlay...`
-  and `Sample fiber density into measurements`.
+- **Map file only (overlay and sampling commands)** (default). Use
+  `Show density map as overlay...` and `Sample fiber density into
+  measurements`. It adds and rebuilds no project entry.
 - **Also add each image with its density channels as a new entry**.
   After the run, each image gets a new project entry
   `<image> [fiber density]`: the image converted to 32-bit float,
@@ -443,8 +483,16 @@ pixel type / dimensions / calibration status (populated in a
 background thread). Right = settings. A live validation banner
 gates the Run button:
 
-- Any selected image **without pixel calibration** -- **blocked**
-  in either mode (the um window size can't be translated).
+- **Blocked:** a selected image **without pixel calibration** (the um
+  window size can't be translated); the Run dialog's saved settings use
+  **Use existing fiber mask** (the map finds fibers itself: open the Run
+  dialog, choose **Segment within extension**, check its settings and
+  click **Save defaults**); a pixel-positivity row with no channel or
+  threshold, or the box ticked with no row; **Inside area annotations
+  of class:** with no class chosen, or **Inside selected annotations** with
+  an image other than the open one picked, or nothing selected.
+- **Warned:** images of different pixel sizes (Run asks for
+  confirmation).
 - Otherwise ready; the banner says whether each image will also get a
   channels entry.
 
@@ -474,7 +522,7 @@ gates the Run button:
 
 | Item | What it does |
 |---|---|
-| `Project density map...` | Open the picker, pick images, Run. Writes one map file per image; with the channels option, also adds each image with its density channels as a new project entry and opens the current image's. |
+| `Project density map...` | Open the picker, pick images, **Compute density maps**. Writes one map file per image; with the channels option, also adds each image with its density channels as a new project entry and opens the current image's. |
 | `Sample fiber density into measurements` | For the open image, reads its map and writes the mean of each channel inside each target object (read every quarter cell; a smaller object takes its center's value) as `Density: <channel>`. Targets selected objects when any are selected, otherwise all annotations. |
 | `Show density map as overlay...` | Draw one channel of a density or classifier map over the open image in color, on QuPath's pixel-classification layer: the image's own maps, or a map from another project image of the same size (another image of the same slide). Exact at any zoom; the location bar shows the value under the cursor. The image is not changed. |
 | `Add density channels as a new image` | Add a new project entry: the open image (as float32) followed by its density map's channels, tagged `Fiber analysis` / `Fiber source image` / `Fiber map` in the project metadata. The original entry is not changed; adding again refreshes the same entry. |
@@ -495,7 +543,19 @@ gates the Run button:
   `Intensity coherence (no threshold)`. The dialog adds optional
   **object-density** channels (one per chosen class) and
   **pixel-positivity** channels (one per channel and cut); there is no
-  per-channel toggle for the eight.
+  per-channel toggle for the eight. `Object density: <class>` is the
+  fraction (0-1) of each window covered by annotations and detections
+  of that class, an area fraction rather than an object count; a window
+  with none of the class reads 0. A pixel-positivity channel is the
+  fraction (0-1) of each window's pixels where the named channel meets
+  the rule (for example `> 500`), in that channel's own gray levels.
+- **Sampled coverage leaves out sparse windows.** Sampling
+  skips empty (NaN) cells, so `Density: Fiber coverage (%)` sampled
+  into an object is the mean over its windows at or above **Min coverage
+  per window**, not the object's own coverage; sparse tissue reads
+  denser than it is. Set **Min coverage per window** to 0 in the Run
+  dialog, and click **Save defaults**, before computing a map whose
+  coverage you will sample.
 
 </details>
 
@@ -531,10 +591,15 @@ enabled texture property, **Morph:** up to 15 per-window morphometrics
 `mean_curvature_per_px`, `mean_curvature_per_um`,
 `fractal_dimension`, `lacunarity_mean`, `gap_mean_px`, `gap_mean_um`,
 `gap_max_px`, `gap_max_um`; per-box lacunarity is in `windows.json`
-only). An entry is missing when its metric or family was off, or when
-its PNG was not written: the **Morph:** heatmaps are written only with
-the fiber-mask overlay, and a tiled run writes no annotation-level
-PNGs at all (look under `tiles/`).
+only). An entry is missing when its metric or family was off, or
+window analysis was off. A tiled annotation has no heatmap entries (its
+per-tile heatmaps are under `tiles/`).
+
+### A run with "Use existing fiber mask" is refused
+
+The messages, what causes each and what to do are in the user guide,
+section 10, under
+[Use existing fiber mask](documentation/fiber-analysis.md#use-existing-fiber-mask-messages).
 
 ### Project-calibrated Otsu picked an absurd threshold
 
@@ -595,9 +660,10 @@ task, file an issue with the console log.
 
 The map is float32 and NaN means no data, so an empty map is NaN (drawn
 transparent), not 0. Common causes: no window held any fiber under the
-current segmentation settings (`Fiber coverage (%)` is NaN where a
-window has no fiber; check the settings with **Preview
-segmentation...** in the Run dialog first), or **Analyze:** was limited
+current segmentation settings (`Fiber coverage (%)` and the other
+fiber channels are NaN where a window is below the Run's **Min coverage
+per window**, default 5%; check the settings with **Preview
+segmentation...** in the Run dialog first, or lower **Min coverage per window**), or **Analyze:** was limited
 to annotations and none matched. The dialog blocks images with no pixel
 size; set one in QuPath before computing.
 

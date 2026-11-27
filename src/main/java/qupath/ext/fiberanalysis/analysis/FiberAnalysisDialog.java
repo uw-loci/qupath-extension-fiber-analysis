@@ -1179,7 +1179,7 @@ public final class FiberAnalysisDialog {
         maskFileField.setPrefColumnCount(28);
         applyTooltip(
                 maskFileField,
-                "A binary fiber mask of the WHOLE image (.png, .tif, .npy or .npz; any non-zero pixel is fiber),"
+                "A binary fiber mask of the WHOLE image (.png, .tif, .npy or .npz; a pixel is fiber when any color channel is non-zero),"
                         + " at full resolution or at one downsample of it, for example a mask exported from QuPath"
                         + " at downsample 4. Each annotation's region is cut from it.");
         Button browseMaskBtn = new Button("Browse...");
