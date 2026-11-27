@@ -4,7 +4,9 @@ All notable changes to the Fiber Analysis extension. Versions name the
 extension jar; the bundled Python package `fiberlib` has its own version,
 recorded in every result file.
 
-## Unreleased
+## 0.4.0 (2026-11-27)
+
+fiberlib 0.4.9.
 
 ### Read before upgrading
 
