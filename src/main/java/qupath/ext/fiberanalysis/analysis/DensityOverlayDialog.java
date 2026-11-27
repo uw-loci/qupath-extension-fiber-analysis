@@ -30,6 +30,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
@@ -152,6 +153,7 @@ public final class DensityOverlayDialog {
                         + " with the predicted class and 'Max probability', uncertain windows fade."));
         status = new Label();
         status.setWrapText(true);
+        status.setMinHeight(Region.USE_PREF_SIZE);
         status.setMaxWidth(420);
         thresholdLabel = new Label();
         thresholdLabel.setWrapText(true);
@@ -184,6 +186,7 @@ public final class DensityOverlayDialog {
                 + " classifier overlay. The image itself is not changed.");
         note.setWrapText(true);
         note.setMaxWidth(420);
+        note.setMinHeight(Region.USE_PREF_SIZE);
         note.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
 
         Button showBtn = new Button("Show");

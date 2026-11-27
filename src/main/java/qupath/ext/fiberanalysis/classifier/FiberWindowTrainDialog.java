@@ -143,6 +143,9 @@ public final class FiberWindowTrainDialog {
         geometryLabel = wrapping(new Label());
         thresholdWarning = wrapping(new Label());
         thresholdWarning.setStyle("-fx-text-fill: -fx-accent;");
+        // First in its section, so a refusal is seen without scrolling; takes no space when empty.
+        thresholdWarning.managedProperty().bind(thresholdWarning.textProperty().isNotEmpty());
+        thresholdWarning.visibleProperty().bind(thresholdWarning.managedProperty());
 
         modelNameField = new TextField("window-classifier");
         projectLocalCheck = new CheckBox("Save inside this project");
@@ -197,7 +200,7 @@ public final class FiberWindowTrainDialog {
                 SectionBuilder.createSection(
                         "Window and segmentation (from the Run dialog)",
                         true,
-                        new VBox(4, geometryLabel, thresholdWarning)),
+                        new VBox(4, thresholdWarning, geometryLabel)),
                 SectionBuilder.createSection("Model and validation", true, settings));
         ScrollPane scroll = new ScrollPane(scrolled);
         scroll.setFitToWidth(true);

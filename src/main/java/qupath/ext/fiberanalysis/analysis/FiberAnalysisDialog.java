@@ -2375,12 +2375,18 @@ public final class FiberAnalysisDialog {
         } else {
             names = listPathClasses();
         }
+        // Clear first: replacing the items under a selected value leaves the
+        // button showing the old index's text.
+        objectClassCombo.getSelectionModel().clearSelection();
+        objectClassCombo.setValue(null);
         objectClassCombo.getItems().setAll(names.isEmpty() ? List.of("(none available)") : names);
         String pick;
         if (keep != null && names.contains(keep)) pick = keep;
         else if (fromClassifier) pick = ExistingMask.suggestFiberClass(names);
         else pick = names.isEmpty() ? null : names.get(0);
-        objectClassCombo.setValue(pick == null ? objectClassCombo.getItems().get(0) : pick);
+        objectClassCombo
+                .getSelectionModel()
+                .select(pick == null ? objectClassCombo.getItems().get(0) : pick);
     }
 
     private List<String> listClassifierClasses(String classifierName) {
@@ -2399,20 +2405,39 @@ public final class FiberAnalysisDialog {
         }
     }
 
+    /**
+     * @return the classes of objects in the open image (those the fiber objects can have), then the rest of
+     *     QuPath's class list
+     */
     private List<String> listPathClasses() {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
         try {
+            ImageData<BufferedImage> data = currentImageData();
+            if (data != null) {
+                java.util.TreeSet<String> present = new java.util.TreeSet<>();
+                for (var o : data.getHierarchy().getAllObjects(false)) {
+                    PathClass pc = o.getPathClass();
+                    if (pc != null
+                            && o.getROI() != null
+                            && o.getROI().isArea()
+                            && !FiberSegmentationPreviewWindow.isPreviewMarker(o)) {
+                        present.add(pc.toString());
+                    }
+                }
+                out.addAll(present);
+            }
             if (gui != null && gui.getAvailablePathClasses() != null) {
-                return gui.getAvailablePathClasses().stream()
+                gui.getAvailablePathClasses().stream()
                         .filter(pc -> pc != null
                                 && pc.getName() != null
                                 && !pc.getName().isEmpty())
                         .map(PathClass::toString)
-                        .collect(Collectors.toList());
+                        .forEach(out::add);
             }
         } catch (Exception e) {
             logger.debug("Could not list path classes: {}", e.getMessage());
         }
-        return List.of();
+        return new ArrayList<>(out);
     }
 
     private static List<Double> parseDoubleList(String text) {

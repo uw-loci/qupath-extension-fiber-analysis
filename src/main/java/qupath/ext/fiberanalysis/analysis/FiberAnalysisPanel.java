@@ -27,7 +27,9 @@ import javafx.scene.control.ToggleButton;
 import javafx.scene.control.Tooltip;
 import javafx.scene.effect.DropShadow;
 import javafx.scene.image.WritableImage;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
@@ -221,8 +223,9 @@ public class FiberAnalysisPanel extends VBox {
         VBox body = new VBox(6);
         body.setPadding(new Insets(8));
 
-        // Per-card overlay buttons.
-        HBox buttonRow = new HBox(8);
+        // Per-card overlay buttons; they wrap onto a second line in a narrow panel
+        // instead of being cut to "Fiber ...".
+        FlowPane buttonRow = new FlowPane(8, 6);
         buttonRow.setAlignment(Pos.CENTER_LEFT);
 
         // Overlay controls are selection-driven: picking a value (or pressing
@@ -251,6 +254,7 @@ public class FiberAnalysisPanel extends VBox {
         summaryBtn.setTooltip(new Tooltip("Show the full text summary of every metric reported for this annotation."));
         summaryBtn.setOnAction(e ->
                 Dialogs.showPlainMessage("Fiber Analysis Summary -- " + safeName(result), buildSummaryText(result)));
+        summaryBtn.setMinWidth(Region.USE_PREF_SIZE);
         buttonRow.getChildren().add(summaryBtn);
 
         body.getChildren().add(buttonRow);
@@ -322,7 +326,7 @@ public class FiberAnalysisPanel extends VBox {
      * other control) deactivates it. The button glows while it owns the
      * active overlay.
      */
-    private void addOverlayToggle(HBox row, AnnotationResult result, String label, String slot) {
+    private void addOverlayToggle(Pane row, AnnotationResult result, String label, String slot) {
         if (result.overlayPngs() == null) return;
         Path png = result.overlayPngs().get(slot);
         if (png == null) return;
@@ -361,6 +365,7 @@ public class FiberAnalysisPanel extends VBox {
             applyActiveGlow(btn, active);
         });
 
+        btn.setMinWidth(Region.USE_PREF_SIZE);
         row.getChildren().add(btn);
     }
 
@@ -389,7 +394,7 @@ public class FiberAnalysisPanel extends VBox {
      * combo glows while it owns the active overlay. Switching to another
      * control (in this card or any other) resets this combo to "(none)".
      */
-    private void addFamilyOverlayCombo(HBox row, AnnotationResult result, String label, String slotPrefix) {
+    private void addFamilyOverlayCombo(Pane row, AnnotationResult result, String label, String slotPrefix) {
         if (result.overlayPngs() == null) return;
         java.util.List<String> props = new java.util.ArrayList<>();
         for (String slot : result.overlayPngs().keySet()) {
@@ -450,7 +455,10 @@ public class FiberAnalysisPanel extends VBox {
             applyActiveGlow(combo, iAmActive);
         });
 
-        row.getChildren().addAll(familyLabel, combo);
+        familyLabel.setMinWidth(Region.USE_PREF_SIZE);
+        HBox group = new HBox(4, familyLabel, combo);
+        group.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().add(group);
     }
 
     /**
