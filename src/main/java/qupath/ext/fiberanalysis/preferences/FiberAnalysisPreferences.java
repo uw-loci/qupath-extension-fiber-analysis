@@ -151,7 +151,6 @@ public class FiberAnalysisPreferences {
     public static final boolean DEFAULT_FIBER_MASK_OVERLAY = true;
     public static final boolean DEFAULT_STRAIGHTNESS_HEATMAP = true;
     public static final boolean DEFAULT_GLCM_HEATMAP = true;
-    public static final String DEFAULT_GLCM_HEATMAP_PROP = "contrast";
     public static final boolean DEFAULT_MORPH_SUMMARY = true;
     public static final boolean DEFAULT_JSON_SIDECAR = true;
     public static final boolean DEFAULT_EMIT_NPZ = false;
@@ -227,7 +226,6 @@ public class FiberAnalysisPreferences {
     private static BooleanProperty fiberMaskOverlay;
     private static BooleanProperty straightnessHeatmap;
     private static BooleanProperty glcmHeatmap;
-    private static StringProperty glcmHeatmapProp;
     private static BooleanProperty morphSummary;
     private static BooleanProperty jsonSidecar;
     private static BooleanProperty emitNpz;
@@ -333,7 +331,6 @@ public class FiberAnalysisPreferences {
         straightnessHeatmap =
                 PathPrefs.createPersistentPreference(PREFIX + "straightnessHeatmap", DEFAULT_STRAIGHTNESS_HEATMAP);
         glcmHeatmap = PathPrefs.createPersistentPreference(PREFIX + "glcmHeatmap", DEFAULT_GLCM_HEATMAP);
-        glcmHeatmapProp = PathPrefs.createPersistentPreference(PREFIX + "glcmHeatmapProp", DEFAULT_GLCM_HEATMAP_PROP);
         morphSummary = PathPrefs.createPersistentPreference(PREFIX + "morphSummary", DEFAULT_MORPH_SUMMARY);
         jsonSidecar = PathPrefs.createPersistentPreference(PREFIX + "jsonSidecar", DEFAULT_JSON_SIDECAR);
         emitNpz = PathPrefs.createPersistentPreference(PREFIX + "emitNpz", DEFAULT_EMIT_NPZ);
@@ -602,10 +599,6 @@ public class FiberAnalysisPreferences {
         return glcmHeatmap;
     }
 
-    public static StringProperty glcmHeatmapPropProperty() {
-        return glcmHeatmapProp;
-    }
-
     public static BooleanProperty morphSummaryProperty() {
         return morphSummary;
     }
@@ -664,9 +657,11 @@ public class FiberAnalysisPreferences {
                                 + "blank for the default (~/.local/share/appose), which is right "
                                 + "on most machines. Set it when the home directory is "
                                 + "quota-limited -- on HPC and managed desktops an environment "
-                                + "this size fails there. Changing it builds a NEW environment; "
-                                + "the old one is left alone and you are asked about removing it "
-                                + "only after the new one works.")
+                                + "this size fails there. Once the environment has started in a "
+                                + "session, a change takes effect after restarting QuPath, or at once "
+                                + "with Setup environment... > Rebuild environment. A NEW environment "
+                                + "is built at the new location; the old one is left alone and you "
+                                + "are asked about removing it only after the new one works.")
                         .build());
     }
 

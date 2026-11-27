@@ -9,6 +9,7 @@
  */
 package qupath.ext.fiberanalysis.ui;
 
+import java.nio.file.Path;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -64,7 +65,16 @@ public class SetupEnvironmentDialog {
         Label header = new Label("Fiber Analysis Python environment");
         header.setStyle("-fx-font-weight: bold; -fx-font-size: 13px;");
 
-        Label pathLabel = new Label("Location: " + ApposeFiberService.getEnvironmentPath());
+        Path configured = ApposeFiberService.configuredEnvironmentPath();
+        Path running = ApposeFiberService.getEnvironmentPath();
+        String location = "Location: " + configured;
+        if (!running.equals(configured)) {
+            location += "\nRunning now from " + running + " until Rebuild environment or a QuPath restart."
+                    + " Rebuild environment builds at the location above and leaves that one in place.";
+        }
+        Label pathLabel = new Label(location);
+        pathLabel.setWrapText(true);
+        pathLabel.setMaxWidth(420);
         pathLabel.setStyle("-fx-text-fill: gray; -fx-font-size: 11px;");
 
         statusLabel.setStyle("-fx-text-fill: #444; -fx-font-size: 12px;");

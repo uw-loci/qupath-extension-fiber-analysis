@@ -32,18 +32,23 @@ import qupath.lib.regions.RegionRequest;
  * <p>Only RGB images go out with several bands. PIL keeps just the high byte
  * of a multi-band 16-bit PNG, so every other image goes out as one band at its
  * own bit depth: the band the user named, or the brightest band at each pixel
- * for Raw intensity and Value. A manual threshold therefore stays a real gray
+ * for Raw intensity. A manual threshold therefore stays a real gray
  * level on 16-bit sources.
  */
 public final class SourceChannel {
 
     private static final Logger logger = LoggerFactory.getLogger(SourceChannel.class);
 
-    /** Choices that are computed from RGB by the Python side rather than being a band. */
+    /** The brightest band at each pixel; on RGB this is the HSV value. */
     static final String RAW = "Raw intensity";
 
     static final String HUE = "Hue (HSV)";
     static final String SATURATION = "Saturation (HSV)";
+
+    /**
+     * Computes exactly what {@link #RAW} does, so it is no longer offered. Still read from saved
+     * preferences, params.json files and calibrations.
+     */
     static final String VALUE = "Value (HSV)";
 
     private static final List<String> DERIVED = List.of(RAW, HUE, SATURATION, VALUE);
@@ -51,15 +56,23 @@ public final class SourceChannel {
     private SourceChannel() {}
 
     /**
+     * @param choice a saved source-channel value
+     * @return the offered choice that computes the same pixels: {@link #VALUE} becomes {@link #RAW}
+     */
+    static String offered(String choice) {
+        return VALUE.equals(choice) ? RAW : choice;
+    }
+
+    /**
      * @param server image to list channels for; may be null
-     * @return the derived choices followed by the image's own channel names;
-     *     no Hue or Saturation on a multi-channel image that is not RGB
+     * @return Raw intensity, then Hue and Saturation unless the image is known not to be RGB,
+     *     then the image's own channel names
      */
     static List<String> choices(ImageServer<BufferedImage> server) {
-        List<String> out = new ArrayList<>(DERIVED);
+        List<String> out = new ArrayList<>(List.of(RAW, HUE, SATURATION));
         if (server == null) return out;
         try {
-            if (!server.isRGB() && server.nChannels() > 1) out.removeAll(List.of(HUE, SATURATION));
+            if (!server.isRGB()) out.removeAll(List.of(HUE, SATURATION));
             for (int i = 0; i < server.nChannels(); i++) {
                 String name = server.getChannel(i).getName();
                 if (name != null && !name.isBlank() && !out.contains(name)) out.add(name);

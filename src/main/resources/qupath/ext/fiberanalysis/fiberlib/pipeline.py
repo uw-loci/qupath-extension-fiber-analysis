@@ -145,7 +145,6 @@ def analyze(
     texture_entropy=False,
     texture_dissimilarity=False,
     glcm_per_distance=False,
-    heatmap_property="contrast",
     # Boundary bbox fallback (region-local pixel coords)
     bbox_x=0,
     bbox_y=0,
@@ -330,7 +329,6 @@ def analyze(
     out_dir = str(output_dir) if output_dir else None
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    heatmap_prop = str(heatmap_property)
     emit_mask = bool(emit_fiber_mask_png) and out_dir is not None
     emit_str = bool(emit_straightness_png) and out_dir is not None
     emit_glcm = bool(emit_glcm_png) and out_dir is not None
@@ -401,7 +399,6 @@ def analyze(
         pe["glcm_distances_px"] = list(glcm_dists)
         pe["texture_props"] = [k for k, on in tex_props.items() if on]
         pe["glcm_per_distance"] = bool(glcm_per_distance)
-        pe["heatmap_property"] = heatmap_prop
     pe["emit_fiber_mask_png"] = emit_mask
     pe["emit_straightness_png"] = emit_str
     pe["emit_glcm_png"] = emit_glcm
@@ -907,7 +904,9 @@ def analyze(
                     else:
                         fh.write(f"{k}: {v}\n")
 
-        if morph_on and window_grid is not None and emit_mask:
+        # Morph heatmaps follow the morphometrics and window settings alone, not
+        # the fiber-mask overlay checkbox.
+        if morph_on and window_grid is not None:
             # Build a per-window "is this window inside the analysis zone?"
             # boolean grid the same way GLCM gates its per-window arrays --
             # any zone-mask pixel in the cell means the window is in-bounds.
@@ -932,8 +931,15 @@ def analyze(
                     if zone_mask[y0:y1, x0:x1].any():
                         zone_included[iy, ix] = True
 
+            # Windows below the coverage gate are transparent in every heatmap,
+            # including the ones built from integer counts (n_pixels, n_fibers),
+            # which the gate above cannot set to NaN in place.
+            below_gate = window_grid.get("_invalid_below_coverage")
+            if below_gate is not None and below_gate.shape == zone_included.shape:
+                zone_included &= ~below_gate
+
             def _zone_masked(arr):
-                """Return a float copy of arr with non-included cells NaN'd."""
+                """Float copy of arr, NaN outside the zone and below the coverage gate."""
                 if arr is None:
                     return None
                 a = np.asarray(arr, dtype=np.float32).copy()

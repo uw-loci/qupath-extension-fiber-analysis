@@ -21,8 +21,6 @@ import org.slf4j.LoggerFactory;
 import qupath.lib.analysis.images.ContourTracing;
 import qupath.lib.analysis.images.SimpleImage;
 import qupath.lib.analysis.images.SimpleImages;
-import qupath.lib.images.ImageData;
-import qupath.lib.images.servers.ImageServer;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.classes.PathClass;
@@ -39,6 +37,10 @@ import qupath.lib.roi.interfaces.ROI;
  * where fiber, 0 elsewhere). Detections are returned in image-pixel
  * coordinates so the caller can add them to the hierarchy in one shot; the
  * hierarchy resolves the source annotation as parent by containment.
+ *
+ * <p>On a tiled annotation each tile's mask is traced on its own, kept to the
+ * rectangle that tile owns, so the tiles' objects do not overlap; a blob that
+ * crosses a seam becomes one object on each side.
  *
  * <p>Each detection carries an {@code Area um^2} measurement plus optional
  * provenance keys ({@code run_id}, {@code params_hash}, {@code annotation_index})
@@ -59,10 +61,12 @@ final class CollagenObjectBuilder {
     /**
      * Build split collagen detections from the fiber-mask PNG.
      *
-     * @param imageData      source image (used for server path on the RegionRequest)
+     * @param serverPath     path of the image server, for the RegionRequest
      * @param maskPng        path to fiber_mask_overlay.png
      * @param regionOffsetX  region X offset in image-pixel coordinates
      * @param regionOffsetY  region Y offset in image-pixel coordinates
+     * @param keep           rectangle of the mask, in mask pixels, whose fiber is
+     *                       traced; null traces the whole mask
      * @param downsample     scale the mask was produced at; mask pixels are
      *                       multiplied by this to reach image coordinates
      * @param annotationIndex 0-based annotation index in the run (for measurement provenance)
@@ -73,10 +77,11 @@ final class CollagenObjectBuilder {
      * @return list of detection objects, possibly empty (never null)
      */
     static List<PathObject> build(
-            ImageData<BufferedImage> imageData,
+            String serverPath,
             Path maskPng,
             int regionOffsetX,
             int regionOffsetY,
+            TileGrid.Box keep,
             int annotationIndex,
             String runId,
             String paramsHash,
@@ -104,6 +109,13 @@ final class CollagenObjectBuilder {
         float[] alpha = new float[w * h];
         boolean anyFiber = false;
         for (int i = 0; i < argb.length; i++) {
+            if (keep != null) {
+                int px = i % w;
+                int py = i / w;
+                if (px < keep.x() || py < keep.y() || px >= keep.x() + keep.w() || py >= keep.y() + keep.h()) {
+                    continue;
+                }
+            }
             int a = (argb[i] >>> 24) & 0xFF;
             alpha[i] = a;
             if (a > ALPHA_THRESHOLD) {
@@ -117,13 +129,12 @@ final class CollagenObjectBuilder {
 
         SimpleImage simple = SimpleImages.createFloatImage(alpha, w, h);
 
-        ImageServer<BufferedImage> server = imageData.getServer();
         // ContourTracing maps mask pixels to image pixels through this request,
         // so giving it the read downsample and the FULL-image extent scales the
         // traced ROIs for free. Hardcoding 1.0 here would pin every collagen
         // detection to the top-left 1/downsample of the annotation.
         RegionRequest request = RegionRequest.createInstance(
-                server.getPath(), downsample, regionOffsetX, regionOffsetY, (int) Math.round(w * downsample), (int)
+                serverPath, downsample, regionOffsetX, regionOffsetY, (int) Math.round(w * downsample), (int)
                         Math.round(h * downsample));
         ROI traced = ContourTracing.createTracedROI(simple, ALPHA_THRESHOLD, Double.POSITIVE_INFINITY, request);
         if (traced == null || traced.isEmpty()) {

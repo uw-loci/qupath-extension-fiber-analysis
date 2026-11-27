@@ -31,6 +31,7 @@ import java.util.Map;
  * @param downsample       scale the region was READ at; region-local pixel
  *                         coordinates must be multiplied by this to land back
  *                         in image coordinates
+ * @param imagePath        server path of the image the annotation is on
  */
 public record AnnotationResult(
         int index,
@@ -42,4 +43,14 @@ public record AnnotationResult(
         int regionOffsetY,
         int regionW,
         int regionH,
-        double downsample) {}
+        double downsample,
+        String imagePath) {
+
+    /**
+     * @param openImagePath server path of the image open in the viewer; may be null
+     * @return true when this result's overlays belong on that image
+     */
+    public boolean isOn(String openImagePath) {
+        return imagePath != null && imagePath.equals(openImagePath);
+    }
+}

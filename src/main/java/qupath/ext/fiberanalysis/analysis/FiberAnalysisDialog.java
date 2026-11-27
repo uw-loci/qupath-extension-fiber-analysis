@@ -175,7 +175,6 @@ public final class FiberAnalysisDialog {
     private CheckBox fiberMaskOverlayCheck;
     private CheckBox straightnessHeatmapCheck;
     private CheckBox glcmHeatmapCheck;
-    private ComboBox<String> glcmHeatmapProperty;
     private CheckBox morphSummaryCheck;
     private CheckBox jsonSidecarCheck;
     private CheckBox emitNpzCheck;
@@ -406,6 +405,7 @@ public final class FiberAnalysisDialog {
         if (previous == null || previous.isBlank()) {
             previous = FiberAnalysisPreferences.internalChannelProperty().get();
         }
+        previous = SourceChannel.offered(previous);
         var server = gui == null || gui.getImageData() == null
                 ? null
                 : gui.getImageData().getServer();
@@ -413,7 +413,7 @@ public final class FiberAnalysisDialog {
         if (internalChannelCombo.getItems().contains(previous)) {
             internalChannelCombo.setValue(previous);
         } else {
-            internalChannelCombo.setValue(SourceChannel.VALUE);
+            internalChannelCombo.setValue(SourceChannel.RAW);
         }
         refreshManualThresholdRange();
     }
@@ -500,7 +500,11 @@ public final class FiberAnalysisDialog {
 
         long bestW = 0;
         long bestH = 0;
-        for (PathObject ann : selectedAnnotations()) {
+        List<PathObject> runSet = resolveAnnotations(
+                searchAreaCodeFromLabel(searchAreaCombo == null ? null : searchAreaCombo.getValue()),
+                classFilterCheckedAsCsv(),
+                currentImageData());
+        for (PathObject ann : runSet) {
             if (ann.getROI() == null) continue;
             long w = (long) Math.ceil(ann.getROI().getBoundsWidth()) + 2L * pad;
             long h = (long) Math.ceil(ann.getROI().getBoundsHeight()) + 2L * pad;
@@ -510,7 +514,19 @@ public final class FiberAnalysisDialog {
             }
         }
         if (bestW <= 0 || bestH <= 0) return "";
+        return regionEstimateText(bestW, bestH, downsample, pad, pxUm, FiberAnalysisWorkflow.tileBudgetPx());
+    }
 
+    /**
+     * @param bestW      largest padded region width, full-image pixels
+     * @param bestH      largest padded region height, full-image pixels
+     * @param downsample analysis downsample
+     * @param pad        padding added on each side, pixels
+     * @param pxUm       pixel size, um
+     * @param tileBudget largest read, in pixels, that is analyzed in one piece
+     * @return the region-size line, saying when the region will be tiled
+     */
+    static String regionEstimateText(long bestW, long bestH, double downsample, int pad, double pxUm, long tileBudget) {
         long readW = (long) Math.ceil(bestW / downsample);
         long readH = (long) Math.ceil(bestH / downsample);
         long samples = readW * readH;
@@ -523,9 +539,14 @@ public final class FiberAnalysisDialog {
                 readH,
                 samples / 1e6,
                 downsample);
-        if (samples > Integer.MAX_VALUE) {
-            double needed = Math.ceil(Math.sqrt((double) bestW * bestH / (double) Integer.MAX_VALUE));
-            return size + "  -- TOO LARGE TO READ. Raise the downsample to at least " + (long) needed + ".";
+        if (samples > tileBudget) {
+            return size
+                    + String.format(
+                            Locale.ROOT,
+                            "  -- above %d MP, so it will be analyzed in tiles. A tiled annotation has a fiber-mask"
+                                    + " overlay but no heatmap overlays or Radon; the run lists everything it"
+                                    + " leaves out.",
+                            tileBudget / 1_000_000);
         }
         return size + "  (dilation " + pad + " px from a " + String.format(Locale.ROOT, "%.4f", pxUm)
                 + " um/px pixel size)";
@@ -616,7 +637,7 @@ public final class FiberAnalysisDialog {
         applyTooltip(
                 classFilterCombo,
                 "Pick one or more QuPath classes. Only annotations whose class matches a checked entry"
-                        + "are analyzed. 'Unclassified' matches annotations with no class assigned.");
+                        + " are analyzed. 'Unclassified' matches annotations with no class assigned.");
         Button classRefreshBtn = new Button("Refresh");
         classRefreshBtn.setTooltip(installDelay(
                 new Tooltip("Re-scan the current image (and project as fallback) for class names. Use after"
@@ -735,6 +756,14 @@ public final class FiberAnalysisDialog {
         regionEstimateLabel.setWrapText(true);
         grid.add(regionEstimateLabel, 0, row, 2, 1);
         row++;
+        // The line describes the annotations the run will analyze, so it follows every control that
+        // changes that set or the region read around each one.
+        searchAreaCombo.valueProperty().addListener((o, a, b) -> refreshRegionEstimate());
+        classFilterCombo.getCheckModel().getCheckedItems().addListener((javafx.collections.ListChangeListener<String>)
+                c -> refreshRegionEstimate());
+        borderZoneSpinner.valueProperty().addListener((o, a, b) -> refreshRegionEstimate());
+        useImagePixelSizeCheck.selectedProperty().addListener((o, a, b) -> refreshRegionEstimate());
+        pixelSizeOverrideSpinner.valueProperty().addListener((o, a, b) -> refreshRegionEstimate());
         refreshRegionEstimate();
 
         return SectionBuilder.createSection("1. Search area", true, grid);
@@ -779,7 +808,9 @@ public final class FiberAnalysisDialog {
         internalChannelCombo.setMaxWidth(Double.MAX_VALUE);
         applyTooltip(
                 internalChannelCombo,
-                "Scalar channel the segmenter thresholds. Value suits brightfield and Picrosirius; Raw intensity suits single-channel fluorescence.");
+                "Scalar channel the segmenter thresholds. Raw intensity is the brightest channel at each"
+                        + " pixel (on an RGB image, the same as HSV value). Hue and Saturation are offered for"
+                        + " RGB images only. A named channel uses that channel alone.");
         Button channelRefreshBtn = new Button("Refresh");
         channelRefreshBtn.setTooltip(installDelay(new Tooltip("Re-read the current image's channel list.")));
         channelRefreshBtn.setOnAction(e -> populateChannelCombo());
@@ -1001,7 +1032,7 @@ public final class FiberAnalysisDialog {
                     return new FiberSegmentationPreviewWindow.Context(
                             p, resolveAnnotationsForRun(p, currentImageData()));
                 },
-                List.of(
+                List.<javafx.beans.Observable>of(
                         internalChannelCombo.valueProperty(),
                         thresholdMethodCombo.valueProperty(),
                         manualThresholdSpinner.valueProperty(),
@@ -1018,6 +1049,9 @@ public final class FiberAnalysisDialog {
                         zoneModeGroup.selectedToggleProperty(),
                         analysisDownsampleSpinner.valueProperty(),
                         searchAreaCombo.valueProperty(),
+                        // With Search area = class, the checked classes decide which
+                        // annotations the pooled cut is fitted on.
+                        classFilterCombo.getCheckModel().getCheckedItems(),
                         useImagePixelSizeCheck.selectedProperty(),
                         pixelSizeOverrideSpinner.valueProperty())));
         for (var prop : List.of(
@@ -1340,7 +1374,10 @@ public final class FiberAnalysisDialog {
         applyTooltip(
                 radonCheck,
                 "Per-ROI Radon transform scalar: peak-to-mean ratio and FWHM at the dominant angle."
-                        + " Captures how aligned the bulk fibers are in this ROI.");
+                        + " Captures how aligned the bulk fibers are in this ROI. Measured on the"
+                        + " brightness of the fiber pixels: the brightest channel at each pixel, or the named"
+                        + " source channel when one is chosen (Hue and Saturation pick the fibers but not"
+                        + " what is measured).");
         grid.add(radonCheck, 0, row, 2, 1);
         row++;
 
@@ -1351,8 +1388,10 @@ public final class FiberAnalysisDialog {
         minBranchLengthSpinner.setEditable(true);
         applyTooltip(
                 minBranchLengthSpinner,
-                "Skeleton branches shorter than this are dropped as noise. Default 5 um matches"
-                        + " CT-FIRE / Curve-Align defaults.");
+                "For tortuosity only: traced fibers shorter than this are left out of the"
+                        + " straightness measurements and the per-window ridge count as noise. Branch"
+                        + " points, endpoints, length and curvature use the whole skeleton. Default 5 um"
+                        + " matches CT-FIRE / Curve-Align.");
         grid.add(minBranchLabel, 0, row);
         grid.add(minBranchLengthSpinner, 1, row);
         row++;
@@ -1361,8 +1400,10 @@ public final class FiberAnalysisDialog {
                 straightnessEnabledCheck.selectedProperty().not();
         tortuosityCheck.disableProperty().bind(straightnessDisabled);
         radonCheck.disableProperty().bind(straightnessDisabled);
-        minBranchLabel.disableProperty().bind(straightnessDisabled);
-        minBranchLengthSpinner.disableProperty().bind(straightnessDisabled);
+        BooleanBinding tortuosityDisabled =
+                straightnessDisabled.or(tortuosityCheck.selectedProperty().not());
+        minBranchLabel.disableProperty().bind(tortuosityDisabled);
+        minBranchLengthSpinner.disableProperty().bind(tortuosityDisabled);
 
         return SectionBuilder.createSection("4. Straightness", false, grid);
     }
@@ -1501,7 +1542,9 @@ public final class FiberAnalysisDialog {
         quantLevelsSpinner.setEditable(true);
         applyTooltip(
                 quantLevelsSpinner,
-                "Number of gray levels the source channel is quantized to before GLCM."
+                "Number of gray levels the image brightness is quantized to before GLCM: the"
+                        + " brightest channel at each pixel, or the named source channel when one is"
+                        + " chosen. Hue and Saturation pick the fibers; texture still reads brightness."
                         + " 16 is the scikit-image default; higher = finer texture, slower.");
         numericGrid.add(new Label("Quantization levels:"), 0, 0);
         numericGrid.add(quantLevelsSpinner, 1, 0);
@@ -1638,7 +1681,7 @@ public final class FiberAnalysisDialog {
         applyTooltip(
                 outputDirField,
                 "Folder where each run writes a timestamped subdirectory with overlays, results.json,"
-                        + " params.json, and (optionally) per-window CSV. Leave blank to use"
+                        + " params.json, and (optionally) the per-window window_metrics.npz. Leave blank to use"
                         + " <project>/fiber-analysis/ when a project is open.");
         Button browseDirBtn = new Button("Browse...");
         browseDirBtn.setMinWidth(Region.USE_PREF_SIZE);
@@ -1708,23 +1751,19 @@ public final class FiberAnalysisDialog {
         glcmHeatmapCheck = new CheckBox("Write GLCM heatmap PNG");
         glcmHeatmapCheck.setSelected(
                 FiberAnalysisPreferences.glcmHeatmapProperty().get());
-        applyTooltip(glcmHeatmapCheck, "Save a per-window heatmap PNG of the selected GLCM property.");
-
-        glcmHeatmapProperty = new ComboBox<>(FXCollections.observableArrayList(
-                "contrast", "correlation", "energy", "homogeneity", "entropy", "dissimilarity"));
-        glcmHeatmapProperty.setValue(
-                FiberAnalysisPreferences.glcmHeatmapPropProperty().get());
-        applyTooltip(glcmHeatmapProperty, "Which GLCM property to render as a heatmap (only one PNG per run).");
-        HBox glcmRow = new HBox(8, glcmHeatmapCheck, new Label("Property:"), glcmHeatmapProperty);
-        glcmRow.setAlignment(Pos.CENTER_LEFT);
-        content.getChildren().add(glcmRow);
+        applyTooltip(
+                glcmHeatmapCheck,
+                "Save one per-window heatmap PNG for each GLCM property checked in section 6"
+                        + " (texture_<property>_overlay.png).");
+        content.getChildren().add(glcmHeatmapCheck);
 
         morphSummaryCheck = new CheckBox("Write morphometric summary text");
         morphSummaryCheck.setSelected(
                 FiberAnalysisPreferences.morphSummaryProperty().get());
         applyTooltip(
                 morphSummaryCheck,
-                "Render a text summary card of the morphometric metrics (shown as a button in the results panel).");
+                "Write morphometrics_summary.txt (the annotation's morphometric scalars) in the"
+                        + " annotation folder. The results panel's Summary button does not depend on it.");
         content.getChildren().add(morphSummaryCheck);
 
         jsonSidecarCheck = new CheckBox("Write results.json sidecar");
@@ -1949,7 +1988,6 @@ public final class FiberAnalysisDialog {
                 fiberMaskOverlayCheck.isSelected(),
                 straightnessHeatmapCheck.isSelected(),
                 glcmHeatmapCheck.isSelected(),
-                glcmHeatmapProperty.getValue(),
                 morphSummaryCheck.isSelected(),
                 jsonSidecarCheck.isSelected(),
                 emitNpzCheck.isSelected(),
@@ -2039,7 +2077,6 @@ public final class FiberAnalysisDialog {
         FiberAnalysisPreferences.fiberMaskOverlayProperty().set(fiberMaskOverlayCheck.isSelected());
         FiberAnalysisPreferences.straightnessHeatmapProperty().set(straightnessHeatmapCheck.isSelected());
         FiberAnalysisPreferences.glcmHeatmapProperty().set(glcmHeatmapCheck.isSelected());
-        FiberAnalysisPreferences.glcmHeatmapPropProperty().set(glcmHeatmapProperty.getValue());
         FiberAnalysisPreferences.morphSummaryProperty().set(morphSummaryCheck.isSelected());
         FiberAnalysisPreferences.jsonSidecarProperty().set(jsonSidecarCheck.isSelected());
         FiberAnalysisPreferences.emitNpzProperty().set(emitNpzCheck.isSelected());
@@ -2249,10 +2286,21 @@ public final class FiberAnalysisDialog {
      * before clicking Run.
      */
     private List<PathObject> resolveAnnotationsForRun(FiberAnalysisParams params, ImageData<BufferedImage> imageData) {
+        return resolveAnnotations(params.searchArea(), params.classFilter(), imageData);
+    }
+
+    /**
+     * @param searchArea  search-area code ("selected", "all" or "class"); null means "selected"
+     * @param classFilter class filter CSV, used when the search area is "class"
+     * @param imageData   the image; may be null
+     * @return the annotations a run with these settings analyzes
+     */
+    private List<PathObject> resolveAnnotations(
+            String searchArea, String classFilter, ImageData<BufferedImage> imageData) {
         if (imageData == null || imageData.getHierarchy() == null) {
             return List.of();
         }
-        String mode = params.searchArea() == null ? "selected" : params.searchArea();
+        String mode = searchArea == null ? "selected" : searchArea;
         List<PathObject> all = imageData.getHierarchy().getAnnotationObjects().stream()
                 .filter(o -> o != null && o.isAnnotation() && !FiberSegmentationPreviewWindow.isPreviewMarker(o))
                 .collect(Collectors.toList());
@@ -2260,7 +2308,7 @@ public final class FiberAnalysisDialog {
             case "all":
                 return all;
             case "class":
-                var wanted = AnnotationClassFilter.predicate(AnnotationClassFilter.parse(params.classFilter()));
+                var wanted = AnnotationClassFilter.predicate(AnnotationClassFilter.parse(classFilter));
                 return all.stream().filter(wanted).collect(Collectors.toList());
             case "selected":
             default:

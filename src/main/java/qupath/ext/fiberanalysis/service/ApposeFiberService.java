@@ -137,11 +137,17 @@ public class ApposeFiberService {
         return ApposeEnvLocation.isBuilt(getEnvironmentPath());
     }
 
+    /** @return the environment in use this session, or the configured one when none is */
     public static Path getEnvironmentPath() {
         ApposeFiberService svc = instance;
         if (svc != null && svc.environment != null) {
             return Path.of(svc.environment.base());
         }
+        return configuredEnvironmentPath();
+    }
+
+    /** @return where the location preference puts the environment; a build or rebuild uses this */
+    public static Path configuredEnvironmentPath() {
         return ApposeEnvLocation.resolve(
                 qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences.getEnvBaseDir(), ENV_NAME);
     }
@@ -492,27 +498,38 @@ public class ApposeFiberService {
     }
 
     /**
-     * Deletes the Appose pixi environment from disk. The service must be shut down first.
+     * Deletes the environment at the configured location, the one a rebuild replaces. An
+     * environment this session ran from another location is left in place; the cleanup prompt
+     * offers to remove it once the new one works. The service must be shut down first.
      */
     public synchronized void deleteEnvironment() throws IOException {
         if (pythonService != null) {
             throw new IOException("Cannot delete environment while Python service is running. Call shutdown() first.");
         }
+        Path target = configuredEnvironmentPath();
         if (environment != null) {
-            try {
-                logger.info("Deleting Fiber Analysis environment via API: {}", environment.base());
-                environment.delete();
-                environment = null;
-                return;
-            } catch (Exception e) {
-                logger.warn("environment.delete() failed; manual deletion: {}", e.getMessage());
-                environment = null;
+            Path running = Path.of(environment.base());
+            boolean same = running.toAbsolutePath()
+                    .normalize()
+                    .equals(target.toAbsolutePath().normalize());
+            if (same) {
+                try {
+                    logger.info("Deleting Fiber Analysis environment via API: {}", running);
+                    environment.delete();
+                } catch (Exception e) {
+                    logger.warn("environment.delete() failed; manual deletion: {}", e.getMessage());
+                }
+            } else {
+                logger.info(
+                        "Leaving the environment at {} in place; the location preference now points at {}",
+                        running,
+                        target);
             }
+            environment = null;
         }
-        Path envPath = getEnvironmentPath();
-        if (Files.exists(envPath)) {
-            logger.info("Deleting environment directory: {}", envPath);
-            ApposeSupport.deleteDirectoryRecursively(envPath);
+        if (Files.exists(target)) {
+            logger.info("Deleting environment directory: {}", target);
+            ApposeSupport.deleteDirectoryRecursively(target);
         }
     }
 
