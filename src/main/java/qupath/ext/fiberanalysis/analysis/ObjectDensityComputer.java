@@ -18,7 +18,6 @@ import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferByte;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -26,7 +25,6 @@ import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import qupath.lib.images.ImageData;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
@@ -40,7 +38,8 @@ import qupath.lib.roi.interfaces.ROI;
  *
  * <p>Tile by tile ({@link MaskBoxSampler}): each tile rasterises only the
  * objects whose bounds reach its rectangle, so memory is one tile's mask
- * whatever the slide size. Values are in [0, 1]; NaN where a window leaves
+ * whatever the slide size. Values are in [0, 1]: 0 where the class has no
+ * object (none is a measurement, not missing data); NaN where a window leaves
  * the slide (window mode).
  */
 final class ObjectDensityComputer {
@@ -50,7 +49,7 @@ final class ObjectDensityComputer {
     private ObjectDensityComputer() {}
 
     /**
-     * @param imageData  source of the hierarchy
+     * @param hierarchy  the image's objects; null reads as no objects
      * @param classNames class names, one channel each, in order
      * @param geo        the density map's tiling and lattice
      * @param srcW       image width
@@ -59,7 +58,7 @@ final class ObjectDensityComputer {
      * @throws IOException if a tile cannot be rendered
      */
     static Map<String, float[]> compute(
-            ImageData<BufferedImage> imageData,
+            PathObjectHierarchy hierarchy,
             List<String> classNames,
             FiberDensityMapWorkflow.Geometry geo,
             int srcW,
@@ -68,7 +67,6 @@ final class ObjectDensityComputer {
 
         Map<String, float[]> out = new LinkedHashMap<>();
         if (classNames == null || classNames.isEmpty()) return out;
-        PathObjectHierarchy hierarchy = imageData.getHierarchy();
 
         // PathClass.toString() is the user-visible name, nested colons
         // included ("Tumor: Stroma"), as the class list shows it.
@@ -90,10 +88,9 @@ final class ObjectDensityComputer {
         for (String name : classNames) {
             List<Shaped> members = byClass.get(name);
             if (members.isEmpty()) {
-                logger.info("Object density: class '{}' has no objects -- channel will be all-NaN", name);
-                float[] empty = new float[geo.gridW() * geo.gridH()];
-                Arrays.fill(empty, Float.NaN);
-                out.put(name, empty);
+                // Sampled like any class, so cells with data read 0 and cells off the slide stay NaN.
+                logger.info("Object density: class '{}' has no objects in this image; its channel reads 0", name);
+                out.put(name, MaskBoxSampler.sample((x, y, w, h) -> new byte[w * h], geo, srcW, srcH));
                 continue;
             }
             logger.info("Object density '{}': {} object(s), rasterised per tile", name, members.size());

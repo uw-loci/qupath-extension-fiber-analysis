@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Consumer;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.Label;
@@ -30,6 +31,7 @@ import javafx.stage.Window;
 import org.apposed.appose.Service.Task;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.ext.fiberanalysis.service.ApposeFiberService;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
@@ -85,17 +87,18 @@ public final class FiberDensityMapWorkflow {
     }
 
     /**
-     * Variant that runs {@code onComplete} on the JavaFX thread after every
-     * image has been processed (regardless of per-image success). Used by the
-     * dialog to fire the Channels-mode attach for the currently-open image
-     * once its sidecar is on disk.
+     * Variant that runs {@code onComplete} after every image has been processed,
+     * on the JavaFX thread when it is up and inline otherwise (a headless re-run
+     * waits on it). It is always called, also when nothing could be run.
+     *
+     * @param onComplete receives the images whose map file this run wrote (empty when none), or null
      */
     public Thread runForEntries(
             DensityMapJobSpec spec,
             List<ProjectImageEntry<BufferedImage>> requested,
             Project<BufferedImage> project,
             QuPathGUI qupath,
-            Runnable onComplete) {
+            Consumer<List<ProjectImageEntry<BufferedImage>>> onComplete) {
         final List<ProjectImageEntry<BufferedImage>> entries = new ArrayList<>();
         if (requested != null) {
             for (var e : requested) {
@@ -107,6 +110,7 @@ public final class FiberDensityMapWorkflow {
         if (entries.isEmpty()) {
             if (HeadlessFx.isReady()) Dialogs.showWarningNotification("Fiber density map", "No images selected.");
             else logger.warn("Fiber density map: no images selected (headless).");
+            complete(onComplete, List.of());
             return null;
         }
 
@@ -116,17 +120,11 @@ public final class FiberDensityMapWorkflow {
 
         Thread worker = new Thread(
                 () -> {
+                    List<ProjectImageEntry<BufferedImage>> made = new ArrayList<>();
                     try {
-                        runWorker(spec, entries, project, progress);
+                        runWorker(spec, entries, project, progress, made);
                     } finally {
-                        // User callbacks (onComplete) must execute regardless of
-                        // FX availability -- headless callers depend on it
-                        // (e.g. a CountDownLatch in a rerun.groovy script).
-                        // Defer to FX when up, run inline otherwise.
-                        if (onComplete != null) {
-                            if (HeadlessFx.isReady()) HeadlessFx.runLater(onComplete);
-                            else onComplete.run();
-                        }
+                        complete(onComplete, List.copyOf(made));
                     }
                 },
                 "FiberDensityMap-Worker");
@@ -135,11 +133,20 @@ public final class FiberDensityMapWorkflow {
         return worker;
     }
 
+    private static void complete(
+            Consumer<List<ProjectImageEntry<BufferedImage>>> onComplete, List<ProjectImageEntry<BufferedImage>> made) {
+        if (onComplete == null) return;
+        if (HeadlessFx.isReady()) HeadlessFx.runLater(() -> onComplete.accept(made));
+        else onComplete.accept(made);
+    }
+
+    /** Runs every image; {@code made} collects the ones whose map file was written. */
     private void runWorker(
             DensityMapJobSpec spec,
             List<ProjectImageEntry<BufferedImage>> entries,
             Project<BufferedImage> project,
-            ProgressUi progress) {
+            ProgressUi progress,
+            List<ProjectImageEntry<BufferedImage>> made) {
         try {
             try {
                 ApposeFiberService.getInstance().initialize(progress::setSub);
@@ -198,7 +205,6 @@ public final class FiberDensityMapWorkflow {
             ThresholdIdentity identity = ThresholdIdentity.of(runSpec, Double.NaN);
             logger.info("Threshold: {}", identity.label());
             logger.info("Region: {}", runSpec.region.describe());
-            List<ProjectImageEntry<BufferedImage>> made = new ArrayList<>();
             int total = entries.size();
             int ok = 0;
             int failed = 0;
@@ -282,9 +288,10 @@ public final class FiberDensityMapWorkflow {
                     resolved.missing());
         }
 
-        int windowPx = Math.max(2, (int) Math.round(spec.windowSizeUm / pxUm));
-        double overlapFrac = Math.max(0.0, Math.min(0.95, spec.windowOverlapPercent / 100.0));
-        int stridePxWindow = Math.max(1, (int) Math.round(windowPx * (1.0 - overlapFrac)));
+        // Channels are found by name in each image, before any tile is read.
+        int[] positivityBands = spec.includePixelPositivity
+                ? PixelPositivityComputer.resolveBands(server, spec.pixelPositivitySpecs)
+                : new int[0];
 
         boolean pixelMode = "pixel".equals(spec.densityMode);
         // Count EVERY channel the accumulator will hold, not just the fiber
@@ -294,9 +301,8 @@ public final class FiberDensityMapWorkflow {
                 + (spec.includeObjectDensity ? spec.objectDensityClasses.size() : 0)
                 + (spec.includePixelPositivity ? spec.pixelPositivitySpecs.size() : 0);
 
-        Geometry geo = pixelMode
-                ? Geometry.pixel(srcW, srcH, windowPx, pixelStepPx(spec, pxUm, windowPx, srcW, srcH, nChannels))
-                : Geometry.window(srcW, srcH, windowPx, stridePxWindow, TILE_WIN);
+        Geometry geo = geometry(spec, pxUm, srcW, srcH, nChannels);
+        int windowPx = geo.windowPx();
         if (geo.gridW() == 0 || geo.gridH() == 0) {
             throw new IOException("Image is smaller than one window in at least one dimension (window_px=" + windowPx
                     + "; image=" + srcW + "x" + srcH + ")");
@@ -374,12 +380,18 @@ public final class FiberDensityMapWorkflow {
                     writeTileImage(server, req, spec.segChannel, tilePng, coreX, coreY);
 
                     Path tileNpz = workDir.resolve(String.format(Locale.ROOT, "tile_%04d_%04d.npz", tx, ty));
-                    Map<String, Object> in = buildTileInputs(spec, pxUm, tilePng, readW, readH, tileNpz);
-                    in.put("crop_x", coreX - readX);
-                    in.put("crop_y", coreY - readY);
-                    in.put("crop_w", coreW);
-                    in.put("crop_h", coreH);
-                    if (pixelMode) in.put("pixel_step", stridePx);
+                    Map<String, Object> in = buildTileInputs(
+                            spec,
+                            pxUm,
+                            geo,
+                            tilePng,
+                            readW,
+                            readH,
+                            coreX - readX,
+                            coreY - readY,
+                            coreW,
+                            coreH,
+                            tileNpz);
                     Task task;
                     try {
                         task = ApposeFiberService.getInstance().runTask("density_tile", in);
@@ -420,7 +432,7 @@ public final class FiberDensityMapWorkflow {
         if (spec.includeObjectDensity && !spec.objectDensityClasses.isEmpty()) {
             progress.setSub("Computing object-density channels...");
             Map<String, float[]> objDensities =
-                    ObjectDensityComputer.compute(data, spec.objectDensityClasses, geo, srcW, srcH);
+                    ObjectDensityComputer.compute(data.getHierarchy(), spec.objectDensityClasses, geo, srcW, srcH);
             int idx = nFiberChannels;
             for (String cls : spec.objectDensityClasses) {
                 float[] grid = objDensities.get(cls);
@@ -437,8 +449,8 @@ public final class FiberDensityMapWorkflow {
         // so QuPath's channel list stays consistent.
         if (spec.includePixelPositivity && !spec.pixelPositivitySpecs.isEmpty()) {
             progress.setSub("Computing pixel-positivity channels...");
-            List<float[]> posGrids =
-                    PixelPositivityComputer.compute(server, spec.pixelPositivitySpecs, geo, srcW, srcH, inside);
+            List<float[]> posGrids = PixelPositivityComputer.compute(
+                    server, spec.pixelPositivitySpecs, positivityBands, geo, srcW, srcH, inside);
             for (int i = 0; i < posGrids.size(); i++) {
                 float[] grid = posGrids.get(i);
                 int dst = nAfterObject + i;
@@ -490,7 +502,7 @@ public final class FiberDensityMapWorkflow {
                 channels,
                 accum);
         ProjectThresholds.record(project, List.of(entry), ThresholdIdentity.META_DENSITY, identity);
-        DensityChannelAttacher.refreshIfPresent(project, entry, outPath, DensityChannelAttacher.KIND_DENSITY, null);
+        updateChannelsEntry(spec, project, entry, outPath);
 
         // Provenance triple: <image>_density_params.json + _params.txt + _rerun.groovy
         // next to the sidecar so the run can be audited / re-executed from disk.
@@ -597,15 +609,84 @@ public final class FiberDensityMapWorkflow {
         }
     }
 
-    private static Map<String, Object> buildTileInputs(
-            DensityMapJobSpec spec, double pixelSizeUm, Path tilePng, int tileW, int tileH, Path outNpz) {
+    /**
+     * The slide's lattice. Window and stride are sized here, once, with the Run's
+     * half-even rounding ({@link TileGrid#windowPx}, {@link TileGrid#stridePx}), and sent
+     * to Python as pixels.
+     */
+    static Geometry geometry(DensityMapJobSpec spec, double pxUm, int srcW, int srcH, int nChannels)
+            throws IOException {
+        int windowPx = TileGrid.windowPx(spec.windowSizeUm, pxUm);
+        if ("pixel".equals(spec.densityMode)) {
+            return Geometry.pixel(srcW, srcH, windowPx, pixelStepPx(spec, pxUm, windowPx, srcW, srcH, nChannels));
+        }
+        return Geometry.window(srcW, srcH, windowPx, TileGrid.stridePx(windowPx, spec.windowOverlapPercent), TILE_WIN);
+    }
+
+    /**
+     * Adds or rebuilds the image's channels entry when the run asks for one. "Map file only"
+     * leaves every entry alone, including a channels entry made by an earlier run.
+     */
+    private static void updateChannelsEntry(
+            DensityMapJobSpec spec, Project<BufferedImage> project, ProjectImageEntry<BufferedImage> entry, Path map) {
+        if (project == null) return;
+        if (!spec.addsChannelEntries()) {
+            if (DensityChannelAttacher.findChannelsEntry(project, entry, map) != null)
+                logger.warn(
+                        "'{}' has a channels entry from an earlier map. It was not rebuilt (map file only);"
+                                + " use 'Add density channels as a new image' to update it.",
+                        entry.getImageName());
+            return;
+        }
+        try {
+            DensityChannelAttacher.addChannelsEntry(project, entry, map, DensityChannelAttacher.KIND_DENSITY, null);
+        } catch (Exception e) {
+            logger.error("Could not add density channels for {}", entry.getImageName(), e);
+            final String name = entry.getImageName();
+            final String msg = e.getMessage();
+            HeadlessFx.runLater(() -> Dialogs.showErrorNotification(
+                    "Fiber density map",
+                    "The map of \"" + name + "\" was written, but its channels entry could not be added: " + msg));
+        }
+    }
+
+    /**
+     * Inputs of one density_tile.py call.
+     *
+     * @param geo   the slide's lattice; its window and stride are sent as pixels
+     * @param readW width of the read (core plus halo)
+     * @param readH height of the read
+     * @param cropX core origin inside the read
+     * @param cropY core origin inside the read
+     * @param coreW core width
+     * @param coreH core height
+     */
+    static Map<String, Object> buildTileInputs(
+            DensityMapJobSpec spec,
+            double pixelSizeUm,
+            Geometry geo,
+            Path tilePng,
+            int readW,
+            int readH,
+            int cropX,
+            int cropY,
+            int coreW,
+            int coreH,
+            Path outNpz) {
         Map<String, Object> in = new HashMap<>();
         in.put("region_image_path", tilePng.toString());
-        in.put("region_w", tileW);
-        in.put("region_h", tileH);
+        in.put("region_w", readW);
+        in.put("region_h", readH);
+        in.put("crop_x", cropX);
+        in.put("crop_y", cropY);
+        in.put("crop_w", coreW);
+        in.put("crop_h", coreH);
         in.put("pixel_size_um", pixelSizeUm);
-        in.put("window_size_um", spec.windowSizeUm);
-        in.put("window_overlap_percent", spec.windowOverlapPercent);
+        in.put("window_px", geo.windowPx());
+        in.put("stride_px", geo.pixel() ? TileGrid.stridePx(geo.windowPx(), spec.windowOverlapPercent) : geo.cellPx());
+        if (geo.pixel()) in.put("pixel_step", geo.cellPx());
+        in.put("min_window_coverage_percent", spec.minWindowCoveragePercent);
+        in.put("min_branch_um", spec.minBranchUm);
         in.put("seg_channel", spec.segChannel);
         in.put("threshold_method", spec.thresholdMethod);
         in.put("manual_threshold", spec.manualThreshold);
@@ -626,7 +707,7 @@ public final class FiberDensityMapWorkflow {
     }
 
     /** Copy one tile's cells into the slide-wide accumulator, starting at slide cell (slideX, slideY). */
-    private static void accumulateTile(
+    static void accumulateTile(
             float[][] accum,
             List<DensityChannelSpec> channels,
             Path npzPath,
@@ -895,6 +976,24 @@ public final class FiberDensityMapWorkflow {
         /** Where the map is computed; cells outside stay NaN. */
         public final DensityRegion region;
 
+        /**
+         * The Run's per-window coverage gate (percent): windows below it are NaN in every fiber
+         * channel, as in the Run's heatmaps. 0 turns it off.
+         */
+        public final double minWindowCoveragePercent;
+
+        /** Skeleton branches shorter than this (microns) are left out of the ridge count, as in the Run. */
+        public final double minBranchUm;
+
+        /** {@link #OUTPUT_MAP_FILE} or {@link #OUTPUT_CHANNELS}. */
+        public final String outputMode;
+
+        /** Output mode: write the map file and leave every project entry alone. */
+        public static final String OUTPUT_MAP_FILE = "map file";
+
+        /** Output mode: also add (or rebuild) a project entry holding the image plus the map's channels. */
+        public static final String OUTPUT_CHANNELS = "channels";
+
         public DensityMapJobSpec(
                 double windowSizeUm,
                 double windowOverlapPercent,
@@ -953,6 +1052,9 @@ public final class FiberDensityMapWorkflow {
                     ? java.util.Collections.emptyList()
                     : List.copyOf(pixelPositivitySpecs);
             this.region = DensityRegion.wholeImage();
+            this.minWindowCoveragePercent = 0.0;
+            this.minBranchUm = FiberAnalysisPreferences.DEFAULT_MIN_BRANCH_UM;
+            this.outputMode = OUTPUT_MAP_FILE;
         }
 
         /**
@@ -964,7 +1066,20 @@ public final class FiberDensityMapWorkflow {
          * @return a copy using {@code project_otsu} at that value
          */
         public DensityMapJobSpec withRunThreshold(double thresholdNorm, String source) {
-            return new DensityMapJobSpec(this, thresholdNorm, source, fittedMethod);
+            return withThreshold(thresholdNorm, source, fittedMethod);
+        }
+
+        private DensityMapJobSpec withThreshold(double thresholdNorm, String source, String fitted) {
+            return new DensityMapJobSpec(
+                    this,
+                    "project_otsu",
+                    thresholdNorm,
+                    source,
+                    fitted,
+                    region,
+                    minWindowCoveragePercent,
+                    minBranchUm,
+                    outputMode);
         }
 
         /**
@@ -972,14 +1087,79 @@ public final class FiberDensityMapWorkflow {
          * @return a copy computed only there
          */
         public DensityMapJobSpec withRegion(DensityRegion region) {
-            return new DensityMapJobSpec(this, region == null ? DensityRegion.wholeImage() : region);
+            return new DensityMapJobSpec(
+                    this,
+                    thresholdMethod,
+                    projectThresholdNorm,
+                    thresholdSource,
+                    fittedMethod,
+                    region == null ? DensityRegion.wholeImage() : region,
+                    minWindowCoveragePercent,
+                    minBranchUm,
+                    outputMode);
         }
 
-        private DensityMapJobSpec(DensityMapJobSpec o, DensityRegion region) {
+        /**
+         * @param minWindowCoveragePercent the Run's per-window coverage gate, percent (0 = off)
+         * @param minBranchUm              the Run's minimum branch length, microns
+         * @return a copy using them
+         */
+        public DensityMapJobSpec withRunWindowRules(double minWindowCoveragePercent, double minBranchUm) {
+            if (!(minWindowCoveragePercent >= 0 && minWindowCoveragePercent <= 100))
+                throw new IllegalArgumentException(
+                        "minWindowCoveragePercent must be 0-100, got " + minWindowCoveragePercent);
+            if (!(minBranchUm >= 0)) throw new IllegalArgumentException("minBranchUm must be >= 0, got " + minBranchUm);
+            return new DensityMapJobSpec(
+                    this,
+                    thresholdMethod,
+                    projectThresholdNorm,
+                    thresholdSource,
+                    fittedMethod,
+                    region,
+                    minWindowCoveragePercent,
+                    minBranchUm,
+                    outputMode);
+        }
+
+        /**
+         * @param mode {@link #OUTPUT_MAP_FILE} or {@link #OUTPUT_CHANNELS}
+         * @return a copy with that output mode
+         */
+        public DensityMapJobSpec withOutputMode(String mode) {
+            if (!OUTPUT_MAP_FILE.equals(mode) && !OUTPUT_CHANNELS.equals(mode))
+                throw new IllegalArgumentException("outputMode must be '" + OUTPUT_MAP_FILE + "' or '" + OUTPUT_CHANNELS
+                        + "', got '" + mode + "'");
+            return new DensityMapJobSpec(
+                    this,
+                    thresholdMethod,
+                    projectThresholdNorm,
+                    thresholdSource,
+                    fittedMethod,
+                    region,
+                    minWindowCoveragePercent,
+                    minBranchUm,
+                    mode);
+        }
+
+        /** @return true when the run also adds each image with its map's channels as a project entry */
+        public boolean addsChannelEntries() {
+            return OUTPUT_CHANNELS.equals(outputMode);
+        }
+
+        private DensityMapJobSpec(
+                DensityMapJobSpec o,
+                String thresholdMethod,
+                Double projectThresholdNorm,
+                String thresholdSource,
+                String fittedMethod,
+                DensityRegion region,
+                double minWindowCoveragePercent,
+                double minBranchUm,
+                String outputMode) {
             this.windowSizeUm = o.windowSizeUm;
             this.windowOverlapPercent = o.windowOverlapPercent;
             this.segChannel = o.segChannel;
-            this.thresholdMethod = o.thresholdMethod;
+            this.thresholdMethod = thresholdMethod;
             this.manualThreshold = o.manualThreshold;
             this.manualResponseThreshold = o.manualResponseThreshold;
             this.ridgeFilter = o.ridgeFilter;
@@ -989,44 +1169,20 @@ public final class FiberDensityMapWorkflow {
             this.minFiberAreaUm2 = o.minFiberAreaUm2;
             this.invertIntensity = o.invertIntensity;
             this.rollingBallRadiusUm = o.rollingBallRadiusUm;
-            this.projectThresholdNorm = o.projectThresholdNorm;
+            this.projectThresholdNorm = projectThresholdNorm;
             this.smoothInterpolation = o.smoothInterpolation;
             this.densityMode = o.densityMode;
             this.pixelStepUm = o.pixelStepUm;
-            this.thresholdSource = o.thresholdSource;
-            this.fittedMethod = o.fittedMethod;
-            this.includeObjectDensity = o.includeObjectDensity;
-            this.objectDensityClasses = o.objectDensityClasses;
-            this.includePixelPositivity = o.includePixelPositivity;
-            this.pixelPositivitySpecs = o.pixelPositivitySpecs;
-            this.region = region;
-        }
-
-        private DensityMapJobSpec(DensityMapJobSpec o, double thresholdNorm, String source, String fittedMethod) {
-            this.windowSizeUm = o.windowSizeUm;
-            this.windowOverlapPercent = o.windowOverlapPercent;
-            this.segChannel = o.segChannel;
-            this.thresholdMethod = "project_otsu";
-            this.manualThreshold = o.manualThreshold;
-            this.manualResponseThreshold = o.manualResponseThreshold;
-            this.ridgeFilter = o.ridgeFilter;
-            this.sigmaMinUm = o.sigmaMinUm;
-            this.sigmaMaxUm = o.sigmaMaxUm;
-            this.sigmaStepUm = o.sigmaStepUm;
-            this.minFiberAreaUm2 = o.minFiberAreaUm2;
-            this.invertIntensity = o.invertIntensity;
-            this.rollingBallRadiusUm = o.rollingBallRadiusUm;
-            this.projectThresholdNorm = thresholdNorm;
-            this.smoothInterpolation = o.smoothInterpolation;
-            this.densityMode = o.densityMode;
-            this.pixelStepUm = o.pixelStepUm;
-            this.thresholdSource = source;
+            this.thresholdSource = thresholdSource;
             this.fittedMethod = fittedMethod;
             this.includeObjectDensity = o.includeObjectDensity;
             this.objectDensityClasses = o.objectDensityClasses;
             this.includePixelPositivity = o.includePixelPositivity;
             this.pixelPositivitySpecs = o.pixelPositivitySpecs;
-            this.region = o.region;
+            this.region = region;
+            this.minWindowCoveragePercent = minWindowCoveragePercent;
+            this.minBranchUm = minBranchUm;
+            this.outputMode = outputMode;
         }
 
         /** @return these settings as the pooled-threshold step reads them */
@@ -1114,6 +1270,9 @@ public final class FiberDensityMapWorkflow {
                 posMaps.add(row);
             }
             m.put("pixelPositivitySpecs", posMaps);
+            m.put("minWindowCoveragePercent", minWindowCoveragePercent);
+            m.put("minBranchUm", minBranchUm);
+            m.put("outputMode", outputMode);
             region.putInto(m);
             return m;
         }
@@ -1174,12 +1333,16 @@ public final class FiberDensityMapWorkflow {
                     jstringList(p, "regionClasses"),
                     jstringList(p, "regionAnnotationIds"),
                     jstringList(p, "regionAnnotationNames")));
+            // A params file written before these were recorded made its map with no coverage
+            // gate, a 2 um branch cut and no channels entry; replay it the same way.
+            spec = spec.withRunWindowRules(jdouble(p, "minWindowCoveragePercent", 0.0), jdouble(p, "minBranchUm", 2.0))
+                    .withOutputMode(jstring(p, "outputMode", OUTPUT_MAP_FILE));
             // A pooled run-wide threshold is replayed at the value it had, not
             // re-pooled, so a re-run reproduces the original map.
             String source = jstring(p, "thresholdSource", null);
             if (source != null && spec.projectThresholdNorm != null) {
-                return new DensityMapJobSpec(
-                        spec, spec.projectThresholdNorm, source, jstring(p, "fittedMethod", spec.thresholdMethod));
+                return spec.withThreshold(
+                        spec.projectThresholdNorm, source, jstring(p, "fittedMethod", spec.thresholdMethod));
             }
             return spec;
         }

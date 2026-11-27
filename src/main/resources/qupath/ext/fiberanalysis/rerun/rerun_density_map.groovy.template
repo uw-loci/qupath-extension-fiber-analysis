@@ -12,6 +12,7 @@ import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow
 import qupath.ext.fiberanalysis.analysis.FiberDensityMapWorkflow.DensityMapJobSpec
 import java.nio.file.Paths
 import java.util.concurrent.CountDownLatch
+import java.util.function.Consumer
 
 // ---- Baked-in run identity (substituted at write time) ----
 String paramsJsonPath = ${PARAMS_JSON_PATH_LITERAL}
@@ -48,10 +49,14 @@ if (entries.isEmpty()) {
     System.exit(2)
 }
 println "Will run density map on " + entries.size() + " image(s)"
+// The output mode is replayed too: a "channels" run adds or rebuilds each
+// image's channels entry, a "map file" run leaves every entry alone.
+println "Output: " + spec.outputMode
 
 // ---- Dispatch + block via CountDownLatch ----
 CountDownLatch latch = new CountDownLatch(1)
+List written = []
 FiberDensityMapWorkflow wf = new FiberDensityMapWorkflow()
-wf.runForEntries(spec, entries, project, null, { -> latch.countDown() } as Runnable)
+wf.runForEntries(spec, entries, project, null, { made -> written.addAll(made); latch.countDown() } as Consumer)
 latch.await()
-println "Done."
+println "Done: " + written.size() + " of " + entries.size() + " map(s) written."

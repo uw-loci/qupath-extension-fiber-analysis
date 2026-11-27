@@ -10,7 +10,6 @@
 package qupath.ext.fiberanalysis.analysis;
 
 import java.awt.image.BufferedImage;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -276,16 +275,20 @@ public final class FiberDensityMapDialog {
                 + "\"Show density map as overlay...\" or turn it into measurements with \"Sample fiber density\n"
                 + "into measurements\". The first option also adds a new project entry per image -- the image\n"
                 + "with the map's channels after its own, tagged \"Fiber analysis\" in the project metadata --\n"
-                + "for tools that need the map as channels. The original entries are not changed.");
+                + "for tools that need the map as channels. The original entries are not changed. \"Map file\n"
+                + "only\" adds and rebuilds no entry; rebuild a channels entry made earlier with \"Add density\n"
+                + "channels as a new image\".");
         modeHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         modeHelp.setWrapText(true);
 
-        // --- Window grid (placeholder; will read from defaults later) ---
+        // --- Window grid: the Run's settings, shown, not edited here ---
         Label windowLabel = new Label("Window grid (microns)");
         windowLabel.setStyle("-fx-font-weight: bold;");
-        Label windowHelp = new Label("Window size, overlap, and minimum coverage gate are inherited from your last\n"
-                + "fiber-analysis Run. The defaults are loaded here; advanced controls land\n"
-                + "in a later iteration of this dialog.");
+        Label windowHelp = new Label(windowGridHelp(
+                FiberAnalysisPreferences.windowSizeUmProperty().get(),
+                FiberAnalysisPreferences.windowOverlapPercentProperty().get(),
+                FiberAnalysisPreferences.minWindowCoveragePercentProperty().get(),
+                FiberAnalysisPreferences.minBranchUmProperty().get()));
         windowHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         windowHelp.setWrapText(true);
 
@@ -330,9 +333,9 @@ public final class FiberDensityMapDialog {
         smoothCheck.setTooltip(
                 new Tooltip(
                         "Off: each window's value fills its footprint, so boundaries show. On: values are interpolated between window centers. The stored data is identical."));
-        Label renderHelp = new Label("Adds no compute cost; smoothing is done at the bytes-to-disk step.\n"
-                + "Increase window overlap (above) to get more sample points per area\n"
-                + "if the smoothed map looks too coarse.");
+        Label renderHelp = new Label("Costs no compute: the choice is stored in the map file and applied when the\n"
+                + "overlay or the channels draw it. For more sample points per area, use per-pixel\n"
+                + "mode with a smaller output step, or raise the window overlap in the Run dialog.");
         renderHelp.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         renderHelp.setWrapText(true);
 
@@ -407,6 +410,68 @@ public final class FiberDensityMapDialog {
 
         box.getChildren().addAll(hdr, scroll);
         return box;
+    }
+
+    /** @return the window-grid help, naming the Run settings the map uses */
+    static String windowGridHelp(
+            double windowUm, double overlapPercent, double minCoveragePercent, double minBranchUm) {
+        return String.format(
+                Locale.ROOT,
+                "From your last fiber-analysis Run: %s um windows, %s %% overlap, minimum coverage per"
+                        + " window %s %%, minimum branch length %s um. Windows below the minimum coverage are left"
+                        + " empty (no data) in the fiber channels, as in the Run's heatmaps; signal density and"
+                        + " intensity coherence keep them. Change these in the Run dialog.",
+                PixelSizeCheck.um(windowUm),
+                PixelSizeCheck.um(overlapPercent),
+                PixelSizeCheck.um(minCoveragePercent),
+                PixelSizeCheck.um(minBranchUm));
+    }
+
+    /**
+     * @param segSource the Run's segmentation source preference
+     * @return why the map cannot run with it, or null
+     */
+    static String segSourceProblem(String segSource) {
+        if (!"existing".equalsIgnoreCase(segSource)) return null;
+        return "Your last fiber-analysis Run used \"Use existing fiber mask\". The density map finds fibers"
+                + " itself and cannot use an existing mask, so it would not measure the fibers you chose."
+                + " To make a map, open the Run dialog, choose \"Segment within extension\", check its"
+                + " settings and click Save defaults; then come back here.";
+    }
+
+    /** One pixel-positivity row as typed: the chosen channel (null when none) and the threshold text. */
+    record PositivityInput(String channelName, String thresholdText) {}
+
+    /**
+     * @param enabled whether pixel-positivity channels are ticked
+     * @param rows    the rows, in order
+     * @return why the rows cannot run, or null
+     */
+    static String positivityProblem(boolean enabled, List<PositivityInput> rows) {
+        if (!enabled) return null;
+        if (rows.isEmpty())
+            return "Pixel-positivity channels are ticked but there is no rule. Click \"+ Add row\", or untick"
+                    + " the box.";
+        for (int i = 0; i < rows.size(); i++) {
+            PositivityInput r = rows.get(i);
+            String row = "Pixel-positivity row " + (i + 1) + ": ";
+            if (r.channelName() == null) return row + "choose a channel.";
+            String t = r.thresholdText() == null ? "" : r.thresholdText().trim();
+            if (t.isEmpty()) return row + "enter a threshold.";
+            if (parseThreshold(t) == null) return row + "the threshold \"" + t + "\" is not a number.";
+        }
+        return null;
+    }
+
+    /** @return the threshold, or null when the text is not a finite number */
+    static Double parseThreshold(String text) {
+        if (text == null) return null;
+        try {
+            double v = Double.parseDouble(text.trim());
+            return Double.isFinite(v) ? v : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /** The "Analyze:" choice, worded as in TME Quant so the two tools read the same. */
@@ -632,6 +697,14 @@ public final class FiberDensityMapDialog {
                         : java.util.Collections.emptyList());
         if (projectThresholdNorm != null)
             spec = spec.withRunThreshold(projectThresholdNorm, "calibration '" + calName + "'");
+        spec = spec.withRunWindowRules(
+                        FiberAnalysisPreferences.minWindowCoveragePercentProperty()
+                                .get(),
+                        FiberAnalysisPreferences.minBranchUmProperty().get())
+                .withOutputMode(
+                        channelsMode
+                                ? FiberDensityMapWorkflow.DensityMapJobSpec.OUTPUT_CHANNELS
+                                : FiberDensityMapWorkflow.DensityMapJobSpec.OUTPUT_MAP_FILE);
         DensityRegion region = buildRegion();
         if (region == null) return;
         spec = spec.withRegion(region);
@@ -645,17 +718,36 @@ public final class FiberDensityMapDialog {
                 channelsMode ? "Channels" : "Sidecar",
                 region.describe());
 
-        Runnable onComplete = null;
-        if (channelsMode) {
-            // After the batch, add a channels entry per image (or refresh the
-            // one already there), then open the current image's if it ran.
-            final List<ProjectImageEntry<BufferedImage>> ranEntries = new ArrayList<>(entries);
+        // The workflow adds each channels entry as soon as its map is written; afterwards show
+        // them, and open the current image's if this run wrote its map.
+        java.util.function.Consumer<List<ProjectImageEntry<BufferedImage>>> onComplete = null;
+        if (channelsMode && gui != null) {
             final QuPathGUI guiRef = gui;
             final Project<BufferedImage> projectRef = project;
-            onComplete = () -> addChannelEntries(guiRef, projectRef, ranEntries);
+            onComplete = made -> {
+                guiRef.refreshProject();
+                ImageData<BufferedImage> current = guiRef.getImageData();
+                ProjectImageEntry<BufferedImage> toOpen = channelsEntryToOpen(
+                        made,
+                        current == null ? null : projectRef.getEntry(current),
+                        e -> DensityChannelAttacher.findChannelsEntry(
+                                projectRef, e, DensitySidecar.sidecarPathFor(projectRef, e)));
+                if (toOpen != null) guiRef.openImageEntry(toOpen);
+            };
         }
 
         new FiberDensityMapWorkflow().runForEntries(spec, entries, project, gui, onComplete);
+    }
+
+    /**
+     * @param made    images whose map this run wrote
+     * @param current the open image's entry, or null
+     * @param finder  an image's channels entry, or null
+     * @return the channels entry to open: the open image's, only when this run wrote its map
+     */
+    static <T> T channelsEntryToOpen(List<T> made, T current, java.util.function.Function<T, T> finder) {
+        if (current == null || !made.contains(current)) return null;
+        return finder.apply(current);
     }
 
     /** @return the dialog's region, or null when it cannot be built (the user was told why) */
@@ -705,44 +797,18 @@ public final class FiberDensityMapDialog {
         return true;
     }
 
-    private static void addChannelEntries(
-            QuPathGUI gui, Project<BufferedImage> project, List<ProjectImageEntry<BufferedImage>> ran) {
-        Thread t = new Thread(
-                () -> {
-                    ProjectImageEntry<BufferedImage> open = null;
-                    ImageData<BufferedImage> current = gui == null ? null : gui.getImageData();
-                    ProjectImageEntry<BufferedImage> currentEntry = current == null ? null : project.getEntry(current);
-                    for (var entry : ran) {
-                        Path map = DensitySidecar.sidecarPathFor(project, entry);
-                        if (!DensitySidecar.exists(map)) continue;
-                        try {
-                            var added = DensityChannelAttacher.addChannelsEntry(
-                                    project, entry, map, DensityChannelAttacher.KIND_DENSITY, null);
-                            if (entry == currentEntry) open = added;
-                        } catch (Exception e) {
-                            logger.error("Could not add density channels for {}", entry.getImageName(), e);
-                        }
-                    }
-                    final ProjectImageEntry<BufferedImage> toOpen = open;
-                    if (gui != null) {
-                        HeadlessFx.runLater(() -> {
-                            gui.refreshProject();
-                            if (toOpen != null) gui.openImageEntry(toOpen);
-                        });
-                    }
-                },
-                "fiber-density-channel-entries");
-        t.setDaemon(true);
-        t.start();
-    }
-
     // ---------- validation ----------
 
     private void revalidate() {
+        if (runBtn == null) return; // still building the dialog
         List<ImageRow> picked = pickedRows();
         boolean channelsMode = modeChannelsRadio != null && modeChannelsRadio.isSelected();
 
         ValidationResult v = validate(picked, channelsMode);
+        String setupProblem =
+                segSourceProblem(FiberAnalysisPreferences.segSourceProperty().get());
+        if (setupProblem == null) setupProblem = positivityProblem(positivityEnabled(), positivityInputs());
+        if (setupProblem != null) v = ValidationResult.error(setupProblem);
         if (v.severity != Severity.ERROR) {
             List<ProjectImageEntry<BufferedImage>> entries = new ArrayList<>();
             for (ImageRow r : picked) entries.add(r.entry);
@@ -921,7 +987,7 @@ public final class FiberDensityMapDialog {
 
         ChannelChoice(int index, String name) {
             this.index = index;
-            this.name = name == null || name.isBlank() ? "Channel " + index : name;
+            this.name = PixelPositivityComputer.displayName(name, index);
         }
 
         @Override
@@ -964,29 +1030,37 @@ public final class FiberDensityMapDialog {
             removeBtn.setOnAction(e -> {
                 pixelPositivityRowUis.remove(this);
                 pixelPositivityRowsBox.getChildren().remove(row);
+                revalidate();
             });
+            channelBox.valueProperty().addListener((obs, o, n) -> revalidate());
+            thresholdField.textProperty().addListener((obs, o, n) -> revalidate());
         }
 
-        /**
-         * Read the row's controls into a spec, or return null if the row is
-         * incomplete (no channel selected or threshold empty / not numeric).
-         */
+        PositivityInput input() {
+            ChannelChoice ch = channelBox.getSelectionModel().getSelectedItem();
+            return new PositivityInput(ch == null ? null : ch.name, thresholdField.getText());
+        }
+
+        /** @return the row as a rule, or null when it is incomplete (revalidate blocks the run then) */
         PixelPositivitySpec toSpec() {
             ChannelChoice ch = channelBox.getSelectionModel().getSelectedItem();
-            if (ch == null) return null;
-            String opDisp = opBox.getSelectionModel().getSelectedItem();
-            if (opDisp == null) opDisp = ">";
-            String op = ">".equals(opDisp) ? PixelPositivitySpec.OP_GT : PixelPositivitySpec.OP_LT;
-            String rawThr = thresholdField.getText();
-            if (rawThr == null || rawThr.isBlank()) return null;
-            double thr;
-            try {
-                thr = Double.parseDouble(rawThr.trim());
-            } catch (NumberFormatException nfe) {
-                return null;
-            }
+            Double thr = parseThreshold(thresholdField.getText());
+            if (ch == null || thr == null) return null;
+            String op = "<".equals(opBox.getSelectionModel().getSelectedItem())
+                    ? PixelPositivitySpec.OP_LT
+                    : PixelPositivitySpec.OP_GT;
             return new PixelPositivitySpec(ch.index, ch.name, op, thr);
         }
+    }
+
+    private boolean positivityEnabled() {
+        return pixelPositivityCheck != null && pixelPositivityCheck.isSelected();
+    }
+
+    private List<PositivityInput> positivityInputs() {
+        List<PositivityInput> out = new ArrayList<>();
+        for (PositivityRowUi ui : pixelPositivityRowUis) out.add(ui.input());
+        return out;
     }
 
     /**
@@ -999,6 +1073,7 @@ public final class FiberDensityMapDialog {
 
         pixelPositivityCheck = new CheckBox("Also include pixel-positivity channels");
         pixelPositivityCheck.setSelected(false);
+        pixelPositivityCheck.selectedProperty().addListener((obs, o, n) -> revalidate());
         pixelPositivityCheck.setTooltip(new Tooltip("For each row below, add one density channel to the sidecar.\n"
                 + "Per pixel: fraction of the local window where the row's source-channel value\n"
                 + "meets the threshold rule. Same window-size knob as the fiber channels, so\n"
@@ -1014,10 +1089,12 @@ public final class FiberDensityMapDialog {
         addBtn.setOnAction(e -> addPositivityRow());
         addBtn.setTooltip(new Tooltip("Add another positivity rule. Each row becomes one output channel."));
 
-        Label help = new Label("Each row adds one channel: 'Pixel positive: <ch> > <thr>'. Channel indices come from\n"
-                + "the currently-open image; if you have no image open, they come from the first\n"
-                + "project image. Thresholds are on raw sample values -- 0..255 for 8-bit, 0..65535\n"
-                + "for uint16 fluorescence, etc.");
+        Label help =
+                new Label("Each row adds one channel: 'Pixel positive: <ch> > <thr>'. The channel list comes from\n"
+                        + "the open image (or the first project image when none is open), and each image is\n"
+                        + "measured on the channel of that NAME, wherever it sits; an image without it fails\n"
+                        + "with a message. Thresholds are on raw sample values -- 0..255 for 8-bit, 0..65535\n"
+                        + "for uint16 fluorescence, etc.");
         help.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
         help.setWrapText(true);
 
@@ -1031,6 +1108,7 @@ public final class FiberDensityMapDialog {
         PositivityRowUi ui = new PositivityRowUi();
         pixelPositivityRowUis.add(ui);
         pixelPositivityRowsBox.getChildren().add(ui.row);
+        revalidate();
     }
 
     /**
@@ -1066,10 +1144,7 @@ public final class FiberDensityMapDialog {
         }
     }
 
-    /**
-     * Walk row UIs, drop any malformed rows, and refresh
-     * {@link #pixelPositivityRows}. Called from {@link #onRun()}.
-     */
+    /** Reads the rows into {@link #pixelPositivityRows}; {@link #revalidate()} has refused incomplete rows. */
     private void materializePositivityRows() {
         pixelPositivityRows.clear();
         for (PositivityRowUi ui : pixelPositivityRowUis) {

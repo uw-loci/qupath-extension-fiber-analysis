@@ -27,7 +27,6 @@ SCRIPT = os.path.join(PKG_ROOT, "scripts", "density_tile.py")
 from fiberlib import intensity  # noqa: E402
 
 PX_UM = 0.5
-WINDOW_UM = 16.0  # 32 px
 WINDOW_PX = 32
 
 
@@ -59,8 +58,8 @@ def _run(tmp_path, image, name, **extra):
         "region_w": image.shape[1],
         "region_h": image.shape[0],
         "pixel_size_um": PX_UM,
-        "window_size_um": WINDOW_UM,
-        "window_overlap_percent": 50.0,
+        "window_px": WINDOW_PX,
+        "stride_px": WINDOW_PX // 2,
         "seg_channel": "Raw intensity",
         "threshold_method": "manual",
         "manual_threshold": 120,
@@ -87,9 +86,7 @@ def _run(tmp_path, image, name, **extra):
 
 def test_coherence_separates_aligned_from_isotropic_texture(tmp_path):
     img = _phantom()
-    out, _ = _run(
-        tmp_path, img, "whole", density_mode="window", window_overlap_percent=0.0
-    )
+    out, _ = _run(tmp_path, img, "whole", density_mode="window", stride_px=WINDOW_PX)
     coh = out["intensity_coherence"]
     left = coh[:, : coh.shape[1] // 2 - 1]
     right = coh[:, coh.shape[1] // 2 + 1 :]
@@ -124,9 +121,7 @@ def test_signal_density_is_on_the_absolute_scale_not_per_image(tmp_path):
 
 def test_window_signal_density_equals_the_window_mean(tmp_path):
     img = _phantom()
-    out, _ = _run(
-        tmp_path, img, "w", density_mode="window", window_overlap_percent=50.0
-    )
+    out, _ = _run(tmp_path, img, "w", density_mode="window", stride_px=WINDOW_PX // 2)
     stride = WINDOW_PX // 2
     scalar = img.astype(np.float64) / 255.0
     iy, ix = 3, 5
@@ -265,3 +260,73 @@ def test_a_window_without_fiber_has_no_angle_or_coverage(tmp_path, mode):
     # Wherever an angle is given, at least 10% of the window is fiber.
     finite = np.isfinite(angle)
     assert (cover[finite] >= 10.0 - 1e-9).all()
+
+
+# --------------------------------------------------------------------------
+# Settings Java sends
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("window_px,stride_px", [(30, 22), (29, 14), (32, 16)])
+@pytest.mark.parametrize("mode", ["window", "pixel"])
+def test_the_lattice_is_the_one_java_sent(tmp_path, window_px, stride_px, mode):
+    # Java sizes the window and stride (TileGrid.windowPx / stridePx) and
+    # builds its tile grid from them; the script must not size its own. The
+    # first two cases are halfway cases (30 px at 25 % overlap, 29 px at 50 %)
+    # where Math.round and Python's round disagree.
+    img = _phantom()
+    extra = {"density_mode": mode, "window_px": window_px, "stride_px": stride_px}
+    if mode == "pixel":
+        extra["pixel_step"] = 4
+    out, outputs = _run(tmp_path, img, f"lat_{mode}_{window_px}", **extra)
+    assert int(out["window_px"]) == window_px
+    assert outputs["window_px"] == str(window_px)
+    h, w = img.shape
+    if mode == "window":
+        expect = [(h - window_px) // stride_px + 1, (w - window_px) // stride_px + 1]
+        assert int(out["stride_px"]) == stride_px
+    else:
+        expect = [-(-h // 4), -(-w // 4)]
+    assert list(out["grid_shape"]) == expect
+    assert out["fiber_coverage_percent"].shape == tuple(expect)
+
+
+FIBER_CHANNELS = (
+    "fiber_coverage_percent",
+    "ridge_count",
+    "skeleton_length_um",
+    "branch_points",
+    "mean_angle_deg",
+    "order_parameter",
+)
+
+
+@pytest.mark.parametrize("mode", ["window", "pixel"])
+def test_windows_below_the_coverage_gate_are_empty_in_every_fiber_channel(
+    tmp_path, mode
+):
+    img = _phantom()
+    extra = {"density_mode": mode}
+    if mode == "pixel":
+        extra["pixel_step"] = 4
+    open_, _ = _run(tmp_path, img, f"nogate_{mode}", **extra)
+    gate = 40.0
+    gated, _ = _run(
+        tmp_path, img, f"gate_{mode}", min_window_coverage_percent=gate, **extra
+    )
+    cover = np.nan_to_num(open_["fiber_coverage_percent"], nan=0.0)
+    below = cover < gate
+    assert below.any() and (~below).any()
+    for k in FIBER_CHANNELS:
+        assert np.isnan(gated[k][below]).all(), k
+        np.testing.assert_array_equal(gated[k][~below], open_[k][~below], err_msg=k)
+    for k in THRESHOLD_FREE:
+        np.testing.assert_array_equal(gated[k], open_[k], err_msg=k)
+
+
+def test_ridge_count_uses_the_min_branch_length_it_is_sent(tmp_path):
+    img = _phantom()
+    short, _ = _run(tmp_path, img, "short", density_mode="window", min_branch_um=0.5)
+    long_, _ = _run(tmp_path, img, "long", density_mode="window", min_branch_um=20.0)
+    assert not np.array_equal(short["ridge_count"], long_["ridge_count"])
+    assert np.nansum(long_["ridge_count"]) < np.nansum(short["ridge_count"])

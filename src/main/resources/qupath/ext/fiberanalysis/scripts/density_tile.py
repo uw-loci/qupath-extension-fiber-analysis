@@ -53,10 +53,18 @@ Inputs (Appose 0.10+ injected as variables):
     invert_intensity         : bool
     rolling_ball_radius      : int  (pixels; 0 disables)
 
-  Window grid
+  Window grid (Java sizes both with TileGrid.windowPx / stridePx, the same
+  half-even rounding the Run uses, so the two sides cannot disagree)
     pixel_size_um            : float
-    window_size_um           : float
-    window_overlap_percent   : float
+    window_px                : int   window side in pixels
+    stride_px                : int   window stride in pixels (window mode)
+    min_window_coverage_percent : float  windows below this fiber coverage
+                                     are NaN in every fiber channel, as in the
+                                     Run's heatmaps; the threshold-free
+                                     channels are kept (default 0 = off)
+    min_branch_um            : float  skeleton branches shorter than this are
+                                     dropped from the ridge count, as in the
+                                     Run (default 5)
 
   Density mode
     density_mode             : str  'window' | 'pixel'  (default 'window')
@@ -114,6 +122,8 @@ def _run_window_mode(
     px_um,
     rw,
     rh,
+    min_branch_um,
+    min_cov_pct,
     win_mod,
     straight_mod,
     morph_mod,
@@ -150,7 +160,7 @@ def _run_window_mode(
     tort = straight_mod.compute_skeleton_tortuosity(
         fiber_mask,
         window_grid=grid,
-        min_branch_px=max(1, int(round(2.0 / px_um))),
+        min_branch_px=max(1, int(round(min_branch_um / px_um))),
     )
     ridge_count = tort.get("per_window_n_fibers")
     if ridge_count is None:
@@ -178,19 +188,25 @@ def _run_window_mode(
     order_parameter = grid.get("order_parameter")
     if order_parameter is None:
         order_parameter = np.full((Hw, Ww), np.nan, dtype=np.float64)
+    if branch_points is None:
+        branch_points = np.zeros((Hw, Ww), dtype=np.float64)
+
+    fiber = _gate_below_coverage(
+        100.0 * n_pix.astype(np.float64) / max(window_area_px, 1.0),
+        min_cov_pct,
+        {
+            "fiber_coverage_percent": fiber_coverage_percent,
+            "ridge_count": ridge_count,
+            "skeleton_length_um": skeleton_length_um,
+            "branch_points": branch_points,
+            "mean_angle_deg": mean_angle_deg,
+            "order_parameter": order_parameter,
+        },
+    )
 
     np.savez_compressed(
         out_npz,
-        fiber_coverage_percent=fiber_coverage_percent.astype(np.float32),
-        ridge_count=ridge_count.astype(np.float32),
-        skeleton_length_um=skeleton_length_um.astype(np.float32),
-        branch_points=(
-            branch_points.astype(np.float32)
-            if branch_points is not None
-            else np.zeros((Hw, Ww), dtype=np.float32)
-        ),
-        mean_angle_deg=mean_angle_deg.astype(np.float32),
-        order_parameter=order_parameter.astype(np.float32),
+        **{k: v.astype(np.float32) for k, v in fiber.items()},
         signal_density=signal_density.astype(np.float32),
         intensity_coherence=intensity_coherence.astype(np.float32),
         window_px=np.int32(window_px),
@@ -208,6 +224,19 @@ def _run_window_mode(
         int(fiber_mask.sum()),
     )
     return Hw, Ww
+
+
+def _gate_below_coverage(coverage_pct, min_cov_pct, channels):
+    """NaN every fiber channel where coverage is below the Run's per-window gate."""
+    if not min_cov_pct > 0:
+        return channels
+    below = np.asarray(coverage_pct) < float(min_cov_pct)
+    out = {}
+    for k, v in channels.items():
+        v = np.array(v, dtype=np.float64, copy=True)
+        v[below] = np.nan
+        out[k] = v
+    return out
 
 
 def _box_mean(plane, size):
@@ -231,6 +260,7 @@ def _run_pixel_mode(
     px_um,
     crop,
     step,
+    min_cov_pct,
     straight_mod,
     inten_mod,
 ):
@@ -284,16 +314,24 @@ def _run_pixel_mode(
     )
 
     out_h, out_w = len(rows), len(cols)
-    ridge_count = np.full((out_h, out_w), np.nan, dtype=np.float32)
+    ridge_count = np.full((out_h, out_w), np.nan, dtype=np.float64)
+
+    fiber = _gate_below_coverage(
+        100.0 * coverage_frac,
+        min_cov_pct,
+        {
+            "fiber_coverage_percent": fiber_coverage_percent,
+            "ridge_count": ridge_count,
+            "skeleton_length_um": skeleton_length_um,
+            "branch_points": branch_count,
+            "mean_angle_deg": mean_angle_deg,
+            "order_parameter": order_parameter,
+        },
+    )
 
     np.savez_compressed(
         out_npz,
-        fiber_coverage_percent=fiber_coverage_percent.astype(np.float32),
-        ridge_count=ridge_count,
-        skeleton_length_um=skeleton_length_um.astype(np.float32),
-        branch_points=branch_count.astype(np.float32),
-        mean_angle_deg=mean_angle_deg.astype(np.float32),
-        order_parameter=order_parameter.astype(np.float32),
+        **{k: v.astype(np.float32) for k, v in fiber.items()},
         signal_density=signal_density.astype(np.float32),
         intensity_coherence=intensity_coherence.astype(np.float32),
         window_px=np.int32(window_px),
@@ -330,8 +368,12 @@ try:
     rh = int(region_h)
 
     px_um = float(pixel_size_um)
-    win_um = float(window_size_um)
-    win_overlap_pct = float(window_overlap_percent)
+    window_px = int(window_px)
+    stride_px = int(stride_px)
+    if window_px < 2 or stride_px < 1:
+        raise ValueError(f"window_px {window_px} / stride_px {stride_px} out of range")
+    min_cov_pct = float(opt_get("min_window_coverage_percent", 0.0))
+    min_branch_um = float(opt_get("min_branch_um", 5.0))
 
     seg_chan = str(seg_channel)
     thr_method = str(threshold_method).lower()
@@ -402,11 +444,6 @@ try:
     if cx < 0 or cy < 0 or cw <= 0 or ch <= 0 or cx + cw > iw or cy + ch > ih:
         raise ValueError(f"crop ({cx},{cy},{cw},{ch}) lies outside the {iw}x{ih} read")
 
-    # ---- Window grid ----
-    window_px = max(2, int(round(win_um / px_um)))
-    overlap = max(0.0, min(0.95, win_overlap_pct / 100.0))
-    stride_px = max(1, int(round(window_px * (1.0 - overlap))))
-
     if density_mode == "pixel":
         step = max(1, int(opt_get("pixel_step", 1)))
         out_h, out_w = _run_pixel_mode(
@@ -420,6 +457,7 @@ try:
             px_um,
             (cx, cy, cw, ch),
             step,
+            min_cov_pct,
             straight,
             inten,
         )
@@ -438,6 +476,8 @@ try:
             px_um,
             cw,
             ch,
+            min_branch_um,
+            min_cov_pct,
             win,
             straight,
             morph,
