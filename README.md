@@ -147,9 +147,9 @@ reference. Sections 4-6 start collapsed.
 | Rolling-ball radius (um) | 2. Fiber segmentation | 0.0 | um | Background subtraction (morphological top-hat) before thresholding; 0 turns it off. |
 | Preview segmentation... | 2. Fiber segmentation | -- | -- | Button: segments a small square around the viewer center with the current settings and shows the mask. |
 | Mask source | 2. Fiber segmentation | Pixel classifier | -- | With `Use existing fiber mask`: `Pixel classifier`, `Object class` or `File on disk`. |
-| Classifier name | 2. Fiber segmentation | first in the project | -- | Pixel classifier whose fiber channel is used. |
-| Object class | 2. Fiber segmentation | first in the project | -- | Class whose objects are rasterized to a binary mask. |
-| Mask file | 2. Fiber segmentation | (empty) | -- | A `.tif` or `.npy` binary mask (**Browse...**). |
+| Classifier name | 2. Fiber segmentation | first in the project | -- | A pixel classifier saved in the project. It runs on each region at its own resolution. |
+| Fiber class | 2. Fiber segmentation | a class named like fiber or collagen | -- | With `Pixel classifier`: the classifier's class that marks fibers (the list shows that classifier's classes). With `Object class`: the class of the fiber objects (annotations or detections); their outlines are filled to make the mask. |
+| Mask file | 2. Fiber segmentation | (empty) | -- | A binary mask of the **whole image** (`.png`, `.tif`, `.npy` or `.npz`; any non-zero pixel is fiber), at full resolution or at one downsample of it. Each annotation's region is cut from it. One file belongs to one image, so a batch over several images refuses this source. |
 | Create collagen detection objects (split, classed CollagenAnalysis) | 2. Fiber segmentation | **checked** | -- | Adds one `CollagenAnalysis` detection per connected fiber blob under the source annotation. On by default, so a run changes the image's hierarchy. |
 | Enable moving-window analysis | 3. Window analysis | checked | -- | Divide the analyzed zone into a grid of windows and report per-window metrics. |
 | Window size (um) | 3. Window analysis | 15.0 | um | Side length of each square window, rounded to whole pixels. |

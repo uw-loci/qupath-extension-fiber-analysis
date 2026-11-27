@@ -8,6 +8,20 @@ recorded in every result file.
 
 ### Fixed
 
+- **"Use existing fiber mask" works** ([#1](https://github.com/uw-loci/qupath-extension-fiber-analysis/issues/1)).
+  The `Pixel classifier` and `Object class` mask sources were in the dialog
+  but had no code behind them since 0.1.0, so every run with them failed
+  with "seg_source=existing but no existing_fiber_mask array or valid
+  existing_mask_path given". The classifier now runs on each region (and
+  each tile of a large annotation) at its own resolution, and the new
+  **Fiber class** picker, filled with that classifier's classes, says which
+  class is fiber. `Object class` fills the outlines of that class's objects.
+  `File on disk` now takes a mask of the whole image, at full resolution or
+  one downsample, and cuts each region from it; before, the file had to
+  match each region's exact size, which no user could know. A source that
+  cannot work (no classifier saved, a class the classifier lacks, an image
+  with no objects of the class, one mask file for several images) is
+  refused before the run starts. fiberlib 0.4.9.
 - **The Python worker runs in UTF-8 mode on every host.** It starts with `PYTHONUTF8=1` (unless
   QuPath was started with `PYTHONUTF8` set), so on Windows files it reads or writes without an
   explicit encoding, paths and its error output use UTF-8 like the Linux and macOS workers,

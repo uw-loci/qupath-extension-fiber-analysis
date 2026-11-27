@@ -108,6 +108,9 @@ public class FiberAnalysisWorkflow {
     /** The project at launch; the worker thread cannot ask QP for it. */
     private volatile Project<BufferedImage> projectAtLaunch;
 
+    /** Where "Use existing fiber mask" reads its mask; null when segmenting within the extension. */
+    private volatile ExistingMask existingMask;
+
     /** Notes recorded with the run. */
     private volatile List<String> runNotes = List.of();
     /** The GLCM range fitted for this run; null while the settings give it. */
@@ -429,6 +432,23 @@ public class FiberAnalysisWorkflow {
             }
 
             double pixelSizeUm = resolvePixelSizeUm(params, imageData);
+
+            // An existing-mask source that cannot work fails the run here, once,
+            // instead of failing every annotation in Python.
+            try {
+                existingMask = ExistingMask.open(params, projectAtLaunch);
+                if (existingMask != null) {
+                    existingMask.checkImage(imageData);
+                    logger.info("Fiber mask from {}", existingMask.describe());
+                }
+            } catch (IOException e) {
+                logger.error("Fiber Analysis: {}", e.getMessage());
+                HeadlessFx.runLater(() -> {
+                    progress.close();
+                    Dialogs.showErrorMessage("Fiber Analysis", e.getMessage());
+                });
+                return;
+            }
 
             // Compute the parameter fingerprint once -- same hash for every
             // annotation in the run (PI M3). Stable hex prefix of SHA-256 over
@@ -889,6 +909,9 @@ public class FiberAnalysisWorkflow {
                 (int) Math.round(w / ds),
                 (int) Math.round(h / ds));
         inputs.put("zone_mask_path", zonePng.toString());
+        Path existingPng = annDir.resolve("existing_fiber_mask.png");
+        if (existingMask != null && existingMask.writesMask()) progress.setSub(existingMask.progressText());
+        putExistingMask(inputs, imageData, rx, ry, ds, regionW, regionH, existingPng);
 
         progress.setSub("Running fiber analysis (Python)...");
         Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", inputs);
@@ -901,6 +924,7 @@ public class FiberAnalysisWorkflow {
             throw new RuntimeException("Python error: " + result.get("error").getAsString());
         }
         deleteRegionImage(regionPng);
+        deleteRegionImage(existingPng);
 
         Map<String, Path> overlays = new LinkedHashMap<>();
         registerIfExists(overlays, "fiber_mask", annDir.resolve("fiber_mask_overlay.png"));
@@ -1093,6 +1117,9 @@ public class FiberAnalysisWorkflow {
                         ownedBoxes.get(t));
                 in.put("zone_mask_path", tileZone.toString());
                 in.put("radon_on", false);
+                Path tileExisting = tileDir.resolve("existing_fiber_mask.png");
+                putExistingMask(
+                        in, imageData, tileFullX, tileFullY, ds, tileSize.width(), tileSize.height(), tileExisting);
 
                 Task task = ApposeFiberService.getInstance().runTask("run_fiber_analysis", in);
                 Object json = task.outputs.get("result_json");
@@ -1113,6 +1140,7 @@ public class FiberAnalysisWorkflow {
                 int kept = mergeTileWindows(
                         tileDir.resolve("windows.json"), box, ownedBoxes.get(t), mergedByPos, coreOwned);
                 deleteRegionImage(tilePng);
+                deleteRegionImage(tileExisting);
                 tileWindowCounts.add(kept);
                 tileScalars.add(flattenScalars(result));
                 tileIndices.add(t);
@@ -2477,6 +2505,34 @@ public class FiberAnalysisWorkflow {
                 return p.rollingBallRadiusUm();
             }
         };
+    }
+
+    /**
+     * Points the Python run at the existing fiber mask of one region: a PNG written here for a pixel
+     * classifier or object class, or the user's whole-image mask file, which Python cuts to the region.
+     */
+    private void putExistingMask(
+            Map<String, Object> in,
+            ImageData<BufferedImage> imageData,
+            int regionX,
+            int regionY,
+            double ds,
+            int width,
+            int height,
+            Path png)
+            throws IOException {
+        ExistingMask m = existingMask;
+        if (m == null) return;
+        if (m.writesMask()) {
+            long fiber = m.write(imageData, regionX, regionY, ds, width, height, png);
+            logger.debug("Existing fiber mask at ({},{}): {} fiber pixels", regionX, regionY, fiber);
+            in.put("existing_mask_path", png.toString());
+        } else {
+            in.put("existing_mask_path", m.maskFile().toString());
+            in.put("existing_mask_full_w", imageData.getServer().getWidth());
+            in.put("existing_mask_full_h", imageData.getServer().getHeight());
+            in.put("analysis_downsample", ds);
+        }
     }
 
     static void rasterisePolygonMask(

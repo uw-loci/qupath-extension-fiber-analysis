@@ -89,6 +89,9 @@ def analyze(
     zone_mask=None,
     existing_fiber_mask=None,
     existing_mask_path=None,
+    existing_mask_full_w=0,
+    existing_mask_full_h=0,
+    analysis_downsample=1.0,
     # Search area
     pixel_size_um=1.0,
     border_zone_width_um=30.0,
@@ -179,7 +182,11 @@ def analyze(
         measured from the part of the outline the tile sees. If None, the
         zone is computed from ``boundary_mask``.
     existing_fiber_mask / existing_mask_path:
-        Used when seg_source == 'existing': a bool array, or a PNG path.
+        Used when seg_source == 'existing': a bool array, or a mask file
+        (.png/.tif/.npy/.npz). The file is the mask of this region unless
+        existing_mask_full_w/h are > 0, in which case it is a mask of the
+        whole image (any uniform scale) and the region is cut from it at
+        region_offset_x/y and analysis_downsample.
 
     Returns
     -------
@@ -478,11 +485,20 @@ def analyze(
                     f"existing_fiber_mask shape {fiber_mask.shape} != region ({rh}, {rw})"
                 )
         elif existing_mask and os.path.exists(existing_mask):
-            fiber_mask = seg.load_existing_mask(existing_mask, image_rgb.shape[:2])
+            crop = None
+            if int(existing_mask_full_w or 0) > 0 and int(existing_mask_full_h or 0) > 0:
+                crop = {
+                    "full_w": int(existing_mask_full_w),
+                    "full_h": int(existing_mask_full_h),
+                    "offset_x": float(region_offset_x),
+                    "offset_y": float(region_offset_y),
+                    "downsample": float(analysis_downsample or 1.0),
+                }
+            fiber_mask = seg.load_existing_mask(existing_mask, image_rgb.shape[:2], crop=crop)
         else:
             raise FileNotFoundError(
-                "seg_source=existing but no existing_fiber_mask array or valid "
-                f"existing_mask_path given (got {existing_mask!r})"
+                "Use existing fiber mask is selected but no mask was given"
+                + (f": the mask file {existing_mask!r} does not exist" if existing_mask else "")
             )
     else:
         fiber_mask = seg.segment_internal(

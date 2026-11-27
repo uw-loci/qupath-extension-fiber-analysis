@@ -178,6 +178,16 @@ public final class FiberAnalysisBatchDialog {
                 return;
             }
             FiberAnalysisParams paramsForRun = mergeOverrides(loadedParams);
+            if (chosen.size() > 1
+                    && "existing".equalsIgnoreCase(paramsForRun.segSource())
+                    && ExistingMask.FILE.equals(paramsForRun.maskSource())) {
+                Dialogs.showErrorMessage(
+                        "Fiber Analysis Batch",
+                        "These settings read the fiber mask from one file, which belongs to one image."
+                                + " Select a single image, or use a pixel classifier or an object class as the"
+                                + " mask source.");
+                return;
+            }
             dialog.close();
             runBatch(paramsForRun, chosen);
         });

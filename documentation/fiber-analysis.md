@@ -787,14 +787,31 @@ Practical guidance for mode A:
 
 **Mode B: Use existing fiber mask.** Three sub-sources:
 
-- **Pixel classifier** -- pick a classifier trained in the current
-  project. The classifier output is rasterized to a binary fiber
-  mask on the dilated-zone region.
-- **Object class** -- pick a PathClass; the Java side rasterizes all
-  objects of that class into a binary mask before dispatching the
-  Appose task.
-- **File on disk** -- a `.tif` or `.npy` file with a binary mask
-  matching the analyzed image dimensions.
+- **Pixel classifier** -- pick a classifier saved in the current
+  project (**Classify > Pixel classification > Train pixel classifier**
+  or **Create thresholder**, then **Save**), and under **Fiber class**
+  the classifier class that marks fibers. The classifier runs on each
+  analyzed region at its own resolution; every pixel it assigns to the
+  fiber class is fiber. Classifiers with probability output use the
+  most probable class per pixel. You do not need to create objects
+  from the classifier first.
+- **Object class** -- pick, under **Fiber class**, the class of
+  objects that outline fibers (annotations or detections, for example
+  made with the classifier's **Create objects**). Their outlines are
+  filled into the mask; objects of other classes are ignored. An image
+  with no objects of that class is refused before the run starts.
+- **File on disk** -- a binary mask of the **whole image** made
+  elsewhere (`.png`, `.tif`, `.npy` or `.npz`; any non-zero pixel is
+  fiber). It may be saved at full resolution or at one downsample of
+  the image (for example 1/4 of the width and height); each region is
+  cut from it with nearest-neighbor sampling. Large images: save the
+  mask at a downsample, since a `.png` or `.tif` is read whole. One
+  file belongs to one image, so a batch over several images refuses
+  this source.
+
+With an existing mask, an automatic GLCM gray range is not available
+(it is fitted on the extension's own segmentation): set the range by
+hand.
 
 Practical guidance for mode B: if you have already trained a pixel
 classifier on this image type, **prefer Mode B** -- the classifier

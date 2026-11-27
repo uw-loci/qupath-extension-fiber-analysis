@@ -24,7 +24,7 @@ forgetting the bump means users keep running stale Python.
     expectations).
 """
 
-__version__ = "0.4.8"
+__version__ = "0.4.9"
 
 # 0.2.2 (2026-05-27):
 #   - io.py: per-window `included` flag (False when the parent script set
@@ -570,3 +570,11 @@ __version__ = "0.4.8"
 #     code once; _trace_links converts flat indices to (y, x) in one numpy
 #     call. Output is bit-identical (198,672 fibers and 729 window traces on a
 #     7830 px PDAC_1 tile); the tile went 85.8 -> 81.6 s on Linux.
+
+# 0.4.9 (2026-11-27):
+#   - segmentation.load_existing_mask reads .png as well as .tif/.npy/.npz,
+#     and with crop= cuts a region out of a mask of the WHOLE image saved at
+#     any uniform scale (nearest neighbor). analyze() takes
+#     existing_mask_full_w/h and analysis_downsample for it. A region-sized
+#     mask (crop=None) is what Java writes for the pixel-classifier and
+#     object-class sources. Issue #1.

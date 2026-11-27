@@ -1095,7 +1095,8 @@ public final class FiberAnalysisDialog {
                         : classifierNameCombo.getItems().get(0));
         applyTooltip(
                 classifierNameCombo,
-                "Name of a pixel classifier in the current project whose 'fiber' channel will be used.");
+                "A pixel classifier saved in this project. It is applied to each region at its own resolution,"
+                        + " and the pixels it assigns to the fiber class below are the fiber mask.");
         BooleanBinding classifierDisabled =
                 maskSourceClassifierRadio.selectedProperty().not();
         classifierLabel.disableProperty().bind(classifierDisabled);
@@ -1104,24 +1105,31 @@ public final class FiberAnalysisDialog {
         existingGrid.add(classifierNameCombo, 1, erow);
         erow++;
 
-        Label objectClassLabel = new Label("Object class:");
+        // One class picker for both sources: the classifier's output class
+        // that marks fibers, or the class of the fiber objects in the image.
+        Label objectClassLabel = new Label("Fiber class:");
         objectClassLabel.setStyle(INDENT_STYLE);
-        List<String> pathClassNames = listPathClasses();
-        objectClassCombo = new ComboBox<>(FXCollections.observableArrayList(
-                pathClassNames.isEmpty() ? List.of("(none available)") : pathClassNames));
-        String prefObjClass = FiberAnalysisPreferences.objectClassProperty().get();
-        objectClassCombo.setValue(
-                pathClassNames.contains(prefObjClass)
-                        ? prefObjClass
-                        : objectClassCombo.getItems().get(0));
-        applyTooltip(objectClassCombo, "PathClass whose objects will be rasterised to a binary mask.");
-        BooleanBinding objectDisabled =
-                maskSourceObjectClassRadio.selectedProperty().not();
+        objectClassCombo = new ComboBox<>();
+        fillFiberClasses(FiberAnalysisPreferences.objectClassProperty().get());
+        applyTooltip(
+                objectClassCombo,
+                "With a pixel classifier: the classifier's class that marks fibers; every pixel the classifier"
+                        + " assigns to it is fiber. With objects: the class of the fiber objects (annotations or"
+                        + " detections, for example from the classifier's Create objects); their outlines are"
+                        + " filled to make the mask.");
+        BooleanBinding objectDisabled = maskSourceObjectClassRadio
+                .selectedProperty()
+                .not()
+                .and(maskSourceClassifierRadio.selectedProperty().not());
         objectClassLabel.disableProperty().bind(objectDisabled);
         objectClassCombo.disableProperty().bind(objectDisabled);
         existingGrid.add(objectClassLabel, 0, erow);
         existingGrid.add(objectClassCombo, 1, erow);
         erow++;
+        maskSourceGroup
+                .selectedToggleProperty()
+                .addListener((obs, o, n) -> fillFiberClasses(objectClassCombo.getValue()));
+        classifierNameCombo.valueProperty().addListener((obs, o, n) -> fillFiberClasses(null));
 
         Label maskFileLabel = new Label("Mask file:");
         maskFileLabel.setStyle(INDENT_STYLE);
@@ -1130,7 +1138,9 @@ public final class FiberAnalysisDialog {
         maskFileField.setPrefColumnCount(28);
         applyTooltip(
                 maskFileField,
-                "Path to a .tif or .npy file containing a binary fiber mask matching the analyzed image dimensions.");
+                "A binary fiber mask of the WHOLE image (.png, .tif, .npy or .npz; any non-zero pixel is fiber),"
+                        + " at full resolution or at one downsample of it, for example a mask exported from QuPath"
+                        + " at downsample 4. Each annotation's region is cut from it.");
         Button browseMaskBtn = new Button("Browse...");
         browseMaskBtn.setMinWidth(Region.USE_PREF_SIZE);
         browseMaskBtn.setAccessibleText("Browse for fiber mask file");
@@ -1139,7 +1149,7 @@ public final class FiberAnalysisDialog {
             chooser.setTitle("Choose fiber-mask file");
             chooser.getExtensionFilters()
                     .addAll(
-                            new FileChooser.ExtensionFilter("Mask files", "*.tif", "*.tiff", "*.npy"),
+                            new FileChooser.ExtensionFilter("Mask files", "*.png", "*.tif", "*.tiff", "*.npy", "*.npz"),
                             new FileChooser.ExtensionFilter("All files", "*.*"));
             File f = chooser.showOpenDialog(
                     maskFileField.getScene() == null
@@ -1787,6 +1797,26 @@ public final class FiberAnalysisDialog {
                 errors.add("Mask file path is empty or does not exist.");
             }
         }
+        if (segExistingRadio.isSelected()
+                && maskSourceClassifierRadio.isSelected()
+                && nullIfPlaceholder(classifierNameCombo.getValue()) == null) {
+            markInvalid(classifierNameCombo);
+            errors.add("No pixel classifier is saved in this project. Train one and save it, or pick another"
+                    + " mask source.");
+        }
+        if (segExistingRadio.isSelected()
+                && !maskSourceFileRadio.isSelected()
+                && nullIfPlaceholder(objectClassCombo.getValue()) == null) {
+            markInvalid(objectClassCombo);
+            errors.add("Choose the fiber class.");
+        }
+        if (segExistingRadio.isSelected()
+                && textureEnabledCheck.isSelected()
+                && GlcmRange.isAuto(glcmRangeMethodCombo.getValue())) {
+            markInvalid(glcmRangeMethodCombo);
+            errors.add("An automatic GLCM gray range is fitted with the extension's own segmentation. With an"
+                    + " existing fiber mask, set the gray range by hand.");
+        }
         if (segInternalRadio.isSelected()
                 && "Project Otsu (calibrated)".equals(thresholdMethodCombo.getValue())
                 && (calibrationCombo.getValue() == null
@@ -2277,6 +2307,43 @@ public final class FiberAnalysisDialog {
         return List.of();
     }
 
+    /**
+     * Fills the fiber-class picker for the selected mask source: the selected classifier's classes, or the
+     * project's classes for objects. Keeps {@code keep} when it is offered; otherwise suggests a class.
+     */
+    private void fillFiberClasses(String keep) {
+        if (objectClassCombo == null) return;
+        List<String> names;
+        boolean fromClassifier = maskSourceClassifierRadio != null && maskSourceClassifierRadio.isSelected();
+        if (fromClassifier) {
+            names = listClassifierClasses(classifierNameCombo == null ? null : classifierNameCombo.getValue());
+        } else {
+            names = listPathClasses();
+        }
+        objectClassCombo.getItems().setAll(names.isEmpty() ? List.of("(none available)") : names);
+        String pick;
+        if (keep != null && names.contains(keep)) pick = keep;
+        else if (fromClassifier) pick = ExistingMask.suggestFiberClass(names);
+        else pick = names.isEmpty() ? null : names.get(0);
+        objectClassCombo.setValue(pick == null ? objectClassCombo.getItems().get(0) : pick);
+    }
+
+    private List<String> listClassifierClasses(String classifierName) {
+        if (classifierName == null || gui == null || gui.getProject() == null) return List.of();
+        try {
+            var classifier = gui.getProject().getPixelClassifiers().get(classifierName);
+            if (classifier == null) return List.of();
+            List<String> out = new ArrayList<>();
+            for (var pc : classifier.getMetadata().getClassificationLabels().values()) {
+                if (pc != null && !out.contains(pc.toString())) out.add(pc.toString());
+            }
+            return out;
+        } catch (Exception e) {
+            logger.debug("Could not read the classes of {}: {}", classifierName, e.getMessage());
+            return List.of();
+        }
+    }
+
     private List<String> listPathClasses() {
         try {
             if (gui != null && gui.getAvailablePathClasses() != null) {
@@ -2284,7 +2351,7 @@ public final class FiberAnalysisDialog {
                         .filter(pc -> pc != null
                                 && pc.getName() != null
                                 && !pc.getName().isEmpty())
-                        .map(pc -> pc.getName())
+                        .map(PathClass::toString)
                         .collect(Collectors.toList());
             }
         } catch (Exception e) {

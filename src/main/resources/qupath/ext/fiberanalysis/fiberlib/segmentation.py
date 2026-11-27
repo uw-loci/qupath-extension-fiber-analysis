@@ -427,30 +427,62 @@ def segment_internal(
     return mask.astype(bool)
 
 
-def load_existing_mask(path, image_shape):
-    """Read a binary fiber mask from a .tif or .npy file.
+def load_existing_mask(path, image_shape, crop=None):
+    """Read a binary fiber mask from a .png, .tif, .npy or .npz file.
 
-    Validates that the mask's shape matches ``image_shape`` (H, W).
-    Anything non-zero is treated as fiber.
+    Anything non-zero is fiber.
+
+    crop: None when the file is the mask of this region itself (its shape
+    must equal ``image_shape``). Otherwise a dict describing a mask of the
+    WHOLE image: ``full_w``, ``full_h`` (image size in full-resolution
+    pixels), ``offset_x``, ``offset_y`` (region origin, full-resolution) and
+    ``downsample`` (full-resolution pixels per region pixel). The mask may be
+    saved at any uniform scale of the image; the region's pixels are taken
+    from it by nearest neighbor.
     """
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".npy", ".npz"):
-        arr = np.load(path)
-        if ext == ".npz":
-            # take the first array stored inside
-            arr = arr[arr.files[0]]
-    elif ext in (".tif", ".tiff"):
-        # PIL is already a dependency; avoid pulling tifffile.
+    if ext == ".npy":
+        arr = np.load(path, mmap_mode="r")
+    elif ext == ".npz":
+        with np.load(path) as z:
+            arr = z[z.files[0]]
+    elif ext in (".tif", ".tiff", ".png"):
         from PIL import Image
 
-        arr = np.asarray(Image.open(path))
+        # A whole-image mask is routinely larger than PIL's default
+        # decompression-bomb limit; the file is the user's own.
+        old_limit = Image.MAX_IMAGE_PIXELS
+        Image.MAX_IMAGE_PIXELS = None
+        try:
+            with Image.open(path) as im:
+                arr = np.asarray(im)
+        finally:
+            Image.MAX_IMAGE_PIXELS = old_limit
     else:
-        raise ValueError(f"Unsupported mask file extension {ext!r}")
+        raise ValueError(f"Unsupported mask file extension {ext!r} (use .png, .tif, .npy or .npz)")
 
     if arr.ndim == 3:
         arr = arr[..., 0]
-    if arr.shape != tuple(image_shape):
+    rh, rw = (int(v) for v in image_shape)
+    if crop is None:
+        if arr.shape != (rh, rw):
+            raise ValueError(f"Mask shape {arr.shape} does not match the region shape {(rh, rw)}")
+        return np.asarray(arr) != 0
+
+    full_w = float(crop["full_w"])
+    full_h = float(crop["full_h"])
+    mh, mw = arr.shape
+    sx = mw / full_w
+    sy = mh / full_h
+    if abs(sx - sy) > 0.01 * max(sx, sy) + 1.0 / min(full_w, full_h):
         raise ValueError(
-            f"Mask shape {arr.shape} does not match image shape {tuple(image_shape)}"
+            f"Mask file is {mw} x {mh} pixels, which is not a uniform scale of the image"
+            f" ({int(full_w)} x {int(full_h)}). Save the mask for the whole image, at full"
+            " resolution or at one downsample."
         )
-    return arr.astype(bool)
+    ds = float(crop["downsample"])
+    ox = float(crop["offset_x"])
+    oy = float(crop["offset_y"])
+    xs = np.clip(((ox + (np.arange(rw) + 0.5) * ds) * sx).astype(np.int64), 0, mw - 1)
+    ys = np.clip(((oy + (np.arange(rh) + 0.5) * ds) * sy).astype(np.int64), 0, mh - 1)
+    return np.asarray(arr[ys][:, xs]) != 0
