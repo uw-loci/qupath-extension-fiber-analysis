@@ -241,13 +241,16 @@ def test_refuses_a_different_feature_set(tmp_path):
         wmodel.check_compatibility(meta, ["signal", "noise1", "noise2"], GEOMETRY)
 
 
-def test_refuses_the_same_features_in_a_different_order(tmp_path):
-    # A model scores columns by position, so a reorder reads one measurement
-    # as another and nothing about the output would look wrong.
+def test_columns_are_selected_by_name_whatever_their_order(tmp_path):
+    # A model scores columns by position, so the input is reordered to the
+    # trained order by name rather than handed over as it came.
     _out, meta = _train_and_save(tmp_path)
-    swapped = [FEATURES[1], FEATURES[0]] + FEATURES[2:]
-    with pytest.raises(wmodel.ModelRefusal, match="different order"):
-        wmodel.check_compatibility(meta, swapped, GEOMETRY)
+    swapped = [FEATURES[1], FEATURES[0]] + FEATURES[2:] + ["extra"]
+    x = np.arange(10 * len(swapped), dtype=np.float64).reshape(10, -1)
+    assert wmodel.check_compatibility(meta, swapped, GEOMETRY) == []
+    sel, notes = wmodel.select_trained_columns(meta, x, swapped)
+    np.testing.assert_array_equal(sel, x[:, [1, 0, 2, 3]])
+    assert any("extra" in n for n in notes)
 
 
 def test_refuses_a_different_pixel_size_even_when_the_window_microns_match(tmp_path):

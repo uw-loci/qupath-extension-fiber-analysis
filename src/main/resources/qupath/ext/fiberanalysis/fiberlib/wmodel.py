@@ -363,6 +363,8 @@ def save_model(
     training=None,
     calibration=None,
     verdict=None,
+    input_feature_names=None,
+    excluded_features=None,
 ):
     """Write the model and everything needed to refuse it later.
 
@@ -370,6 +372,11 @@ def save_model(
     including pixel size, and the verdict from validation -- so a model that
     failed its own checks says so wherever it travels, not only in the dialog
     that was dismissed.
+
+    Args:
+        input_feature_names: every column training was handed, before the
+                             viability check excluded any.
+        excluded_features:   excluded column name to the reason.
     """
     _sklearn()
     import joblib
@@ -384,6 +391,8 @@ def save_model(
         "model_kind": str(kind),
         "class_names": list(class_names),
         "feature_names": list(feature_names),
+        "input_feature_names": list(input_feature_names if input_feature_names is not None else feature_names),
+        "excluded_features": dict(excluded_features or {}),
         "impute_values": None if impute_values is None else [float(v) for v in impute_values],
         "geometry": dict(geometry),
         "versions": {
@@ -431,6 +440,56 @@ def load_model(model_dir):
     return est, meta
 
 
+def measured_feature_names(meta):
+    """The measured columns a model was fitted on, in fit order.
+
+    A forest's saved names also carry the appended ``_isnan`` indicators;
+    those are rebuilt by :func:`prepare_matrix`, not read from the input.
+    """
+    names = list(meta.get("feature_names", []))
+    if meta.get("impute_values") is not None:
+        names = names[: len(names) // 2]
+    return names
+
+
+def _require_trained_columns(want, have):
+    missing = [f for f in want if f not in have]
+    if missing:
+        raise ModelRefusal(
+            f"the feature set does not match the one the model was trained on: missing {missing}. "
+            "Retrain the model with this version of the extension."
+        )
+
+
+def select_trained_columns(meta, x, feature_names):
+    """Pick the model's columns out of a full feature matrix, by name.
+
+    Training drops the columns the viability check excluded, while feature
+    extraction always produces the full set, so the two never line up by
+    position.
+
+    Returns:
+        ``(x_selected, notes)``; ``notes`` names input columns the model was
+        never trained on.
+
+    Raises:
+        ModelRefusal: when a trained column is missing from the input.
+    """
+    want = measured_feature_names(meta)
+    have = list(feature_names)
+    _require_trained_columns(want, have)
+    x = np.asarray(x)
+    sel = x[:, [have.index(f) for f in want]]
+    known = set(meta.get("input_feature_names") or want)
+    unknown = [f for f in have if f not in known]
+    notes = []
+    if unknown:
+        notes.append(
+            f"column(s) {unknown} did not exist when the model was trained; they are not used"
+        )
+    return sel, notes
+
+
 def check_compatibility(meta, feature_names, geometry, allow_override=False):
     """Decide whether this model may score this data.
 
@@ -440,31 +499,15 @@ def check_compatibility(meta, feature_names, geometry, allow_override=False):
 
     Args:
         meta:           metadata from :func:`load_model`.
-        feature_names:  the columns about to be handed to the model.
+        feature_names:  the columns available; the model's own are selected
+                        from them by name (:func:`select_trained_columns`).
         geometry:       the geometry those columns were measured with.
         allow_override: lets the geometry mismatches through, recorded. Never
-                        lets a feature mismatch through -- that one is not a
+                        lets a missing feature through -- that one is not a
                         judgement call.
     """
     warnings = []
-    want = list(meta.get("feature_names", []))
-    have = list(feature_names)
-    if want != have:
-        missing = [f for f in want if f not in have]
-        extra = [f for f in have if f not in want]
-        detail = []
-        if missing:
-            detail.append(f"missing {missing}")
-        if extra:
-            detail.append(f"unexpected {extra}")
-        if not detail:
-            detail.append("same features in a different order")
-        raise ModelRefusal(
-            "the feature set does not match the one the model was trained on: "
-            + "; ".join(detail)
-            + ". A model scores columns by position, so this would silently read one measurement "
-            "as another."
-        )
+    _require_trained_columns(measured_feature_names(meta), list(feature_names))
 
     g_want = dict(meta.get("geometry", {}))
     g_have = dict(geometry)

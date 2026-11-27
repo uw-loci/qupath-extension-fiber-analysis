@@ -153,6 +153,15 @@ public record SegmentationSpec(
     }
 
     /**
+     * @return true when the calibrated project threshold is selected but no
+     *         calibration value was loaded; segmentation would then fall back
+     *         to each tile's own Otsu, so callers must refuse
+     */
+    public boolean missingCalibration() {
+        return "project_otsu".equalsIgnoreCase(thresholdMethod) && projectThresholdNorm == null;
+    }
+
+    /**
      * @param thresholdNorm a run-wide cut on [0, 1]
      * @return these settings with every tile cutting at that value
      */

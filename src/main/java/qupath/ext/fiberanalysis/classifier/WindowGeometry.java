@@ -32,6 +32,28 @@ public final class WindowGeometry {
 
     private WindowGeometry() {}
 
+    /** Largest window overlap the classifier accepts, percent. */
+    public static final double MAX_OVERLAP_PERCENT = 95.0;
+
+    /**
+     * @param windowUm    window side in microns
+     * @param pixelSizeUm microns per pixel
+     * @return the window side in pixels, at least 2
+     */
+    public static int windowPx(double windowUm, double pixelSizeUm) {
+        return Math.max(2, (int) Math.round(windowUm / pixelSizeUm));
+    }
+
+    /**
+     * @param windowPx       window side in pixels
+     * @param overlapPercent overlap between consecutive windows, clamped to 0..95
+     * @return the stride in pixels, at least 1
+     */
+    public static int stridePx(int windowPx, double overlapPercent) {
+        double f = Math.max(0.0, Math.min(MAX_OVERLAP_PERCENT, overlapPercent)) / 100.0;
+        return Math.max(1, (int) Math.round(windowPx * (1.0 - f)));
+    }
+
     /**
      * A box in region-local read-scale pixels.
      *

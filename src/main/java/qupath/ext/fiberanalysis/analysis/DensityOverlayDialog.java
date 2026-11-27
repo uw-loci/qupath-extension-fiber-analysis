@@ -332,7 +332,8 @@ public final class DensityOverlayDialog {
         try {
             channelInfos = DensitySidecar.readChannelInfos(map);
             DensityMapInfo mapInfo = DensitySidecar.readInfo(map);
-            thresholdLabel.setText(thresholdText(mapInfo.threshold()));
+            thresholdLabel.setText(thresholdText(mapInfo.threshold())
+                    + (mapInfo.classifier() == null ? "" : "\nClassifier: " + mapInfo.classifier()));
             regionLabel.setText(regionText(mapInfo.region()));
             brightnessCombo.getItems().add(NO_BRIGHTNESS);
             for (var info : channelInfos) {

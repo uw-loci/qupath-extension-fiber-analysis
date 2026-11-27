@@ -15,6 +15,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.ToNumberPolicy;
+import com.google.gson.reflect.TypeToken;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.file.Files;
@@ -54,6 +55,8 @@ public final class WindowClassifierModelManager {
             .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
             .create();
 
+    private static final java.lang.reflect.Type MAP_TYPE = new TypeToken<LinkedHashMap<String, Object>>() {}.getType();
+
     /** Fractional pixel-size difference allowed before the geometry is a mismatch. */
     public static final double PIXEL_SIZE_TOLERANCE = 0.02;
 
@@ -90,6 +93,69 @@ public final class WindowClassifierModelManager {
          */
         public boolean provisional() {
             return "REFUSE".equals(verdict) || "BLOCK".equals(verdict);
+        }
+
+        /**
+         * The segmentation the model was trained with, which Apply uses
+         * instead of the current Run settings.
+         *
+         * @return the stored settings
+         * @throws IOException when the model has none, they cannot be read,
+         *         or they can no longer be applied
+         */
+        public SegmentationSpec segmentation() throws IOException {
+            if (!(geometry.get("segmentation") instanceof Map<?, ?> stored)) {
+                throw new IOException("Model '" + id + "' does not record the segmentation it was trained with."
+                        + " Train the model again.");
+            }
+            String stale = SegmentationSpec.staleScaleProblem(stored);
+            if (stale != null) throw new IOException(stale);
+            SegmentationSpec spec;
+            try {
+                spec = SegmentationSpec.fromMap(stored);
+            } catch (IllegalArgumentException ex) {
+                throw new IOException("Model '" + id + "' has unreadable segmentation settings (" + ex.getMessage()
+                        + "). Train the model again.");
+            }
+            if (spec.missingCalibration()) {
+                throw new IOException("Model '" + id + "' records the calibrated project threshold without its"
+                        + " calibration value, so it cannot segment the way it was trained. Train the model again.");
+            }
+            return spec;
+        }
+
+        /**
+         * @return the trained window side in microns
+         * @throws IOException when the model does not record it
+         */
+        public double windowUm() throws IOException {
+            Double um = asDouble(geometry.get("window_um"));
+            if (um == null || !(um > 0)) {
+                throw new IOException("Model '" + id + "' does not record its window size. Train the model again.");
+            }
+            return um;
+        }
+
+        /**
+         * @return the trained window overlap in percent; derived from the
+         *         trained window and stride in pixels when not recorded
+         * @throws IOException when neither is recorded
+         */
+        public double windowOverlapPercent() throws IOException {
+            Double pct = asDouble(geometry.get("window_overlap_percent"));
+            if (pct != null) return pct;
+            Double w = asDouble(geometry.get("window_px"));
+            Double s = asDouble(geometry.get("stride_px"));
+            if (w == null || s == null || w <= 0) {
+                throw new IOException("Model '" + id + "' does not record its window overlap. Train the model again.");
+            }
+            return 100.0 * (1.0 - s / w);
+        }
+
+        /** @return the context radii the model was trained with, in windows */
+        public List<Integer> contextRadii() {
+            return WindowClassifierWorkflow.parseRadii(String.valueOf(geometry.getOrDefault("context_radii", "")))
+                    .radii();
         }
 
         /** @return a one-line description for a list cell */
@@ -215,12 +281,12 @@ public final class WindowClassifierModelManager {
                 projectLocal,
                 strings(meta, "class_names"),
                 strings(meta, "feature_names"),
-                flatten(meta.getAsJsonObject("geometry")),
+                block(meta, "geometry"),
                 meta.has("verdict") && !meta.get("verdict").isJsonNull()
                         ? meta.get("verdict").getAsString()
                         : null,
                 meta.has("created_utc") ? meta.get("created_utc").getAsString() : "",
-                flatten(meta.getAsJsonObject("training")));
+                block(meta, "training"));
     }
 
     /**
@@ -242,22 +308,16 @@ public final class WindowClassifierModelManager {
         List<String> problems = new ArrayList<>();
 
         // A forest's saved columns include the appended missingness
-        // indicators; compatibility is about the measured features.
-        List<String> trained = model.featureNames();
+        // indicators; compatibility is about the measured features. The
+        // model's columns are picked out by name, so extra columns and a
+        // different order are fine; only a missing one is a problem.
         List<String> measured =
-                trained.stream().filter(n -> !n.endsWith("_isnan")).toList();
-        if (!measured.equals(featureNames)) {
-            List<String> missing =
-                    measured.stream().filter(n -> !featureNames.contains(n)).toList();
-            List<String> extra =
-                    featureNames.stream().filter(n -> !measured.contains(n)).toList();
-            if (!missing.isEmpty() || !extra.isEmpty()) {
-                problems.add("Feature set does not match: "
-                        + (missing.isEmpty() ? "" : "missing " + missing + " ")
-                        + (extra.isEmpty() ? "" : "unexpected " + extra));
-            } else {
-                problems.add("Same features in a different order; a model scores columns by position.");
-            }
+                model.featureNames().stream().filter(n -> !n.endsWith("_isnan")).toList();
+        List<String> missing =
+                measured.stream().filter(n -> !featureNames.contains(n)).toList();
+        if (!missing.isEmpty()) {
+            problems.add("Feature set does not match: missing " + missing
+                    + ". Train the model again with this version of the extension.");
         }
 
         Double trainedPx = asDouble(model.geometry().get("pixel_size_um"));
@@ -310,25 +370,15 @@ public final class WindowClassifierModelManager {
         return List.copyOf(out);
     }
 
-    /** Flatten a metadata block to plain Java values; nested objects keep their JSON form. */
-    private static Map<String, Object> flatten(JsonObject obj) {
-        Map<String, Object> out = new LinkedHashMap<>();
-        if (obj == null) return out;
-        for (Map.Entry<String, JsonElement> e : obj.entrySet()) {
-            JsonElement v = e.getValue();
-            if (v == null || v.isJsonNull()) {
-                out.put(e.getKey(), null);
-            } else if (v.isJsonPrimitive() && v.getAsJsonPrimitive().isNumber()) {
-                out.put(e.getKey(), v.getAsNumber());
-            } else if (v.isJsonPrimitive() && v.getAsJsonPrimitive().isBoolean()) {
-                out.put(e.getKey(), v.getAsBoolean());
-            } else if (v.isJsonPrimitive()) {
-                out.put(e.getKey(), v.getAsString());
-            } else {
-                out.put(e.getKey(), v.toString());
-            }
-        }
-        return out;
+    /**
+     * One metadata block as plain Java values: numbers as Long or Double,
+     * nested objects as Map, arrays as List.
+     */
+    private static Map<String, Object> block(JsonObject meta, String key) {
+        JsonElement el = meta.get(key);
+        if (el == null || !el.isJsonObject()) return new LinkedHashMap<>();
+        Map<String, Object> out = GSON.fromJson(el, MAP_TYPE);
+        return out == null ? new LinkedHashMap<>() : out;
     }
 
     private static Double asDouble(Object v) {

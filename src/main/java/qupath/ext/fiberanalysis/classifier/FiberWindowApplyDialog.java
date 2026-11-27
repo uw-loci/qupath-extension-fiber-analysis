@@ -37,7 +37,6 @@ import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
 import qupath.ext.fiberanalysis.analysis.DensitySidecar;
 import qupath.ext.fiberanalysis.analysis.HeadlessFx;
-import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.ext.fiberanalysis.ui.SectionBuilder;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
@@ -166,7 +165,8 @@ public final class FiberWindowApplyDialog {
         detectionsCheck = new CheckBox("Create one detection per core");
         detectionsCheck.setSelected(hasSelection);
         detectionsCheck.selectedProperty().addListener((o, a, b) -> refresh());
-        overrideCheck = new CheckBox("Apply despite a geometry mismatch (recorded in the run)");
+        overrideCheck =
+                new CheckBox("Apply despite a geometry mismatch (recorded in the map file and on every object)");
         acknowledgeCheck = new CheckBox("I understand this model failed its own validation");
 
         countLabel = wrapping(new Label());
@@ -237,31 +237,41 @@ public final class FiberWindowApplyDialog {
     private void refresh() {
         var model = modelCombo.getValue();
         if (model == null) return;
+        List<String> problems = new ArrayList<>();
+        String segText;
+        Map<String, Object> geometry = null;
+        try {
+            SegmentationSpec seg = model.segmentation();
+            segText = "as trained, " + seg.thresholdDescription() + " on " + seg.segChannel()
+                    + (model.geometry().get("threshold_source") == null
+                            ? ""
+                            : " (" + model.geometry().get("threshold_source") + ")");
+            geometry = currentGeometry(model, seg, pixelSizeUm());
+        } catch (java.io.IOException ex) {
+            segText = "cannot be used";
+            problems.add(ex.getMessage());
+        }
         modelInfoLabel.setText(String.format(
-                Locale.ROOT,
-                "%s, trained %s, %d feature(s). Classes: %s. Segmentation: %s",
-                model.directory(),
-                model.createdUtc(),
-                model.featureNames().size(),
-                String.join(", ", model.classNames()),
-                model.geometry().get("segmentation") instanceof Map<?, ?>
-                        ? "as trained (" + model.geometry().getOrDefault("threshold_source", "stored in the model")
-                                + ")"
-                        : "current preferences (this model predates stored segmentation)"));
+                        Locale.ROOT,
+                        "%s, trained %s, %d feature(s). Classes: %s. Segmentation: %s.",
+                        model.directory(),
+                        model.createdUtc(),
+                        model.featureNames().size(),
+                        String.join(", ", model.classNames()),
+                        segText)
+                + "\n" + APPLY_SETTINGS_NOTE);
 
-        var problems =
-                WindowClassifierModelManager.checkCompatibility(model, model.featureNames(), currentGeometry(model));
-        // Feature names are not known until the extraction runs, so the
-        // pre-check compares the geometry only -- it is here to catch the
-        // mismatch while the user can still change it, not to replace the
-        // Python-side refusal.
-        problems.removeIf(p -> p.startsWith("Feature set") || p.startsWith("Same features"));
-        if (model.geometry().get("segmentation") instanceof Map<?, ?> seg) {
-            String stale = SegmentationSpec.staleScaleProblem(seg);
-            if (stale != null) problems.add(0, stale);
+        if (geometry != null) {
+            // Feature names are not known until the extraction runs, so the
+            // pre-check compares the geometry only -- it is here to catch the
+            // mismatch while the user can still change it, not to replace the
+            // Python-side refusal.
+            var geometryProblems =
+                    WindowClassifierModelManager.checkCompatibility(model, model.featureNames(), geometry);
+            problems.addAll(geometryProblems);
         }
         compatibilityLabel.setText(problems.isEmpty() ? "" : String.join("\n", problems));
-        overrideCheck.setDisable(problems.isEmpty());
+        overrideCheck.setDisable(geometry == null || problems.isEmpty());
         acknowledgeCheck.setDisable(!model.provisional());
         if (model.provisional()) {
             acknowledgeCheck.setText("I understand this model failed its own validation (" + model.verdict()
@@ -274,12 +284,14 @@ public final class FiberWindowApplyDialog {
             overridesPane.setExpanded(true);
         }
 
+        if (geometry == null) {
+            countLabel.setText("");
+            applyBtn.setDisable(true);
+            return;
+        }
         RegionRequest region = scopeRegion();
-        double pxUm = pixelSizeUm();
-        double windowUm = FiberAnalysisPreferences.windowSizeUmProperty().get();
-        int overlap = FiberAnalysisPreferences.windowOverlapPercentProperty().get();
-        int windowPx = Math.max(2, (int) Math.round(windowUm / pxUm));
-        int stridePx = Math.max(1, (int) Math.round(windowPx * (1.0 - overlap / 100.0)));
+        int windowPx = ((Number) geometry.get("window_px")).intValue();
+        int stridePx = ((Number) geometry.get("stride_px")).intValue();
         int gridW = WindowGeometry.totalCount(region.getWidth(), windowPx, stridePx);
         int gridH = WindowGeometry.totalCount(region.getHeight(), windowPx, stridePx);
         long cores = ClassifiedCoreDetections.estimateCount(gridW, gridH);
@@ -293,61 +305,73 @@ public final class FiberWindowApplyDialog {
                                 gridW, gridH, ClassifiedCoreDetections.DEFAULT_MAX_DETECTIONS)
                         : String.format(
                                 Locale.ROOT,
-                                "%d x %d windows (%,d cores of %.1f um).",
+                                "%d x %d windows (%,d cores of %.1f um), at the model's window size.",
                                 gridW,
                                 gridH,
                                 cores,
-                                stridePx * pxUm));
+                                stridePx * pixelSizeUm()));
         applyBtn.setDisable(overBudget);
     }
+
+    /** What Apply takes from the model rather than from the Run dialog. */
+    static final String APPLY_SETTINGS_NOTE = "The window size, overlap, context radii and segmentation all come"
+            + " from the model; the Run dialog's settings, including 'Use existing fiber mask', the analysis"
+            + " downsample and the pixel-size override, are not used. Each image is read at full resolution"
+            + " with its own pixel size.";
 
     private double pixelSizeUm() {
         var cal = gui.getImageData().getServer().getPixelCalibration();
         return cal != null && cal.hasPixelSizeMicrons() ? cal.getAveragedPixelSizeMicrons() : 1.0;
     }
 
-    /**
-     * The segmentation a model was trained with, when it stored one; older
-     * models fall back to the current preferences and the hash check.
-     */
     /** @return how the model's threshold was obtained, for its maps */
     static String thresholdSource(WindowClassifierModelManager.ModelInfo model) {
         Object s = model.geometry().get("threshold_source");
         return (s == null ? "" : s + ", ") + "model " + model.id();
     }
 
-    static SegmentationSpec segmentationFor(WindowClassifierModelManager.ModelInfo model) {
-        Object stored = model.geometry().get("segmentation");
-        if (stored instanceof Map<?, ?> m) {
-            try {
-                return SegmentationSpec.fromMap(m);
-            } catch (IllegalArgumentException ex) {
-                logger.warn(
-                        "Model {} has an unreadable segmentation block ({}); using preferences",
-                        model.id(),
-                        ex.getMessage());
-            }
-        }
-        return SegmentationSpec.fromPreferences();
-    }
-
-    private Map<String, Object> currentGeometry(WindowClassifierModelManager.ModelInfo model) {
-        double pxUm = pixelSizeUm();
-        double windowUm = FiberAnalysisPreferences.windowSizeUmProperty().get();
-        int overlap = FiberAnalysisPreferences.windowOverlapPercentProperty().get();
-        int windowPx = Math.max(2, (int) Math.round(windowUm / pxUm));
-        int stridePx = Math.max(1, (int) Math.round(windowPx * (1.0 - overlap / 100.0)));
+    /**
+     * The geometry Apply will measure at: the model's window and overlap, on
+     * this image's pixel size.
+     *
+     * @param model       the model
+     * @param seg         its stored segmentation
+     * @param pixelSizeUm this image's pixel size
+     * @return the geometry block compared against the model's
+     * @throws java.io.IOException when the model does not record its window
+     */
+    static Map<String, Object> currentGeometry(
+            WindowClassifierModelManager.ModelInfo model, SegmentationSpec seg, double pixelSizeUm)
+            throws java.io.IOException {
+        double windowUm = model.windowUm();
+        double overlap = model.windowOverlapPercent();
+        int windowPx = WindowGeometry.windowPx(windowUm, pixelSizeUm);
+        int stridePx = WindowGeometry.stridePx(windowPx, overlap);
         Map<String, Object> geometry = new LinkedHashMap<>();
         geometry.put("window_um", windowUm);
-        geometry.put("pixel_size_um", pxUm);
+        geometry.put("window_overlap_percent", overlap);
+        geometry.put("pixel_size_um", pixelSizeUm);
         geometry.put("window_px", windowPx);
         geometry.put("stride_px", stridePx);
         geometry.put("core_px", stridePx);
-        geometry.put("segmentation_hash", segmentationFor(model).hash());
+        geometry.put("segmentation_hash", seg.hash());
         return geometry;
     }
 
     // ---------- run ----------
+
+    /**
+     * What one Apply run reads from the dialog, captured on the FX thread.
+     *
+     * @param region      the region to cover
+     * @param outline     the selected annotation's outline, or null for the whole image
+     * @param override    apply despite a geometry mismatch
+     * @param raster      write the probability map
+     * @param attach      also add a project entry with the map's channels
+     * @param detections  create one detection per core
+     */
+    private record ApplySettings(
+            RegionRequest region, ROI outline, boolean override, boolean raster, boolean attach, boolean detections) {}
 
     private void onApply() {
         var model = modelCombo.getValue();
@@ -364,31 +388,32 @@ public final class FiberWindowApplyDialog {
             Dialogs.showErrorMessage(TITLE, "Choose at least one output.");
             return;
         }
+        PathObject sel = selectedAnnotation();
+        var settings = new ApplySettings(
+                scopeRegion(),
+                scopeAnnotationRadio.isSelected() && sel != null ? sel.getROI() : null,
+                overrideCheck.isSelected(),
+                rasterCheck.isSelected(),
+                attachCheck.isSelected(),
+                detectionsCheck.isSelected());
         applyBtn.setDisable(true);
         var progress = new ClassifierProgress(gui.getStage(), TITLE);
-        Thread worker = new Thread(() -> runApply(model, progress), "fiber-window-apply");
+        Thread worker = new Thread(() -> runApply(model, settings, progress), "fiber-window-apply");
         worker.setDaemon(true);
         worker.start();
     }
 
-    private void runApply(WindowClassifierModelManager.ModelInfo model, ClassifierProgress progress) {
+    private void runApply(
+            WindowClassifierModelManager.ModelInfo model, ApplySettings settings, ClassifierProgress progress) {
         StringBuilder log = new StringBuilder();
         try {
             ImageData<BufferedImage> data = gui.getImageData();
-            RegionRequest region = scopeRegion();
-            if (model.geometry().get("segmentation") instanceof Map<?, ?> stored) {
-                String stale = SegmentationSpec.staleScaleProblem(stored);
-                if (stale != null) throw new java.io.IOException(stale);
-            }
-            var seg = segmentationFor(model);
+            RegionRequest region = settings.region();
+            double pxUm = pixelSizeUm();
+            var seg = model.segmentation();
             var request = new WindowClassifierWorkflow.Request(
-                    WindowFeatureMatrix.Spec.defaults(
-                            seg,
-                            FiberAnalysisPreferences.windowSizeUmProperty().get(),
-                            FiberAnalysisPreferences.windowOverlapPercentProperty()
-                                    .get()),
-                    FiberWindowTrainDialog.parseRadii(
-                            String.valueOf(model.geometry().getOrDefault("context_radii", ""))),
+                    WindowFeatureMatrix.Spec.defaults(seg, model.windowUm(), model.windowOverlapPercent()),
+                    model.contextRadii(),
                     1.0,
                     WindowClassifierWorkflow.createWorkDir());
 
@@ -404,11 +429,21 @@ public final class FiberWindowApplyDialog {
 
             progress.status("Scoring...");
             var result = WindowClassifierWorkflow.apply(
-                    features, model.directory(), currentGeometry(model), overrideCheck.isSelected(), request.workDir());
+                    features,
+                    model.directory(),
+                    currentGeometry(model, seg, pxUm),
+                    settings.override(),
+                    request.workDir());
             for (String w : result.warnings()) log.append("WARNING: ").append(w).append('\n');
+            if (settings.outline() != null) {
+                result = WindowClassifierWorkflow.clipToRoi(result, settings.outline(), region);
+            }
+            List<String> overrides = WindowClassifierWorkflow.overrides(result.warnings());
+            String provenance =
+                    WindowClassifierWorkflow.provenance(model.id(), result.verdict(), model.provisional(), overrides);
 
             String runId = UUID.randomUUID().toString();
-            if (rasterCheck.isSelected()) {
+            if (settings.raster()) {
                 progress.status("Writing the probability map...");
                 Project<BufferedImage> project = gui.getProject();
                 ProjectImageEntry<BufferedImage> entry = project == null ? null : project.getEntry(data);
@@ -422,14 +457,14 @@ public final class FiberWindowApplyDialog {
                             entry.getImageName(),
                             data.getServer().getWidth(),
                             data.getServer().getHeight(),
-                            pixelSizeUm(),
+                            pxUm,
                             region.getX(),
                             region.getY(),
-                            seg.thresholdIdentity(thresholdSource(model), pixelSizeUm())
-                                    .label());
+                            seg.thresholdIdentity(thresholdSource(model), pxUm).label(),
+                            provenance);
                     log.append("Probability map: ").append(sidecar).append('\n');
                     var colors = WindowClassifierWorkflow.probabilityChannelColors(result.classNames());
-                    if (attachCheck.isSelected()) {
+                    if (settings.attach()) {
                         DensityChannelAttacher.addAndOpen(
                                 gui, project, entry, sidecar, DensityChannelAttacher.KIND_CLASSIFIER, colors);
                         log.append("Adding a new project entry with the map's channels.\n");
@@ -440,10 +475,10 @@ public final class FiberWindowApplyDialog {
                 }
             }
 
-            if (detectionsCheck.isSelected()) {
+            if (settings.detections()) {
                 progress.status("Creating core detections...");
                 List<PathObject> dets = WindowClassifierWorkflow.coreDetections(
-                        result, region, model.id(), runId, model.provisional(), List.of());
+                        result, region, model.id(), runId, model.provisional(), overrides, List.of());
                 final List<PathObject> toAdd = new ArrayList<>(dets);
                 HeadlessFx.runLater(() -> {
                     data.getHierarchy().addObjects(toAdd);
@@ -457,6 +492,9 @@ public final class FiberWindowApplyDialog {
                     .append('\n');
             if (model.provisional()) {
                 log.append("Every object from this run is marked provisional.\n");
+            }
+            if (!overrides.isEmpty()) {
+                log.append("Applied despite a geometry mismatch; the map file and every object record it.\n");
             }
             String text = log.toString();
             HeadlessFx.runLater(() -> logArea.setText(text));

@@ -4,10 +4,12 @@ Appose task: score one image's windows with a saved window classifier.
 Refuses before it scores. A model is a pickle fitted to one feature set
 measured one way; handed a matrix whose columns mean something else it will
 return confident numbers for every window rather than an error, and nothing
-downstream could tell. `wmodel.check_compatibility` is therefore not advisory:
-a feature-set mismatch raises, and the geometry mismatches raise unless the
-caller has explicitly overridden them, in which case the override is recorded
-in the output so it travels with the map.
+downstream could tell. The model's columns are therefore selected BY NAME
+from the full matrix (training drops the columns its viability check
+excluded, extraction always produces all of them), a missing column raises,
+and the geometry mismatches raise unless the caller has explicitly overridden
+them. An override comes back in 'warnings' as an "OVERRIDDEN:" line, which
+the caller writes into the map file and onto the detections.
 
 Three outputs beyond the probabilities, because a closed-set softmax on its
 own will label tissue the model has never seen:
@@ -22,8 +24,8 @@ own will label tissue the model has never seen:
 
 Inputs (Appose injected as variables):
 
-  features        : NDArray float32 (n, d)
-  feature_names   : str, comma-joined, column order
+  features        : NDArray float32 (n, d), every extracted column
+  feature_names   : str, comma-joined, column order of `features`
   model_dir       : str
   geometry_json   : str, the geometry THIS matrix was measured with
   allow_override  : bool, lets a geometry mismatch through, recorded
@@ -77,15 +79,12 @@ try:
     classes = list(meta.get("class_names", []))
     n_classes = len(classes)
 
-    # The metadata records the columns the ESTIMATOR sees, which for a forest
-    # includes the appended missingness indicators. Compatibility is about
-    # the measured features, so compare against those.
-    trained = list(meta.get("feature_names", []))
-    if impute_values is not None:
-        trained = trained[: len(trained) // 2]
     warnings = wmodel.check_compatibility(
-        {**meta, "feature_names": trained}, names, geometry, allow_override=allow_over
+        meta, names, geometry, allow_override=allow_over
     )
+    # Scoring and novelty both use the trained columns only.
+    x, notes = wmodel.select_trained_columns(meta, x, names)
+    warnings = list(warnings) + notes
 
     x_ready, _ = wmodel.prepare_matrix(
         x,
