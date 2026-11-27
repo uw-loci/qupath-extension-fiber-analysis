@@ -43,6 +43,7 @@ import qupath.lib.objects.PathObject;
 import qupath.lib.objects.classes.PathClass;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.GeometryTools;
+import qupath.lib.roi.interfaces.ROI;
 
 /**
  * Drives the window classifier: features, context, labels, train, apply.
@@ -91,6 +92,110 @@ public final class WindowClassifierWorkflow {
                     .reduce((a, b) -> a + "," + b)
                     .orElse("");
         }
+    }
+
+    /**
+     * Why the Run settings cannot train a classifier, if they cannot.
+     *
+     * @param segSource       the Run dialog's fiber source, "internal" or "existing"
+     * @param seg             the segmentation read from the Run settings
+     * @param calibrationName the selected project calibration, or null
+     * @return a message saying what to change, or null when training may go ahead
+     */
+    public static String runSettingsRefusal(String segSource, SegmentationSpec seg, String calibrationName) {
+        if ("existing".equalsIgnoreCase(segSource)) {
+            return "The Run dialog is set to use an existing fiber mask. The window classifier always finds"
+                    + " fibers with the extension's own segmentation, so it would not see your mask."
+                    + "\nIn the Run dialog, choose the extension's own segmentation, tune it, and run once;"
+                    + " then train.";
+        }
+        if (seg.missingCalibration()) {
+            return (calibrationName == null || calibrationName.isBlank()
+                            ? "The Run dialog's threshold is 'Project Otsu (calibrated)', but no calibration is"
+                                    + " selected."
+                            : "The Run dialog's threshold is 'Project Otsu (calibrated)', but calibration '"
+                                    + calibrationName + "' could not be loaded.")
+                    + "\nRun 'Calibrate threshold...' from the batch dialog, or pick another threshold method"
+                    + " in the Run dialog. Without the value every tile would be cut at its own Otsu threshold.";
+        }
+        return null;
+    }
+
+    /**
+     * Which Run settings the classifier ignores, for the dialogs.
+     *
+     * @param analysisDownsample the Run dialog's analysis downsample
+     * @param useImagePixelSize  false when the Run dialog overrides the pixel size
+     * @param pixelSizeOverrideUm the override, used when {@code useImagePixelSize} is false
+     * @return a sentence naming them, with the user's values when they differ from what the classifier uses
+     */
+    public static String ignoredRunSettingsNote(
+            double analysisDownsample, boolean useImagePixelSize, double pixelSizeOverrideUm) {
+        StringBuilder sb = new StringBuilder("Not taken from the Run dialog: the analysis downsample (the"
+                + " classifier always reads full resolution) and the pixel-size override (each image's own"
+                + " pixel size is used).");
+        if (Math.abs(analysisDownsample - 1.0) > 1e-9) {
+            sb.append(String.format(
+                    java.util.Locale.ROOT,
+                    " Your Run downsample of %s is not applied here.",
+                    plain(analysisDownsample)));
+        }
+        if (!useImagePixelSize) {
+            sb.append(String.format(
+                    java.util.Locale.ROOT,
+                    " Your pixel-size override of %s um is not applied here; correct the image's own pixel size"
+                            + " in QuPath's Image tab if it is wrong.",
+                    plain(pixelSizeOverrideUm)));
+        }
+        return sb.toString();
+    }
+
+    /** @return the number without trailing zeros, e.g. 2 or 0.325 */
+    private static String plain(double v) {
+        return java.math.BigDecimal.valueOf(v).stripTrailingZeros().toPlainString();
+    }
+
+    /**
+     * Context radii parsed from the comma-separated field.
+     *
+     * @param radii    whole numbers of windows above 0, in the order given
+     * @param rejected tokens that are not such a number
+     */
+    public record ParsedRadii(List<Integer> radii, List<String> rejected) {
+
+        /** @return the radii as stored in a model's metadata */
+        public String csv() {
+            return radii.stream()
+                    .map(String::valueOf)
+                    .reduce((a, b) -> a + "," + b)
+                    .orElse("");
+        }
+    }
+
+    /**
+     * @param text comma-separated radii, e.g. "1,3"; blank means no context
+     * @return the radii, and every token that was not one
+     */
+    public static ParsedRadii parseRadii(String text) {
+        List<Integer> out = new ArrayList<>();
+        List<String> rejected = new ArrayList<>();
+        if (text != null) {
+            for (String tok : text.split(",")) {
+                String t = tok.trim();
+                if (t.isEmpty()) continue;
+                try {
+                    int r = Integer.parseInt(t);
+                    if (r > 0) {
+                        out.add(r);
+                    } else {
+                        rejected.add(t);
+                    }
+                } catch (NumberFormatException ex) {
+                    rejected.add(t);
+                }
+            }
+        }
+        return new ParsedRadii(List.copyOf(out), List.copyOf(rejected));
     }
 
     /**
@@ -487,7 +592,8 @@ public final class WindowClassifierWorkflow {
      * @param regionX      x of the region the windows were laid on
      * @param regionY      y of that region
      * @param threshold    the {@code ThresholdIdentity} label the features were segmented at, or null
-     * @return the channels written, in order, so the caller can colour them
+     * @param classifier   the model, verdict and overrides ({@link #provenance}), or null
+     * @return the channels written, in order, so the caller can color them
      * @throws IOException if the sidecar cannot be written
      */
     public static List<DensityChannelSpec> writeProbabilityMap(
@@ -499,7 +605,8 @@ public final class WindowClassifierWorkflow {
             double srcPxUm,
             int regionX,
             int regionY,
-            String threshold)
+            String threshold,
+            String classifier)
             throws IOException {
 
         int n = result.features().windowCount();
@@ -540,7 +647,8 @@ public final class WindowClassifierWorkflow {
                 regionY);
         DensityTiffWriter.write(
                 outputPath.toString(),
-                new DensityMapInfo(lattice, srcW, srcH, srcPxUm, false, sourceImage, threshold, null, List.of()),
+                new DensityMapInfo(
+                        lattice, srcW, srcH, srcPxUm, false, sourceImage, threshold, null, classifier, List.of()),
                 channels,
                 grids.toArray(new float[0][]));
         logger.info(
@@ -552,6 +660,88 @@ public final class WindowClassifierWorkflow {
         return List.copyOf(channels);
     }
 
+    /** Prefix wmodel.check_compatibility puts on a geometry mismatch the user overrode. */
+    static final String OVERRIDDEN_PREFIX = "OVERRIDDEN: ";
+
+    /**
+     * @param warnings the apply warnings
+     * @return the geometry mismatches the user overrode, without the prefix
+     */
+    public static List<String> overrides(List<String> warnings) {
+        return warnings.stream()
+                .filter(w -> w.startsWith(OVERRIDDEN_PREFIX))
+                .map(w -> w.substring(OVERRIDDEN_PREFIX.length()).trim())
+                .toList();
+    }
+
+    /**
+     * One line saying where a classifier output came from, for the map file.
+     *
+     * @param modelId     the model id
+     * @param verdict     the training verdict
+     * @param provisional true when the model failed its own validation
+     * @param overrides   the overridden mismatches ({@link #overrides})
+     * @return the provenance line
+     */
+    public static String provenance(String modelId, String verdict, boolean provisional, List<String> overrides) {
+        StringBuilder sb = new StringBuilder("model ")
+                .append(modelId)
+                .append("; training verdict ")
+                .append(verdict);
+        if (provisional) sb.append("; PROVISIONAL (the model failed its own validation)");
+        if (!overrides.isEmpty()) {
+            sb.append("; applied despite: ").append(String.join(" | ", overrides));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Drop the windows whose core center falls outside an outline, so a
+     * "Selected annotation" run covers the annotation and not its bounding box.
+     *
+     * @param result the per-window outputs, laid on {@code region}
+     * @param roi    the outline, in full-image pixels
+     * @param region the region the windows were laid on, at downsample 1
+     * @return a copy with every output NaN outside the outline
+     */
+    public static ApplyResult clipToRoi(ApplyResult result, ROI roi, RegionRequest region) {
+        ImageFeatures f = result.features();
+        int n = f.windowCount();
+        float[][] proba = new float[result.probability().length][];
+        for (int c = 0; c < proba.length; c++) proba[c] = result.probability()[c].clone();
+        float[] maxProba = result.maxProba().clone();
+        float[] margin = result.margin().clone();
+        float[] novelty = result.novelty().clone();
+        float[] abstained = result.abstained().clone();
+        int dropped = 0;
+        for (int iy = 0; iy < f.gridH(); iy++) {
+            for (int ix = 0; ix < f.gridW(); ix++) {
+                WindowGeometry.Box core = WindowGeometry.coreBox(ix, iy, f.windowPx(), f.stridePx());
+                double cx = region.getX() + core.x() + core.w() / 2.0;
+                double cy = region.getY() + core.y() + core.h() / 2.0;
+                if (roi.contains(cx, cy)) continue;
+                int i = iy * f.gridW() + ix;
+                for (float[] p : proba) p[i] = Float.NaN;
+                maxProba[i] = Float.NaN;
+                margin[i] = Float.NaN;
+                novelty[i] = Float.NaN;
+                abstained[i] = 0f;
+                dropped++;
+            }
+        }
+        logger.info("Outside the annotation outline: {} of {} windows left out", dropped, n);
+        return new ApplyResult(
+                result.classNames(),
+                proba,
+                maxProba,
+                margin,
+                novelty,
+                abstained,
+                result.verdict(),
+                result.warnings(),
+                f);
+    }
+
     /**
      * Build the core detections for an apply result.
      *
@@ -560,6 +750,7 @@ public final class WindowClassifierWorkflow {
      * @param classifierId  the model id, stamped on every object
      * @param runId         this run's id, stamped on every object
      * @param provisional   true when the model failed its own validation gate
+     * @param overrides     the overridden geometry mismatches; empty when none
      * @param extraFeatures feature names to carry onto the objects as
      *                      measurements; names not in the matrix are ignored
      * @return one detection per predicted core
@@ -570,6 +761,7 @@ public final class WindowClassifierWorkflow {
             String classifierId,
             String runId,
             boolean provisional,
+            List<String> overrides,
             List<String> extraFeatures) {
 
         ImageFeatures f = result.features();
@@ -589,7 +781,8 @@ public final class WindowClassifierWorkflow {
                 1.0,
                 classifierId,
                 runId,
-                provisional);
+                provisional,
+                overrides.isEmpty() ? null : String.join(" | ", overrides));
         var grids = new ClassifiedCoreDetections.Grids(
                 result.probability(),
                 hasAnyValue(result.novelty()) ? result.novelty() : null,

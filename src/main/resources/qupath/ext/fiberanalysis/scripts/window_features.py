@@ -29,8 +29,11 @@ Inputs (Appose injected as variables):
 
   Window grid
     pixel_size_um          : float
-    window_size_um         : float
-    window_overlap_percent : float
+    window_px              : int, window side in pixels
+    stride_px              : int, window stride in pixels. Both come from
+                             Java, which places the tiles on its own lattice;
+                             recomputing them here rounded halves differently
+                             (Python rounds half to even).
     tensor_sigma           : float, optional (default 4.0)
     grad_sigma             : float, optional; smoothing before the intensity
                              gradient, pixels
@@ -88,8 +91,10 @@ try:
     rh = int(region_h)
 
     px_um = float(pixel_size_um)
-    win_um = float(window_size_um)
-    win_overlap_pct = float(window_overlap_percent)
+    window_px = int(window_px)
+    stride_px = int(stride_px)
+    if window_px < 2 or stride_px < 1:
+        raise ValueError(f"window_px {window_px} / stride_px {stride_px} out of range")
     tensor_sig = float(opt_get("tensor_sigma", 4.0))
     min_win_px = opt_get("min_window_pixels", None)
     if min_win_px is not None:
@@ -158,10 +163,6 @@ try:
                 "Intensity features unavailable (%s); continuing without them", ex
             )
             image_scalar = None
-
-    window_px = max(2, int(round(win_um / px_um)))
-    overlap = max(0.0, min(0.95, win_overlap_pct / 100.0))
-    stride_px = max(1, int(round(window_px * (1.0 - overlap))))
 
     ih, iw = fiber_mask.shape
     cx = int(opt_get("crop_x", 0))

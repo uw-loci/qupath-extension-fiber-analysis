@@ -26,7 +26,7 @@ class ClassifiedCoreDetectionsTest {
 
     private static ClassifiedCoreDetections.Geometry geom(int gridW, int gridH, int windowPx, int stridePx) {
         return new ClassifiedCoreDetections.Geometry(
-                TWO_CLASSES, gridW, gridH, windowPx, stridePx, 0, 0, 1.0, "clf-1", "run-1", false);
+                TWO_CLASSES, gridW, gridH, windowPx, stridePx, 0, 0, 1.0, "clf-1", "run-1", false, null);
     }
 
     private static float[] filled(int n, float v) {
@@ -153,7 +153,7 @@ class ClassifiedCoreDetectionsTest {
     @Test
     void regionOffsetAndDownsampleMoveTheCoreIntoFullImageCoordinates() {
         var g = new ClassifiedCoreDetections.Geometry(
-                TWO_CLASSES, 1, 1, 100, 25, 1000, 2000, 4.0, "clf-1", "run-1", false);
+                TWO_CLASSES, 1, 1, 100, 25, 1000, 2000, 4.0, "clf-1", "run-1", false, null);
         List<PathObject> dets = ClassifiedCoreDetections.create(
                 g,
                 new ClassifiedCoreDetections.Grids(
@@ -181,7 +181,8 @@ class ClassifiedCoreDetectionsTest {
 
     @Test
     void aProvisionalRunStampsEveryObject() {
-        var g = new ClassifiedCoreDetections.Geometry(TWO_CLASSES, 1, 1, 100, 25, 0, 0, 1.0, "clf-1", "run-1", true);
+        var g = new ClassifiedCoreDetections.Geometry(
+                TWO_CLASSES, 1, 1, 100, 25, 0, 0, 1.0, "clf-1", "run-1", true, null);
         PathObject det = ClassifiedCoreDetections.create(
                         g,
                         new ClassifiedCoreDetections.Grids(
@@ -191,6 +192,39 @@ class ClassifiedCoreDetectionsTest {
         assertThat(det.getMeasurementList().get("Provisional")).isEqualTo(1.0);
         assertThat(det.getMetadata()).containsEntry("fiber_analysis.provisional", "true");
         assertThat(det.getMetadata()).containsEntry("fiber_analysis.classifier_id", "clf-1");
+    }
+
+    @Test
+    void anOverriddenRunStampsEveryObjectWithWhatWasOverridden() {
+        var g = new ClassifiedCoreDetections.Geometry(
+                TWO_CLASSES,
+                1,
+                1,
+                100,
+                25,
+                0,
+                0,
+                1.0,
+                "clf-1",
+                "run-1",
+                false,
+                "stride 30 differs from the trained 25");
+        PathObject det = ClassifiedCoreDetections.create(
+                        g,
+                        new ClassifiedCoreDetections.Grids(
+                                new float[][] {filled(1, 0.9f), filled(1, 0.1f)}, null, null, Map.of()))
+                .get(0);
+
+        assertThat(det.getMeasurementList().get("Overridden")).isEqualTo(1.0);
+        assertThat(det.getMetadata())
+                .containsEntry("fiber_analysis.overrides", "stride 30 differs from the trained 25");
+        var plain = ClassifiedCoreDetections.create(
+                        geom(1, 1, 100, 25),
+                        new ClassifiedCoreDetections.Grids(
+                                new float[][] {filled(1, 0.9f), filled(1, 0.1f)}, null, null, Map.of()))
+                .get(0);
+        assertThat(plain.getMeasurementList().containsKey("Overridden")).isFalse();
+        assertThat(plain.getMetadata()).doesNotContainKey("fiber_analysis.overrides");
     }
 
     @Test

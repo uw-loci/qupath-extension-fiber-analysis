@@ -32,6 +32,7 @@ import javafx.scene.control.SelectionMode;
 import javafx.scene.control.Spinner;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -71,6 +72,12 @@ public final class FiberWindowTrainDialog {
     private static final Logger logger = LoggerFactory.getLogger(FiberWindowTrainDialog.class);
 
     private static final String TITLE = "Fiber Analysis -- Train window classifier";
+
+    /** Fewest permutation shuffles that can reject at p = 0.05. */
+    static final int MIN_PERMUTATIONS = 20;
+
+    /** Fewest bootstrap resamples offered. */
+    static final int MIN_BOOTSTRAP = 200;
 
     private final QuPathGUI gui;
 
@@ -143,10 +150,20 @@ public final class FiberWindowTrainDialog {
         modelKindCombo = new ComboBox<>(FXCollections.observableArrayList("hist_gradient_boosting", "random_forest"));
         modelKindCombo.getSelectionModel().selectFirst();
         radiiField = new TextField("1,3");
-        permSpinner = new Spinner<>(0, 2000, 200, 50);
+        radiiField.setTooltip(new Tooltip("Neighborhood sizes, in windows, whose averages are added to each"
+                + " window's own features. Whole numbers above 0 separated by commas, for example 1,3."
+                + " Leave empty for no neighborhood context."));
+        // Below 20 shuffles the permutation test cannot reject at p = 0.05,
+        // and below 200 resamples the bootstrap interval is too coarse to
+        // compare against the baselines.
+        permSpinner = new Spinner<>(MIN_PERMUTATIONS, 2000, 200, 50);
         permSpinner.setEditable(true);
-        bootSpinner = new Spinner<>(0, 20000, 2000, 500);
+        permSpinner.setTooltip(new Tooltip("Label shuffles for the permutation test; at least " + MIN_PERMUTATIONS
+                + " so it can reject at p = 0.05. More is slower and more exact."));
+        bootSpinner = new Spinner<>(MIN_BOOTSTRAP, 20000, 2000, 500);
         bootSpinner.setEditable(true);
+        bootSpinner.setTooltip(
+                new Tooltip("Slide resamples for the balanced-accuracy interval; at least " + MIN_BOOTSTRAP + "."));
         puritySpinner = new Spinner<>(0.5, 1.0, 1.0, 0.05);
         puritySpinner.setEditable(true);
 
@@ -178,7 +195,7 @@ public final class FiberWindowTrainDialog {
                 SectionBuilder.createSection("Images (one cross-validation group each)", true, imageList),
                 SectionBuilder.createSection("Classes to train", true, classList),
                 SectionBuilder.createSection(
-                        "Geometry (from the Run dialog's settings)",
+                        "Window and segmentation (from the Run dialog)",
                         true,
                         new VBox(4, geometryLabel, thresholdWarning)),
                 SectionBuilder.createSection("Model and validation", true, settings));
@@ -218,21 +235,37 @@ public final class FiberWindowTrainDialog {
         int overlap = FiberAnalysisPreferences.windowOverlapPercentProperty().get();
         SegmentationSpec seg = SegmentationSpec.fromPreferences();
         geometryLabel.setText(String.format(
-                Locale.ROOT,
-                "Window %.1f um at %d%% overlap, so each prediction is attributed to a core of"
-                        + " %.1f um at the window's center. Segmentation: %s on %s.",
-                windowUm,
-                overlap,
-                windowUm * (1.0 - overlap / 100.0),
-                seg.thresholdDescription(),
-                seg.segChannel()));
+                        Locale.ROOT,
+                        "Window %.1f um at %d%% overlap, so each prediction is attributed to a core of"
+                                + " %.1f um at the window's center. Segmentation: %s on %s, from the Run"
+                                + " dialog's own-segmentation settings.",
+                        windowUm,
+                        overlap,
+                        windowUm * (1.0 - overlap / 100.0),
+                        seg.thresholdDescription(),
+                        seg.segChannel())
+                + "\n"
+                + WindowClassifierWorkflow.ignoredRunSettingsNote(
+                        FiberAnalysisPreferences.analysisDownsampleProperty().get(),
+                        FiberAnalysisPreferences.useImagePixelSizeProperty().get(),
+                        FiberAnalysisPreferences.pixelSizeOverrideUmProperty().get()));
+        String refusal = runSettingsRefusal(seg);
         thresholdWarning.setText(
-                seg.hasGlobalThreshold() || PooledThreshold.needsPooling(seg.thresholdMethod())
-                        ? ""
-                        : "This threshold is recomputed from each tile's own histogram, so neighboring"
-                                + " tiles over the same tissue can segment it differently and the model can"
-                                + " learn the seams. Use Otsu, Triangle, a manual threshold or a project"
-                                + " calibration.");
+                refusal != null
+                        ? refusal
+                        : seg.hasGlobalThreshold() || PooledThreshold.needsPooling(seg.thresholdMethod())
+                                ? ""
+                                : "This threshold is recomputed from each tile's own histogram, so neighboring"
+                                        + " tiles over the same tissue can segment it differently and the model"
+                                        + " can learn the seams. Use Otsu, Triangle, a manual threshold or a"
+                                        + " project calibration.");
+    }
+
+    private static String runSettingsRefusal(SegmentationSpec seg) {
+        return WindowClassifierWorkflow.runSettingsRefusal(
+                FiberAnalysisPreferences.segSourceProperty().get(),
+                seg,
+                FiberAnalysisPreferences.projectCalibrationNameProperty().get());
     }
 
     private void refreshClasses() {
@@ -330,6 +363,8 @@ public final class FiberWindowTrainDialog {
         sb.append('\n').append(report.summary());
         String scale = pixelSizeProblem(images);
         if (scale != null) sb.append("\n\n[BLOCK] ").append(scale);
+        String settings = runSettingsRefusal(SegmentationSpec.fromPreferences());
+        if (settings != null) sb.append("\n\n[BLOCK] ").append(settings);
         return sb.toString();
     }
 
@@ -370,6 +405,21 @@ public final class FiberWindowTrainDialog {
             Dialogs.showErrorMessage(TITLE, "Select at least one image.");
             return;
         }
+        SegmentationSpec seg = SegmentationSpec.fromPreferences();
+        String refusal = runSettingsRefusal(seg);
+        if (refusal != null) {
+            Dialogs.showErrorMessage(TITLE, refusal);
+            return;
+        }
+        var radii = WindowClassifierWorkflow.parseRadii(radiiField.getText());
+        if (!radii.rejected().isEmpty()) {
+            Dialogs.showErrorMessage(
+                    TITLE,
+                    "Context radii: '" + String.join("', '", radii.rejected()) + "' is not a whole number above 0."
+                            + "\nEnter whole numbers separated by commas, for example 1,3, or leave the field"
+                            + " empty for no neighborhood context.");
+            return;
+        }
         Project<BufferedImage> project = gui.getProject();
         Path modelDir;
         try {
@@ -377,6 +427,13 @@ public final class FiberWindowTrainDialog {
                     project, modelNameField.getText(), projectLocalCheck.isSelected());
         } catch (Exception ex) {
             Dialogs.showErrorMessage(TITLE, ex.getMessage());
+            return;
+        }
+        if (java.nio.file.Files.exists(modelDir.resolve("model.joblib"))
+                && !Dialogs.showConfirmDialog(
+                        TITLE,
+                        "A model named '" + modelDir.getFileName() + "' already exists in " + modelDir.getParent()
+                                + ".\nTraining replaces it, even if the new training set is refused. Continue?")) {
             return;
         }
 
@@ -390,25 +447,67 @@ public final class FiberWindowTrainDialog {
             return;
         }
 
+        // Every control and preference is read here, on the FX thread, so an
+        // edit during the run cannot make the stored metadata differ from
+        // what was computed.
+        var settings = new TrainSettings(
+                images,
+                classes,
+                modelDir,
+                seg,
+                FiberAnalysisPreferences.windowSizeUmProperty().get(),
+                FiberAnalysisPreferences.windowOverlapPercentProperty().get(),
+                radii,
+                committed(puritySpinner),
+                modelKindCombo.getValue(),
+                committed(permSpinner),
+                committed(bootSpinner));
         trainBtn.setDisable(true);
         var progress = new ClassifierProgress(gui.getStage(), TITLE);
-        Thread worker =
-                new Thread(() -> runTraining(project, images, classes, modelDir, progress), "fiber-window-train");
+        Thread worker = new Thread(() -> runTraining(settings, progress), "fiber-window-train");
         worker.setDaemon(true);
         worker.start();
     }
 
-    private void runTraining(
-            Project<BufferedImage> project,
+    /**
+     * Everything a training run reads from the dialog and the preferences,
+     * captured on the FX thread before the run starts.
+     */
+    private record TrainSettings(
             List<ImageRow> images,
             List<String> classes,
             Path modelDir,
-            ClassifierProgress progress) {
+            SegmentationSpec segmentation,
+            double windowUm,
+            double overlapPercent,
+            WindowClassifierWorkflow.ParsedRadii radii,
+            double minCorePurity,
+            String modelKind,
+            int nPerm,
+            int nBoot) {}
+
+    /** @return the spinner's value, after committing text typed but not yet entered */
+    private static <T> T committed(Spinner<T> spinner) {
+        if (spinner.isEditable() && spinner.getValueFactory() != null) {
+            try {
+                T typed = spinner.getValueFactory()
+                        .getConverter()
+                        .fromString(spinner.getEditor().getText());
+                if (typed != null) spinner.getValueFactory().setValue(typed);
+            } catch (RuntimeException ex) {
+                spinner.getEditor().setText(String.valueOf(spinner.getValue()));
+            }
+        }
+        return spinner.getValue();
+    }
+
+    private void runTraining(TrainSettings settings, ClassifierProgress progress) {
+        List<ImageRow> images = settings.images();
         try {
             // One threshold for the whole training set, stored in the model so
             // Apply cuts every slide at the same value. Thresholding each tile
             // on its own histogram would let the model learn the seams.
-            SegmentationSpec seg = SegmentationSpec.fromPreferences();
+            SegmentationSpec seg = settings.segmentation();
             String thresholdSource = null;
             if (PooledThreshold.needsPooling(seg.thresholdMethod())) {
                 progress.status("Pooling one threshold over the training images...");
@@ -418,7 +517,11 @@ public final class FiberWindowTrainDialog {
                 seg = seg.withPooledThreshold(pooled.thresholdNorm());
                 thresholdSource = PooledThreshold.describe(pooled);
             }
-            var request = buildRequest(seg);
+            var request = new WindowClassifierWorkflow.Request(
+                    WindowFeatureMatrix.Spec.defaults(seg, settings.windowUm(), settings.overlapPercent()),
+                    settings.radii().radii(),
+                    settings.minCorePurity(),
+                    WindowClassifierWorkflow.createWorkDir());
             List<WindowClassifierWorkflow.TrainingContribution> contributions = new ArrayList<>();
             int group = 0;
             for (ImageRow row : images) {
@@ -436,20 +539,21 @@ public final class FiberWindowTrainDialog {
                         data, region, request, progress::status, progress::cancelled);
                 var labels = WindowClassifierWorkflow.labelCores(
                         data.getHierarchy().getAnnotationObjects().stream().toList(),
-                        classes,
+                        settings.classes(),
                         features,
                         region,
-                        puritySpinner.getValue());
+                        settings.minCorePurity());
                 contributions.add(new WindowClassifierWorkflow.TrainingContribution(features, labels, group++));
             }
 
             progress.status("Validating and fitting (the permutation null is the slow part)...");
-            Map<String, Object> geometry = buildGeometry(images.get(0).pixelSizeUm(), seg, thresholdSource);
+            Map<String, Object> geometry = buildGeometry(settings, images.get(0).pixelSizeUm(), seg, thresholdSource);
             Map<String, Object> options = new LinkedHashMap<>();
-            options.put("model_kind", modelKindCombo.getValue());
-            options.put("n_perm", permSpinner.getValue());
-            options.put("n_boot", bootSpinner.getValue());
-            var result = WindowClassifierWorkflow.train(contributions, classes, geometry, modelDir, options);
+            options.put("model_kind", settings.modelKind());
+            options.put("n_perm", settings.nPerm());
+            options.put("n_boot", settings.nBoot());
+            var result = WindowClassifierWorkflow.train(
+                    contributions, settings.classes(), geometry, settings.modelDir(), options);
 
             StringBuilder sb = new StringBuilder(result.summary());
             sb.append("\n\nCores not used, by reason:\n");
@@ -477,54 +581,24 @@ public final class FiberWindowTrainDialog {
         }
     }
 
-    private WindowClassifierWorkflow.Request buildRequest(SegmentationSpec seg) throws java.io.IOException {
-        var featureSpec = WindowFeatureMatrix.Spec.defaults(
-                seg,
-                FiberAnalysisPreferences.windowSizeUmProperty().get(),
-                FiberAnalysisPreferences.windowOverlapPercentProperty().get());
-        return new WindowClassifierWorkflow.Request(
-                featureSpec,
-                parseRadii(radiiField.getText()),
-                puritySpinner.getValue(),
-                WindowClassifierWorkflow.createWorkDir());
-    }
-
-    private Map<String, Object> buildGeometry(double pixelSizeUm, SegmentationSpec seg, String thresholdSource) {
-        double windowUm = FiberAnalysisPreferences.windowSizeUmProperty().get();
-        int overlap = FiberAnalysisPreferences.windowOverlapPercentProperty().get();
-        int windowPx = Math.max(2, (int) Math.round(windowUm / pixelSizeUm));
-        int stridePx = Math.max(1, (int) Math.round(windowPx * (1.0 - overlap / 100.0)));
+    private static Map<String, Object> buildGeometry(
+            TrainSettings settings, double pixelSizeUm, SegmentationSpec seg, String thresholdSource) {
+        int windowPx = WindowGeometry.windowPx(settings.windowUm(), pixelSizeUm);
+        int stridePx = WindowGeometry.stridePx(windowPx, settings.overlapPercent());
         Map<String, Object> geometry = new LinkedHashMap<>();
-        geometry.put("window_um", windowUm);
+        geometry.put("window_um", settings.windowUm());
+        geometry.put("window_overlap_percent", settings.overlapPercent());
         geometry.put("pixel_size_um", pixelSizeUm);
         geometry.put("window_px", windowPx);
         geometry.put("stride_px", stridePx);
         geometry.put("core_px", stridePx);
-        geometry.put("context_radii", radiiField.getText());
+        geometry.put("context_radii", settings.radii().csv());
         geometry.put("segmentation_hash", seg.hash());
         // The settings themselves, so Apply segments new slides exactly as
         // the training slides were, pooled threshold included.
         geometry.put("segmentation", seg.toMap());
         if (thresholdSource != null) geometry.put("threshold_source", thresholdSource);
         return geometry;
-    }
-
-    static List<Integer> parseRadii(String text) {
-        List<Integer> out = new ArrayList<>();
-        if (text == null) return out;
-        for (String tok : text.split(",")) {
-            String t = tok.trim();
-            if (t.isEmpty()) continue;
-            try {
-                int r = Integer.parseInt(t);
-                if (r > 0) out.add(r);
-            } catch (NumberFormatException ignore) {
-                // A radius that is not a number is simply not a radius; the
-                // field's tooltip says what it wants and an empty list means
-                // "no context", which is a legitimate choice.
-            }
-        }
-        return out;
     }
 
     /** One project image, with what it can contribute. */

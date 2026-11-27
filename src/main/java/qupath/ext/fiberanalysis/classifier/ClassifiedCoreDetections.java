@@ -74,6 +74,7 @@ public final class ClassifiedCoreDetections {
      * @param runId         this application's run id, stamped on every object
      * @param provisional   true when the model failed its own validation gate
      *                      and the user chose to apply it anyway
+     * @param overrides     the geometry mismatches the user overrode to run, or null
      */
     public record Geometry(
             List<String> classNames,
@@ -86,7 +87,8 @@ public final class ClassifiedCoreDetections {
             double downsample,
             String classifierId,
             String runId,
-            boolean provisional) {}
+            boolean provisional,
+            String overrides) {}
 
     /**
      * Per-window grids, all of length {@code gridW * gridH}, all optional
@@ -265,6 +267,12 @@ public final class ClassifiedCoreDetections {
                 }
                 if (geom.provisional()) {
                     det.getMetadata().put("fiber_analysis.provisional", "true");
+                }
+                if (geom.overrides() != null) {
+                    // Applied despite a geometry mismatch: say so on every
+                    // object, as for a provisional model.
+                    det.getMeasurementList().put("Overridden", 1.0);
+                    det.getMetadata().put("fiber_analysis.overrides", geom.overrides());
                 }
                 out.add(det);
             }

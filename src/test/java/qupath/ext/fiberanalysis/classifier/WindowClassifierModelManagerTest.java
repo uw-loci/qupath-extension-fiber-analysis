@@ -117,14 +117,75 @@ class WindowClassifierModelManagerTest {
     }
 
     @Test
-    void theSameFeaturesInADifferentOrderAreStillAMismatch(@TempDir Path tmp) throws IOException {
-        // A model scores columns by position, so a reordering reads one
-        // measurement as another and nothing downstream could notice.
+    void extraColumnsAndADifferentOrderAreNotAMismatch(@TempDir Path tmp) throws IOException {
+        // Apply picks the model's columns out by name, so a column training
+        // excluded, or a reordering, does not stop a model from scoring.
         var info = WindowClassifierModelManager.read(writeModel(tmp.resolve("m"), META), true);
         var problems = WindowClassifierModelManager.checkCompatibility(
-                info, List.of("order_parameter", "coverage_fraction", "width_mean_um"), geometry(0.5, 25));
-        assertThat(problems).hasSize(1);
-        assertThat(problems.get(0)).contains("different order", "by position");
+                info,
+                List.of("n_fiber_px", "order_parameter", "coverage_fraction", "width_mean_um"),
+                geometry(0.5, 25));
+        assertThat(problems).isEmpty();
+    }
+
+    @Test
+    void nestedMetadataBlocksReadBackAsMapsSoApplyCanUseThem(@TempDir Path tmp) throws IOException {
+        // Train stores the segmentation as a nested object. Read back as a
+        // JSON string, Apply never saw it and used the current preferences.
+        var seg = new SegmentationSpec("Raw intensity", "otsu", 128, 0.1, null, "none", 1.0, 4.0, 0.5, 2.0, false, 0)
+                .withPooledThreshold(0.0762);
+        String segJson = new com.google.gson.Gson().toJson(seg.toMap());
+        String meta = META.replace(
+                "\"segmentation_hash\": \"abc123\"",
+                "\"segmentation_hash\": \"abc123\"," + " \"window_overlap_percent\": 50, \"segmentation\": " + segJson);
+        var info = WindowClassifierModelManager.read(writeModel(tmp.resolve("m"), meta), true);
+        assertThat(info.geometry().get("segmentation")).isInstanceOf(Map.class);
+        assertThat(info.geometry().get("window_overlap_percent")).isEqualTo(50L);
+        SegmentationSpec back = info.segmentation();
+        assertThat(back).isEqualTo(seg);
+        assertThat(back.hash()).isEqualTo(seg.hash());
+    }
+
+    @Test
+    void aModelWithoutStoredSegmentationIsRefusedNotScoredWithTheCurrentSettings(@TempDir Path tmp) throws IOException {
+        var info = WindowClassifierModelManager.read(writeModel(tmp.resolve("m"), META), true);
+        assertThatThrownBy(info::segmentation)
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Train the model again");
+    }
+
+    @Test
+    void aStoredCalibratedThresholdWithNoValueIsRefused(@TempDir Path tmp) throws IOException {
+        var seg = new SegmentationSpec(
+                "Raw intensity", "project_otsu", 128, 0.1, null, "none", 1.0, 4.0, 0.5, 2.0, false, 0);
+        String meta = META.replace(
+                "\"segmentation_hash\": \"abc123\"",
+                "\"segmentation_hash\": \"abc123\", \"segmentation\": "
+                        + new com.google.gson.Gson().toJson(seg.toMap()));
+        var info = WindowClassifierModelManager.read(writeModel(tmp.resolve("m"), meta), true);
+        assertThatThrownBy(info::segmentation).isInstanceOf(IOException.class).hasMessageContaining("calibrat");
+    }
+
+    @Test
+    void applyRebuildsTheWindowFromTheModelNotThePreferences(@TempDir Path tmp) throws IOException {
+        String meta = META.replace(
+                "\"stride_px\": 25", "\"window_px\": 100, \"stride_px\": 25, \"window_overlap_percent\": 75");
+        var info = WindowClassifierModelManager.read(writeModel(tmp.resolve("m"), meta), true);
+        assertThat(info.windowUm()).isEqualTo(50.0);
+        assertThat(info.windowOverlapPercent()).isEqualTo(75.0);
+        // A model written before the overlap was recorded: derived from its pixels.
+        var older = WindowClassifierModelManager.read(
+                writeModel(
+                        tmp.resolve("old"), META.replace("\"stride_px\": 25", "\"window_px\": 100, \"stride_px\": 25")),
+                true);
+        assertThat(older.windowOverlapPercent()).isEqualTo(75.0);
+        var seg = new SegmentationSpec("Raw intensity", "manual", 128, 0.1, null, "none", 1.0, 4.0, 0.5, 2.0, false, 0);
+        var geom = FiberWindowApplyDialog.currentGeometry(info, seg, 0.5);
+        assertThat(geom).containsEntry("window_um", 50.0).containsEntry("window_px", 100);
+        assertThat(geom).containsEntry("stride_px", 25).containsEntry("window_overlap_percent", 75.0);
+        // Rebuilt from the model, the geometry passes the model's own check.
+        assertThat(WindowClassifierModelManager.checkCompatibility(info, FEATURES, geom))
+                .noneMatch(p -> p.contains("differs"));
     }
 
     @Test

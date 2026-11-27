@@ -23,6 +23,8 @@ import java.util.List;
  * @param sourceImage   name of the project image the map was computed on
  * @param threshold     the {@link ThresholdIdentity} label the map was segmented at, or null when not recorded
  * @param region        where the map was computed ({@link DensityRegion}), or null when not recorded
+ * @param classifier    for a classifier map, the model, its training verdict and any check the user
+ *                      overrode; null for a density map or when not recorded
  * @param channels      channel names and units, in file order
  */
 public record DensityMapInfo(
@@ -34,7 +36,22 @@ public record DensityMapInfo(
         String sourceImage,
         String threshold,
         String region,
+        String classifier,
         List<DensitySidecar.ChannelInfo> channels) {
+
+    /** A map with no classifier provenance: every density map. */
+    public DensityMapInfo(
+            DensityLattice lattice,
+            int sourceWidth,
+            int sourceHeight,
+            double sourcePixelUm,
+            boolean smooth,
+            String sourceImage,
+            String threshold,
+            String region,
+            List<DensitySidecar.ChannelInfo> channels) {
+        this(lattice, sourceWidth, sourceHeight, sourcePixelUm, smooth, sourceImage, threshold, region, null, channels);
+    }
 
     /**
      * @param channel the channel's index (its axial period, if any, decides how it interpolates)

@@ -150,9 +150,8 @@ public final class WindowFeatureMatrix {
             BooleanSupplier cancelled)
             throws IOException, InterruptedException {
 
-        int windowPx = Math.max(2, (int) Math.round(spec.windowSizeUm() / pixelSizeUm));
-        double overlapFrac = Math.max(0.0, Math.min(0.95, spec.windowOverlapPercent() / 100.0));
-        int stridePx = Math.max(1, (int) Math.round(windowPx * (1.0 - overlapFrac)));
+        int windowPx = WindowGeometry.windowPx(spec.windowSizeUm(), pixelSizeUm);
+        int stridePx = WindowGeometry.stridePx(windowPx, spec.windowOverlapPercent());
 
         int regionW = region.getWidth();
         int regionH = region.getHeight();
@@ -228,8 +227,8 @@ public final class WindowFeatureMatrix {
                 in.put("crop_w", coreW);
                 in.put("crop_h", coreH);
                 in.put("pixel_size_um", pixelSizeUm);
-                in.put("window_size_um", spec.windowSizeUm());
-                in.put("window_overlap_percent", spec.windowOverlapPercent());
+                in.put("window_px", windowPx);
+                in.put("stride_px", stridePx);
                 in.put("include_intensity", spec.includeIntensity());
                 if (spec.tensorSigma() != null) in.put("tensor_sigma", spec.tensorSigma());
                 if (spec.minWindowPixels() != null) in.put("min_window_pixels", spec.minWindowPixels());

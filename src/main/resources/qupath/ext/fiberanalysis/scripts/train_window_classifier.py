@@ -67,6 +67,16 @@ def opt_get(name, default):
     return globals().get(name, default)
 
 
+#: What a training run writes besides report.json; removed before a retrain.
+_MODEL_FILES = (
+    "model.joblib",
+    "metadata.json",
+    "train_reference.npz",
+    "confusion_matrix.csv",
+    "importance.csv",
+)
+
+
 def _write_confusion(path, counts, class_names):
     with open(path, "w", encoding="ascii", newline="") as fh:
         w = csv.writer(fh)
@@ -132,6 +142,14 @@ try:
         )
 
     os.makedirs(out_dir, exist_ok=True)
+    # Retraining under a name replaces the model there. A blocked run writes
+    # only report.json, so an older model left beside it would still be
+    # listed for Apply as if it were the result of this run.
+    for stale in _MODEL_FILES:
+        path = os.path.join(out_dir, stale)
+        if os.path.isfile(path):
+            os.remove(path)
+    input_names = list(names)
     report = {
         "n_windows": int(x.shape[0]),
         "n_features": len(names),
@@ -160,7 +178,8 @@ try:
         raise SystemExit(0)
 
     # Columns the viability check excluded are dropped here, not imputed.
-    excluded = set(via.to_dict().get("excluded_features", {}))
+    excluded_reasons = dict(via.to_dict().get("excluded_features", {}))
+    excluded = set(excluded_reasons)
     keep = [j for j, n in enumerate(names) if n not in excluded]
     if len(keep) < len(names):
         logger.info(
@@ -207,9 +226,13 @@ try:
         x, y, g, n_classes, fit_predict, annotations=ann, n_perm=n_perm, seed=rnd
     )
     report["permutation_null"] = {k: v for k, v in null.items() if k != "null"}
-    report["permutation_null"]["null_quantiles"] = np.percentile(
-        null["null"], [5, 50, 95]
-    ).tolist()
+    # No finite shuffle (zero requested, or every one degenerate) leaves no
+    # quantiles; the verdict below reports the null as not evaluated.
+    report["permutation_null"]["null_quantiles"] = (
+        np.percentile(null["null"], [5, 50, 95]).tolist()
+        if len(null["null"])
+        else [float("nan")] * 3
+    )
 
     # ---- 5. Leakage gap ----
     gap_rec = wvalidate.leakage_gap(x, y, g, n_classes, fit_predict, seed=rnd)
@@ -267,6 +290,14 @@ try:
     warnings_extra = []
     ci_lo = float(boot.get("lo", float("nan")))
     ci_hi = float(boot.get("hi", float("nan")))
+    if not (np.isfinite(ci_lo) and np.isfinite(ci_hi)):
+        # Without an interval, the majority-baseline and single-feature
+        # checks below cannot run; say so instead of passing them.
+        warnings_extra.append(
+            f"the slide-level bootstrap produced no interval ({boot.get('n_boot', 0)} usable "
+            f"resamples), so the checks against the majority baseline and the best single "
+            f"feature were skipped. Raise the bootstrap resamples to at least 200."
+        )
     if np.isfinite(ci_lo) and ci_lo <= baselines["majority"]:
         refusals.append(
             f"the balanced-accuracy interval ({ci_lo:.3f} to {ci_hi:.3f}) includes the majority "
@@ -374,6 +405,8 @@ try:
         },
         calibration={"ece": ece, "abstention": thresholds},
         verdict=verdict,
+        input_feature_names=input_names,
+        excluded_features=excluded_reasons,
     )
     # The training distribution, for the novelty channel at apply time.
     np.savez_compressed(
