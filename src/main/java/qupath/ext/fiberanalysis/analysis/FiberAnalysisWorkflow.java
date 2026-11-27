@@ -130,6 +130,17 @@ public class FiberAnalysisWorkflow {
      */
     private static final long TILE_BUDGET_PX = resolveTileBudget();
 
+    /** @return the largest read, in pixels, analyzed in one piece; larger regions are tiled */
+    static long tileBudgetPx() {
+        return TILE_BUDGET_PX;
+    }
+
+    /** Largest stitched fiber-mask overlay for a tiled annotation, in pixels. */
+    private static final long STITCHED_OVERLAY_MAX_PX = 16_000_000L;
+
+    /** One note per tiled annotation of this run, written at the end of the run. */
+    private final List<String> tiledNotes = new ArrayList<>();
+
     /**
      * Tile budget, overridable with {@code -Dfiber.tileBudgetPx=<n>}.
      *
@@ -569,7 +580,8 @@ public class FiberAnalysisWorkflow {
                 progress.setEstimate(annEstimator, "annotations");
 
                 try {
-                    OneShotResult shot = runOne(params, ann, i, imageData, pixelSizeUm, outputRoot, progress);
+                    OneShotResult shot =
+                            runOne(params, ann, i, imageData, pixelSizeUm, outputRoot, paramsHash, progress);
                     AnnotationResult res = shot.result;
                     annotationSummaries.add(res.summaryMetrics());
                     completed++;
@@ -581,28 +593,11 @@ public class FiberAnalysisWorkflow {
                     // connected component, classed CollagenAnalysis, parented
                     // under the source annotation by hierarchy containment.
                     if (params.collagenObjects()) {
-                        Path maskPng = res.outputDir().resolve("fiber_mask_overlay.png");
-                        if (Files.exists(maskPng)) {
-                            List<PathObject> collagenDets = CollagenObjectBuilder.build(
-                                    imageData,
-                                    maskPng,
-                                    res.regionOffsetX(),
-                                    res.regionOffsetY(),
-                                    i,
-                                    shot.runId,
-                                    paramsHash,
-                                    pixelSizeUm,
-                                    params.minFiberAreaUm2(),
-                                    res.downsample());
-                            allCollagenDetections.addAll(collagenDets);
-                            logger.info(
-                                    "Built {} CollagenAnalysis detections for annotation '{}'",
-                                    collagenDets.size(),
-                                    annName);
-                        } else {
-                            logger.info(
-                                    "Collagen-objects requested but fiber_mask_overlay.png missing for '{}'", annName);
-                        }
+                        allCollagenDetections.addAll(shot.collagen);
+                        logger.info(
+                                "Built {} CollagenAnalysis detections for annotation '{}'",
+                                shot.collagen.size(),
+                                annName);
                     }
 
                     // Optional: per-window detection objects from windows.json.
@@ -637,6 +632,25 @@ public class FiberAnalysisWorkflow {
                     HeadlessFx.runLater(() -> Dialogs.showErrorNotification(
                             "Fiber Analysis", "Annotation \"" + annName + "\" failed: " + e.getMessage()));
                 }
+            }
+
+            if (!tiledNotes.isEmpty()) {
+                String tiled = String.join("\n\n", tiledNotes);
+                logger.warn("{}", tiled);
+                try {
+                    Files.writeString(
+                            outputRoot.resolve("run_notes.txt"),
+                            tiled + "\n",
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.APPEND);
+                } catch (IOException e) {
+                    logger.warn("Could not write run_notes.txt: {}", e.getMessage());
+                }
+                String shown = tiledNotes.size() == 1
+                        ? tiledNotes.get(0)
+                        : tiledNotes.get(0) + "\n\n" + (tiledNotes.size() - 1)
+                                + " more annotation(s) were tiled; run_notes.txt in the run folder lists each.";
+                HeadlessFx.runLater(() -> Dialogs.showWarningNotification("Fiber Analysis", shown));
             }
 
             String levelNote = textureLevelNote(annotationSummaries, params.quantLevels());
@@ -736,14 +750,16 @@ public class FiberAnalysisWorkflow {
                 highest);
     }
 
-    /** Per-annotation analysis output: the panel-facing record plus run-level provenance keys. */
+    /** Per-annotation analysis output: the panel-facing record, provenance and collagen objects. */
     private static final class OneShotResult {
         final AnnotationResult result;
         final String runId;
+        final List<PathObject> collagen;
 
-        OneShotResult(AnnotationResult result, String runId) {
+        OneShotResult(AnnotationResult result, String runId, List<PathObject> collagen) {
             this.result = result;
             this.runId = runId;
+            this.collagen = collagen;
         }
     }
 
@@ -760,6 +776,7 @@ public class FiberAnalysisWorkflow {
             ImageData<BufferedImage> imageData,
             double pixelSizeUm,
             Path outputRoot,
+            String paramsHash,
             ProgressUi progress)
             throws Exception {
 
@@ -853,6 +870,7 @@ public class FiberAnalysisWorkflow {
                     h,
                     grid,
                     annDir,
+                    paramsHash,
                     progress);
         }
 
@@ -978,9 +996,28 @@ public class FiberAnalysisWorkflow {
             }
         }
 
+        List<PathObject> collagen = List.of();
+        Path maskPng = annDir.resolve("fiber_mask_overlay.png");
+        if (params.collagenObjects() && Files.isRegularFile(maskPng)) {
+            collagen = CollagenObjectBuilder.build(
+                    server.getPath(),
+                    maskPng,
+                    rx,
+                    ry,
+                    null,
+                    index,
+                    runId,
+                    paramsHash,
+                    pixelSizeUm,
+                    params.minFiberAreaUm2(),
+                    ds);
+        } else if (params.collagenObjects()) {
+            logger.info("Collagen-objects requested but fiber_mask_overlay.png missing for annotation {}", index);
+        }
+
         AnnotationResult annRes = new AnnotationResult(
-                index, displayName(annotation, index), annDir, overlays, summary, rx, ry, rw, rh, ds);
-        return new OneShotResult(annRes, runId);
+                index, displayName(annotation, index), annDir, overlays, summary, rx, ry, rw, rh, ds, server.getPath());
+        return new OneShotResult(annRes, runId, collagen);
     }
 
     /**
@@ -1023,6 +1060,7 @@ public class FiberAnalysisWorkflow {
             int annH,
             TileGrid grid,
             Path annDir,
+            String paramsHash,
             ProgressUi progress)
             throws IOException {
 
@@ -1053,6 +1091,17 @@ public class FiberAnalysisWorkflow {
         // Disjoint rectangle each tile alone counts, so the additive scalars
         // from overlapping tiles sum to the region instead of overshooting it.
         List<TileGrid.Box> ownedBoxes = grid.ownedBoxes();
+
+        // One coarse fiber-mask overlay for the whole annotation, and collagen
+        // objects traced per tile inside the rectangle each tile owns.
+        int regionReadW =
+                grid.tiles().stream().mapToInt(b -> b.x() + b.w()).max().orElse(0);
+        int regionReadH =
+                grid.tiles().stream().mapToInt(b -> b.y() + b.h()).max().orElse(0);
+        StitchedMaskOverlay stitched = params.fiberMaskOverlay()
+                ? new StitchedMaskOverlay(regionReadW, regionReadH, Math.min(TILE_BUDGET_PX, STITCHED_OVERLAY_MAX_PX))
+                : null;
+        List<PathObject> collagen = new ArrayList<>();
 
         ProgressEstimator est = new ProgressEstimator(grid.count());
         String runId = "";
@@ -1139,6 +1188,24 @@ public class FiberAnalysisWorkflow {
 
                 int kept = mergeTileWindows(
                         tileDir.resolve("windows.json"), box, ownedBoxes.get(t), mergedByPos, coreOwned);
+                Path tileMaskPng = tileDir.resolve("fiber_mask_overlay.png");
+                if (Files.isRegularFile(tileMaskPng)) {
+                    if (stitched != null) stitched.add(tileMaskPng, box.x(), box.y(), ownedBoxes.get(t));
+                    if (params.collagenObjects()) {
+                        collagen.addAll(CollagenObjectBuilder.build(
+                                server.getPath(),
+                                tileMaskPng,
+                                tileFullX,
+                                tileFullY,
+                                ownedBoxes.get(t),
+                                index,
+                                runId,
+                                paramsHash,
+                                pixelSizeEffUm / ds,
+                                params.minFiberAreaUm2(),
+                                ds));
+                    }
+                }
                 deleteRegionImage(tilePng);
                 deleteRegionImage(tileExisting);
                 tileWindowCounts.add(kept);
@@ -1193,21 +1260,102 @@ public class FiberAnalysisWorkflow {
                     runId,
                     params.radonOn());
         }
-        // No annotation-level overlays for a tiled run: at this size a single
-        // full-resolution PNG cannot be allocated either. Per-tile overlays are
-        // left in place under tiles/.
+        // A full-resolution annotation-level PNG cannot be allocated at this
+        // size, so the fiber mask is shown stitched at a coarser scale. Heatmaps
+        // are left per tile under tiles/: each tile colors its own value range,
+        // so stitching them would put unrelated colors side by side.
+        Map<String, Path> overlays = new LinkedHashMap<>();
+        int coveredW = regionReadW;
+        int coveredH = regionReadH;
+        if (stitched != null) {
+            Path stitchedPng = annDir.resolve("fiber_mask_overlay_stitched.png");
+            stitched.write(stitchedPng);
+            overlays.put("fiber_mask", stitchedPng);
+            coveredW = stitched.width() * stitched.factor();
+            coveredH = stitched.height() * stitched.factor();
+        }
+        if (params.collagenObjects()) {
+            logger.info(
+                    "Annotation {}: {} collagen objects from {} tiles; a blob crossing a tile seam is one object"
+                            + " per tile",
+                    index,
+                    collagen.size(),
+                    grid.count() - failed - skipped);
+        }
+        tiledNotes.add(tiledRunNote(
+                displayName(annotation, index),
+                grid.count(),
+                TILE_BUDGET_PX,
+                params,
+                droppedTileScalarKeys(tileScalars),
+                stitched == null ? 0 : stitched.factor()));
         AnnotationResult annRes = new AnnotationResult(
                 index,
                 displayName(annotation, index),
                 annDir,
-                new LinkedHashMap<>(),
+                overlays,
                 summary,
                 rx,
                 ry,
-                (int) Math.round(grid.tiles().get(grid.count() - 1).x() * ds) + annW,
-                (int) Math.round(grid.tiles().get(grid.count() - 1).y() * ds) + annH,
-                ds);
-        return new OneShotResult(annRes, runId);
+                (int) Math.round(coveredW * ds),
+                (int) Math.round(coveredH * ds),
+                ds,
+                server.getPath());
+        return new OneShotResult(annRes, runId, collagen);
+    }
+
+    /**
+     * Says what a tiled annotation does not produce, for the run notes and the
+     * end-of-run notification.
+     *
+     * @param annotation    the annotation's display name
+     * @param tiles         tiles it was split into
+     * @param budgetPx      the tile budget, pixels
+     * @param p             the run's settings; only what they asked for is listed
+     * @param omitted       annotation scalars left out because tiles cannot combine them
+     * @param overlayFactor read pixels per pixel of the stitched mask overlay, or 0 when none
+     * @return the note
+     */
+    static String tiledRunNote(
+            String annotation,
+            int tiles,
+            long budgetPx,
+            FiberAnalysisParams p,
+            Set<String> omitted,
+            int overlayFactor) {
+        List<String> missing = new ArrayList<>();
+        boolean heatmaps = (p.straightnessEnabled() && p.tortuosityOn() && p.straightnessHeatmap())
+                || (p.textureEnabled() && p.glcmHeatmap())
+                || p.morphEnabled();
+        if (heatmaps && p.windowEnabled()) {
+            missing.add("no heatmap overlays in the results panel (each tile's heatmaps are under tiles/,"
+                    + " each colored on its own value range, so colors do not compare between tiles)");
+        }
+        if (overlayFactor > 1) {
+            missing.add("the fiber-mask overlay is shown at 1/" + overlayFactor + " of the analyzed resolution");
+        }
+        if (p.straightnessEnabled() && p.radonOn()) missing.add("no Radon scalars");
+        if (p.morphEnabled() && p.morphSummary()) {
+            missing.add("no annotation-level morphometrics_summary.txt (one per tile under tiles/)");
+        }
+        if (p.emitNpz()) missing.add("no annotation-level window_metrics.npz (one per tile under tiles/)");
+        if (!omitted.isEmpty()) {
+            missing.add("these scalars, which cannot be combined across tiles: " + String.join(", ", omitted));
+        }
+        if (p.collagenObjects()) {
+            missing.add("collagen objects are traced per tile: a fiber blob that crosses a tile seam becomes"
+                    + " one object on each side, and a piece smaller than the minimum fiber area is dropped");
+        }
+        StringBuilder sb = new StringBuilder(String.format(
+                Locale.ROOT,
+                "Annotation \"%s\" was larger than %d MP at the analysis downsample and was analyzed in %d tiles.",
+                annotation,
+                budgetPx / 1_000_000,
+                tiles));
+        if (missing.isEmpty()) return sb.toString();
+        sb.append(" For a tiled annotation:");
+        for (String m : missing) sb.append("\n- ").append(m);
+        return sb.toString();
     }
 
     /**
@@ -1750,7 +1898,6 @@ public class FiberAnalysisWorkflow {
 
         // Output
         in.put("output_dir", outputDir.toString());
-        in.put("heatmap_property", p.glcmHeatmapProp());
         // Collagen object creation reads back the mask PNG alpha channel, so
         // force the emission whenever objects are wanted even if the user
         // turned the viewer overlay off.
@@ -2058,8 +2205,8 @@ public class FiberAnalysisWorkflow {
      * @param qupath      GUI handle for resolving project path; may be null
      *                    (in which case the rerun script still writes but
      *                    leaves the project path placeholder unresolved).
-     * @param annotations the input annotations -- their names are baked into
-     *                    rerun.groovy so a re-run picks the same set.
+     * @param annotations the input annotations -- their names and bounds are baked
+     *                    into rerun.groovy so a re-run picks the same set.
      */
     static void writeParamsFiles(
             Path runDir,
@@ -2082,19 +2229,12 @@ public class FiberAnalysisWorkflow {
         }
 
         String projectPath = "";
+        String entryId = "";
         if (qupath != null && qupath.getProject() != null && qupath.getProject().getPath() != null) {
             projectPath = qupath.getProject().getPath().toAbsolutePath().toString();
-        }
-
-        // Annotation names for the rerun script. Skip unnamed annotations
-        // (they cannot be matched by name on rerun -- the rerun script
-        // falls back to "all annotations" if the list ends up empty).
-        List<String> annotationNames = new ArrayList<>();
-        if (annotations != null) {
-            for (PathObject ann : annotations) {
-                String n = ann.getName();
-                if (n != null && !n.isBlank()) annotationNames.add(n);
-            }
+            // The entry ID finds the image even after its entry is renamed.
+            var entry = imageData == null ? null : qupath.getProject().getEntry(imageData);
+            if (entry != null) entryId = entry.getID();
         }
 
         Map<String, String> placeholders = new LinkedHashMap<>();
@@ -2102,7 +2242,9 @@ public class FiberAnalysisWorkflow {
         placeholders.put("PROJECT_PATH_LITERAL", RunProvenance.groovyString(projectPath));
         placeholders.put("IMAGE_NAME", imageName == null ? "" : imageName);
         placeholders.put("IMAGE_NAME_LITERAL", RunProvenance.groovyString(imageName == null ? "" : imageName));
-        placeholders.put("ANNOTATION_NAMES_LITERAL", RunProvenance.groovyStringList(annotationNames));
+        placeholders.put("ENTRY_ID_LITERAL", RunProvenance.groovyString(entryId));
+        placeholders.put(
+                "ANNOTATIONS_JSON_LITERAL", RunProvenance.groovyString(RerunAnnotations.describe(annotations)));
 
         List<String> txtHeader = List.of(
                 "fiber-analysis run parameters",
@@ -2188,7 +2330,6 @@ public class FiberAnalysisWorkflow {
         m.put("fiberMaskOverlay", p.fiberMaskOverlay());
         m.put("straightnessHeatmap", p.straightnessHeatmap());
         m.put("glcmHeatmap", p.glcmHeatmap());
-        m.put("glcmHeatmapProp", p.glcmHeatmapProp());
         m.put("morphSummary", p.morphSummary());
         m.put("jsonSidecar", p.jsonSidecar());
         m.put("emitNpz", p.emitNpz());
@@ -2348,7 +2489,6 @@ public class FiberAnalysisWorkflow {
         ordered.put("homogeneity", p.homogeneity());
         ordered.put("entropy", p.entropy());
         ordered.put("dissimilarity", p.dissimilarity());
-        ordered.put("glcmHeatmapProp", p.glcmHeatmapProp());
         // Output toggles are excluded -- they affect what is written, not the
         // numbers computed. Same params with different output toggles still
         // produces the same windows.json measurements.

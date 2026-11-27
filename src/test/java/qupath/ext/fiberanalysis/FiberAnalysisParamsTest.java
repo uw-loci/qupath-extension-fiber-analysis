@@ -23,14 +23,14 @@ import qupath.ext.fiberanalysis.analysis.FiberAnalysisParams;
 class FiberAnalysisParamsTest {
 
     /**
-     * 66 components, the last added being glcmRangeMethod (how the GLCM gray
+     * 65 components (glcmHeatmapProp was removed), the last added being glcmRangeMethod (how the GLCM gray
      * range is chosen). If this fails after a deliberate change,
      * update both this test and 02_ui_design.md.
      */
     @Test
     void recordHasExpectedComponentCount() {
         RecordComponent[] components = FiberAnalysisParams.class.getRecordComponents();
-        assertThat(components).hasSize(66);
+        assertThat(components).hasSize(65);
     }
 
     @Test

@@ -11,6 +11,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import javafx.beans.binding.Bindings;
+import javafx.beans.binding.BooleanBinding;
 import javafx.embed.swing.SwingFXUtils;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -37,6 +39,7 @@ import javax.imageio.ImageIO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.fx.dialogs.Dialogs;
+import qupath.lib.gui.QuPathGUI;
 
 /**
  * Results panel for the fiber-analysis extension.
@@ -102,8 +105,8 @@ public class FiberAnalysisPanel extends VBox {
         Button openFolderBtn = new Button("_Open folder");
         openFolderBtn.setMnemonicParsing(true);
         openFolderBtn.setMinWidth(Region.USE_PREF_SIZE);
-        openFolderBtn.setTooltip(
-                new Tooltip("Open the output directory for the most recent annotation in the OS file browser."));
+        openFolderBtn.setTooltip(new Tooltip(
+                "Open the most recent run's folder (it holds one folder per annotation) in the OS file browser."));
         openFolderBtn.setOnAction(e -> openOutputFolder());
 
         Button exportBtn = new Button("_Export PNG...");
@@ -228,10 +231,21 @@ public class FiberAnalysisPanel extends VBox {
         // which overlay is currently on the viewer. Switching to another
         // control (in this card or any other) auto-resets the previous
         // one via the controller's activeTokenProperty.
+        int overlayControls = buttonRow.getChildren().size();
         addOverlayToggle(buttonRow, result, "Fiber mask", "fiber_mask");
         addOverlayToggle(buttonRow, result, "Straightness", "straightness");
         addFamilyOverlayCombo(buttonRow, result, "Morph", "morph:");
         addFamilyOverlayCombo(buttonRow, result, "GLCM", "glcm:");
+        // Overlays are drawn at this result's image coordinates, so they are offered only while
+        // its own image is open.
+        BooleanBinding otherImage = otherImageBinding(result);
+        if (otherImage != null) {
+            for (Node n : buttonRow
+                    .getChildren()
+                    .subList(overlayControls, buttonRow.getChildren().size())) {
+                n.disableProperty().bind(otherImage);
+            }
+        }
 
         Button summaryBtn = new Button("Summary");
         summaryBtn.setTooltip(new Tooltip("Show the full text summary of every metric reported for this annotation."));
@@ -256,6 +270,14 @@ public class FiberAnalysisPanel extends VBox {
         metaLabel.setFont(Font.font("System", 10));
         metaLabel.setStyle("-fx-text-fill: #666666;");
         body.getChildren().add(metaLabel);
+        if (otherImage != null) {
+            Label otherImageLabel = new Label("Overlays are off: this result is from another image.");
+            otherImageLabel.setFont(Font.font("System", 10));
+            otherImageLabel.setStyle("-fx-text-fill: #666666;");
+            otherImageLabel.visibleProperty().bind(otherImage);
+            otherImageLabel.managedProperty().bind(otherImage);
+            body.getChildren().add(otherImageLabel);
+        }
 
         // Per-family summary text.
         Map<String, Map<String, Double>> grouped = groupByFamily(result.summaryMetrics());
@@ -277,6 +299,21 @@ public class FiberAnalysisPanel extends VBox {
         card.setAnimated(false);
         card.setMaxWidth(Double.MAX_VALUE);
         return card;
+    }
+
+    /**
+     * @param result a result card's result
+     * @return true while the viewer shows an image other than the result's, or null without a GUI
+     */
+    private static BooleanBinding otherImageBinding(AnnotationResult result) {
+        QuPathGUI qupath = QuPathGUI.getInstance();
+        if (qupath == null) return null;
+        return Bindings.createBooleanBinding(
+                () -> {
+                    var data = qupath.getImageData();
+                    return !result.isOn(data == null ? null : data.getServer().getPath());
+                },
+                qupath.imageDataProperty());
     }
 
     /**

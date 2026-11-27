@@ -126,7 +126,10 @@ public final class CalibrationCheck {
         String ridgeFilter = t.ridgeFilter();
         String calRidge = cp.has("ridge_filter") ? cp.get("ridge_filter").getAsString() : "None";
         boolean ridgeOn = ridgeFilter != null && !"none".equalsIgnoreCase(ridgeFilter);
-        if (cp.has("seg_channel") && !cp.get("seg_channel").getAsString().equals(t.channel()))
+        // "Value (HSV)" and "Raw intensity" compute the same pixels.
+        if (cp.has("seg_channel")
+                && !SourceChannel.offered(cp.get("seg_channel").getAsString())
+                        .equals(SourceChannel.offered(t.channel())))
             diffs.add("source channel " + cp.get("seg_channel").getAsString());
         if (!calRidge.equalsIgnoreCase(ridgeFilter == null ? "None" : ridgeFilter))
             diffs.add("ridge filter " + calRidge);

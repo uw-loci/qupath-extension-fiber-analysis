@@ -23,6 +23,7 @@ import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.lib.images.servers.PixelType;
+import qupath.lib.images.servers.WrappedBufferedImageServer;
 
 class SourceChannelTest {
 
@@ -35,6 +36,31 @@ class SourceChannelTest {
                 .endsWith(".");
         assertThat(FiberSegmentationPreviewWindow.peakNote(0.002, 0.0043, true)).doesNotContain("finds no fibers");
         assertThat(FiberSegmentationPreviewWindow.peakNote(0.1, 0.0043, false)).isEmpty();
+    }
+
+    @Test
+    void anRgbImageOffersOneBrightnessChoicePlusHueAndSaturation() {
+        var rgb = new WrappedBufferedImageServer("rgb", new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB));
+        assertThat(SourceChannel.choices(rgb))
+                .startsWith(SourceChannel.RAW, SourceChannel.HUE, SourceChannel.SATURATION)
+                .doesNotContain(SourceChannel.VALUE);
+    }
+
+    @Test
+    void aSingleChannelImageOffersNoHueOrSaturation() {
+        var gray = new WrappedBufferedImageServer("gray", new BufferedImage(8, 8, BufferedImage.TYPE_BYTE_GRAY));
+        assertThat(SourceChannel.choices(gray))
+                .contains(SourceChannel.RAW)
+                .doesNotContain(SourceChannel.HUE, SourceChannel.SATURATION, SourceChannel.VALUE);
+    }
+
+    @Test
+    void aSavedValueChoiceIsShownAsRawIntensityAndStillReadsTheWholeRegion() {
+        assertThat(SourceChannel.offered(SourceChannel.VALUE)).isEqualTo(SourceChannel.RAW);
+        assertThat(SourceChannel.offered("Red")).isEqualTo("Red");
+        var rgb = new WrappedBufferedImageServer("rgb", new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB));
+        assertThat(SourceChannel.bandIndex(rgb, SourceChannel.VALUE)).isEqualTo(-1);
+        assertThat(SourceChannel.bandIndex(rgb, SourceChannel.RAW)).isEqualTo(-1);
     }
 
     @Test

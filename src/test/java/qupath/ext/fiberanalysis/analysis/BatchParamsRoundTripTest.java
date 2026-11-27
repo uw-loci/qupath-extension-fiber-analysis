@@ -50,6 +50,23 @@ class BatchParamsRoundTripTest {
     }
 
     @Test
+    void aParamsFileFromBeforeTheHeatmapPropertyWasRemovedStillLoads(@TempDir Path dir) throws Exception {
+        Path f = dir.resolve("params.json");
+        Files.writeString(
+                f,
+                "{\"parameters\": {\"searchArea\": \"all\", \"glcmHeatmap\": false, \"glcmHeatmapProp\": \"energy\"}}");
+        FiberAnalysisParams read = FiberAnalysisBatchDialog.loadParamsFromJson(f);
+        assertThat(read.searchArea()).isEqualTo("all");
+        assertThat(read.glcmHeatmap()).isFalse();
+    }
+
+    @Test
+    void theRemovedHeatmapPropertyIsNotWritten(@TempDir Path dir) throws Exception {
+        FiberAnalysisWorkflow.writeParamsFiles(dir, distinctParams(), "hash", "stamp", null, null, null);
+        assertThat(Files.readString(dir.resolve("params.json"))).doesNotContain("glcmHeatmapProp");
+    }
+
+    @Test
     void aFileWithoutSettingsIsRefused(@TempDir Path dir) throws IOException {
         Path f = dir.resolve("other.json");
         Files.writeString(f, "{\"searchArea\": \"all\"}");

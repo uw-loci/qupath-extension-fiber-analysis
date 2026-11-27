@@ -338,7 +338,7 @@ public record ThresholdIdentity(
         String canon = String.format(
                 Locale.ROOT,
                 "channel=%s;ridge=%s;sigmas=%s;invert=%b;rb=%.6g;minarea=%.6g",
-                channel == null ? "" : channel.trim(),
+                channel == null ? "" : SourceChannel.offered(channel.trim()),
                 ridge ? ridgeFilter.trim().toLowerCase(Locale.ROOT) : "none",
                 ridge ? String.format(Locale.ROOT, "%.6g,%.6g,%.6g", sigmaMinUm, sigmaMaxUm, sigmaStepUm) : "",
                 invert,

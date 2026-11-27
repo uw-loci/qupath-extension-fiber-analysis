@@ -37,7 +37,7 @@ class CalibrationDialogTest {
     void theSourceChannelChoicesAreTheOnesEveryCalibratedImageOffers() {
         List<String> choices =
                 SourceChannel.commonChoices(List.of(fluorescence("DAPI", "SHG", "CD31"), fluorescence("SHG", "DAPI")));
-        assertThat(choices).containsExactly("Raw intensity", "Value (HSV)", "DAPI", "SHG");
+        assertThat(choices).containsExactly("Raw intensity", "DAPI", "SHG");
         // One image alone gets what the Run dialog offers for it.
         assertThat(SourceChannel.commonChoices(List.of(fluorescence("DAPI", "SHG"))))
                 .isEqualTo(SourceChannel.choices(fluorescence("DAPI", "SHG")));

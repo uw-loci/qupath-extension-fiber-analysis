@@ -75,6 +75,7 @@ public final class FiberAnalysisBatchDialog {
     private FiberAnalysisParams loadedParams; // null until user loads a params.json
     private Label paramsStatusLabel;
     private Label rangeWarning;
+    private Label searchAreaNote;
 
     private TextField nameFilterField;
     private TextField classFilterField;
@@ -106,7 +107,8 @@ public final class FiberAnalysisBatchDialog {
 
         Label header = new Label("Apply a saved params.json across multiple project images. The Search area"
                 + " and class filter saved in params.json (or overridden below) drive which"
-                + " annotations are analyzed per image.");
+                + " annotations are analyzed per image. A batch has no viewer selection, so a saved"
+                + " Search area of 'Selected annotations' analyzes every annotation on each image.");
         header.setWrapText(true);
         header.setMinHeight(Region.USE_PREF_SIZE);
         header.setStyle("-fx-font-size: 11px; -fx-text-fill: #555;");
@@ -122,6 +124,13 @@ public final class FiberAnalysisBatchDialog {
         root.getChildren().add(new Separator());
 
         root.getChildren().add(buildParamsLoaderRow(dialog));
+        searchAreaNote = new Label();
+        searchAreaNote.setWrapText(true);
+        searchAreaNote.setMinHeight(Region.USE_PREF_SIZE);
+        searchAreaNote.setStyle("-fx-font-size: 11px; -fx-font-weight: bold;");
+        searchAreaNote.setVisible(false);
+        searchAreaNote.managedProperty().bind(searchAreaNote.visibleProperty());
+        root.getChildren().add(searchAreaNote);
         rangeWarning = buildRangeWarning();
         root.getChildren().add(rangeWarning);
         root.getChildren().add(new Separator());
@@ -283,6 +292,7 @@ public final class FiberAnalysisBatchDialog {
                     paramsStatusLabel.setText(f.getName() + "  (loaded)");
                     paramsStatusLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #060;");
                     rangeWarning.setVisible(GlcmRange.isAuto(loadedParams.glcmRangeMethod()));
+                    refreshSearchAreaNote();
                 } catch (Exception ex) {
                     logger.warn("Could not load params from {}", f, ex);
                     paramsStatusLabel.setText("Load failed: " + ex.getMessage());
@@ -306,6 +316,7 @@ public final class FiberAnalysisBatchDialog {
         classFilterField.setTooltip(
                 new Tooltip("If non-empty, overrides the class filter from the loaded params.json for this batch run."
                         + " Format: 'Tumor, Stroma' (case-sensitive)."));
+        classFilterField.textProperty().addListener((o, a, b) -> refreshSearchAreaNote());
 
         Label nameLbl = new Label("Name:");
         Label classLbl = new Label("Class override:");
@@ -314,6 +325,25 @@ public final class FiberAnalysisBatchDialog {
         HBox.setHgrow(classFilterField, Priority.ALWAYS);
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
+    }
+
+    private void refreshSearchAreaNote() {
+        if (searchAreaNote == null) return;
+        String note = loadedParams == null ? null : searchAreaNote(mergeOverrides(loadedParams));
+        searchAreaNote.setText(note == null ? "" : note);
+        searchAreaNote.setVisible(note != null);
+    }
+
+    /**
+     * @param params the settings the batch will run with
+     * @return what a batch analyzes when they say "Selected annotations", or null otherwise
+     */
+    static String searchAreaNote(FiberAnalysisParams params) {
+        String mode = params.searchArea() == null ? "selected" : params.searchArea();
+        if (!"selected".equals(mode)) return null;
+        return "This params.json was saved with Search area 'Selected annotations'. A batch has no"
+                + " selection, so it analyzes every annotation on each image. To analyze some of them,"
+                + " enter their class in Class override.";
     }
 
     private void refreshList() {
@@ -415,7 +445,6 @@ public final class FiberAnalysisBatchDialog {
                 base.fiberMaskOverlay(),
                 base.straightnessHeatmap(),
                 base.glcmHeatmap(),
-                base.glcmHeatmapProp(),
                 base.morphSummary(),
                 base.jsonSidecar(),
                 base.emitNpz(),
@@ -481,6 +510,8 @@ public final class FiberAnalysisBatchDialog {
                     PixelSizeCheck check = PixelSizeCheck.of(scales, params.analysisDownsample());
                     FiberAnalysisParams runParams = params;
                     List<String> notes = new ArrayList<>();
+                    String areaNote = searchAreaNote(params);
+                    if (areaNote != null) notes.add(areaNote);
                     boolean common = false;
                     if (check.mixed()) {
                         String textureProblem = params.textureEnabled()
@@ -769,7 +800,6 @@ public final class FiberAnalysisBatchDialog {
                 bool(obj, "fiberMaskOverlay", true),
                 bool(obj, "straightnessHeatmap", true),
                 bool(obj, "glcmHeatmap", true),
-                str(obj, "glcmHeatmapProp", "contrast"),
                 bool(obj, "morphSummary", true),
                 bool(obj, "jsonSidecar", true),
                 bool(obj, "emitNpz", false),

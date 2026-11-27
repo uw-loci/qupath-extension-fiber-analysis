@@ -53,8 +53,15 @@ class CalibrationMismatchTest {
     @Test
     void aDifferentChannelOrFilterIsNamed(@TempDir Path proj) throws Exception {
         write(proj, "a", SATO + ", \"response_scale\": \"absolute\"");
-        String msg = CalibrationCheck.mismatch("a", proj, segmentation("Value (HSV)", "None", true));
+        String msg = CalibrationCheck.mismatch("a", proj, segmentation("Saturation (HSV)", "None", true));
         assertThat(msg).contains("source channel Raw intensity", "ridge filter Sato", "intensity not inverted");
+    }
+
+    @Test
+    void valueAndRawIntensityAreTheSameChannel(@TempDir Path proj) throws Exception {
+        write(proj, "a", SATO + ", \"response_scale\": \"absolute\"");
+        assertThat(CalibrationCheck.mismatch("a", proj, segmentation("Value (HSV)", "Sato", false)))
+                .isNull();
     }
 
     @Test

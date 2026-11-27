@@ -82,7 +82,6 @@ _FORWARD = [
     "texture_entropy",
     "texture_dissimilarity",
     "glcm_per_distance",
-    "heatmap_property",
     "bbox_x",
     "bbox_y",
     "bbox_w",

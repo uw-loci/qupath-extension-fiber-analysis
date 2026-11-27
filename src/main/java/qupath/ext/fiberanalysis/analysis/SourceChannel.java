@@ -35,36 +35,52 @@ import qupath.lib.regions.RegionRequest;
  * <p>Only RGB images go out with several bands. PIL keeps just the high byte
  * of a multi-band 16-bit PNG, so every other image goes out as one band at its
  * own bit depth: the band the user named, or the brightest band at each pixel
- * for Raw intensity and Value. A manual threshold therefore stays a real gray
+ * for Raw intensity. A manual threshold therefore stays a real gray
  * level on 16-bit sources.
  */
 public final class SourceChannel {
 
     private static final Logger logger = LoggerFactory.getLogger(SourceChannel.class);
 
-    /** Choices that are computed from RGB by the Python side rather than being a band. */
+    /** The brightest band at each pixel; on RGB this is the HSV value. */
     static final String RAW = "Raw intensity";
 
     static final String HUE = "Hue (HSV)";
     static final String SATURATION = "Saturation (HSV)";
+
+    /**
+     * Computes exactly what {@link #RAW} does, so it is no longer offered. Still read from saved
+     * preferences, params.json files and calibrations.
+     */
     static final String VALUE = "Value (HSV)";
 
     private static final List<String> DERIVED = List.of(RAW, HUE, SATURATION, VALUE);
 
+    /** The derived choices a dialog offers; {@link #VALUE} is read but not offered. */
+    private static final List<String> OFFERED = List.of(RAW, HUE, SATURATION);
+
     private SourceChannel() {}
 
     /**
+     * @param choice a saved source-channel value
+     * @return the offered choice that computes the same pixels: {@link #VALUE} becomes {@link #RAW}
+     */
+    static String offered(String choice) {
+        return VALUE.equals(choice) ? RAW : choice;
+    }
+
+    /**
      * @param server image to list channels for; may be null
-     * @return the derived choices followed by the image's own channel names;
-     *     no Hue or Saturation on a multi-channel image that is not RGB
+     * @return Raw intensity, then Hue and Saturation unless the image is known not to be RGB,
+     *     then the image's own channel names
      */
     static List<String> choices(ImageServer<BufferedImage> server) {
-        if (server == null) return new ArrayList<>(DERIVED);
+        if (server == null) return new ArrayList<>(OFFERED);
         try {
             return choices(server.getMetadata());
         } catch (Exception ex) {
             logger.debug("Could not list channels: {}", ex.getMessage());
-            return new ArrayList<>(DERIVED);
+            return new ArrayList<>(OFFERED);
         }
     }
 
@@ -73,10 +89,10 @@ public final class SourceChannel {
      * @return the choices for that image, as {@link #choices(ImageServer)}
      */
     static List<String> choices(ImageServerMetadata metadata) {
-        List<String> out = new ArrayList<>(DERIVED);
+        List<String> out = new ArrayList<>(OFFERED);
         if (metadata == null) return out;
         try {
-            if (!metadata.isRGB() && metadata.getSizeC() > 1) out.removeAll(List.of(HUE, SATURATION));
+            if (!metadata.isRGB()) out.removeAll(List.of(HUE, SATURATION));
             for (ImageChannel channel : metadata.getChannels()) {
                 String name = channel.getName();
                 if (name != null && !name.isBlank() && !out.contains(name)) out.add(name);
@@ -98,7 +114,7 @@ public final class SourceChannel {
             if (out == null) out = mine;
             else out.retainAll(mine);
         }
-        return out == null ? new ArrayList<>(DERIVED) : out;
+        return out == null ? new ArrayList<>(OFFERED) : out;
     }
 
     /**
