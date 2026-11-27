@@ -263,7 +263,7 @@ final class ExistingMask {
                 var res = meta.getInputResolution();
                 if (res != null) {
                     out.put("classifier_pixel_size", res.getAveragedPixelSize().doubleValue());
-                    out.put("classifier_pixel_unit", res.getPixelWidthUnit());
+                    out.put("classifier_pixel_unit", res.getPixelWidthUnit().replace("\u00B5", "u"));
                 }
                 out.put(
                         "classifier_sha256",

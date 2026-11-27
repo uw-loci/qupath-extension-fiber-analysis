@@ -559,7 +559,9 @@ public class FiberAnalysisWorkflow {
                 writeThresholdRecord(outputRoot, params, identity);
             }
             try {
-                writeParamsFiles(outputRoot, params, paramsHash, runStamp, imageData, qupath, annotations);
+                // The project the run started from: the GUI's, or a script's batch project
+                // (a headless run, including a rerun), captured on the launching thread.
+                writeParamsFiles(outputRoot, params, paramsHash, runStamp, imageData, projectAtLaunch, annotations);
             } catch (IOException e) {
                 logger.warn("Could not write params: {}", e.getMessage());
             }
@@ -2221,9 +2223,8 @@ public class FiberAnalysisWorkflow {
      * All three land in the per-run subdir alongside the per-annotation
      * output folders. Delegates to {@link RunProvenance}.
      *
-     * @param qupath      GUI handle for resolving project path; may be null
-     *                    (in which case the rerun script still writes but
-     *                    leaves the project path placeholder unresolved).
+     * @param project     the project the run started from; null leaves the rerun script's project
+     *                    path empty
      * @param annotations the input annotations -- their names and bounds are baked
      *                    into rerun.groovy so a re-run picks the same set.
      */
@@ -2233,7 +2234,7 @@ public class FiberAnalysisWorkflow {
             String paramsHash,
             String runStamp,
             ImageData<BufferedImage> imageData,
-            QuPathGUI qupath,
+            Project<BufferedImage> project,
             List<PathObject> annotations)
             throws IOException {
         Map<String, Object> params = paramsAsOrderedMap(p);
@@ -2249,10 +2250,10 @@ public class FiberAnalysisWorkflow {
 
         String projectPath = "";
         String entryId = "";
-        if (qupath != null && qupath.getProject() != null && qupath.getProject().getPath() != null) {
-            projectPath = qupath.getProject().getPath().toAbsolutePath().toString();
+        if (project != null && project.getPath() != null) {
+            projectPath = project.getPath().toAbsolutePath().toString();
             // The entry ID finds the image even after its entry is renamed.
-            var entry = imageData == null ? null : qupath.getProject().getEntry(imageData);
+            var entry = imageData == null ? null : project.getEntry(imageData);
             if (entry != null) entryId = entry.getID();
         }
 
