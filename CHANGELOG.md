@@ -81,7 +81,8 @@ recorded in every result file.
   - `rerun.groovy` reruns exactly the run's annotations (unnamed ones found by their bounds),
     saves the detections it makes, skips preview markers, and stops with a message when an
     annotation is gone. Before, it lost its detections, and with unnamed annotations it ran on
-    every annotation in the image.
+    every annotation in the image. A headless run (including a rerun) now records its project,
+    so its own `rerun.groovy` runs too; before, the project path was left empty.
   - Morphometric heatmaps are written whenever morphometrics and window analysis are on; before,
     turning off "Write fiber-mask overlay PNG" removed them too.
   - "Min coverage per window" now also hides below-gate windows in the heatmaps built from
