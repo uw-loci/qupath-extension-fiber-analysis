@@ -22,6 +22,85 @@ recorded in every result file.
   cannot work (no classifier saved, a class the classifier lacks, an image
   with no objects of the class, one mask file for several images) is
   refused before the run starts. fiberlib 0.4.9.
+- **Every control now does what it says.** After #1, an audit traced every control in every
+  dialog to the code it should change; 36 more were dead, partly wired or described wrongly.
+  The ones that change what you get:
+
+  *Run and batch*
+  - A large annotation that is split into tiles (over 64 MP at the analysis downsample) now gets
+    its collagen detection objects (before: none) and a fiber-mask overlay in the results panel.
+    A fiber blob that crosses a tile seam becomes one object per tile. What a tiled annotation
+    still does not produce (per-window heatmap overlays, Radon, a combined summary or `.npz`) is
+    listed in the run notes and at the end of the run, instead of going missing silently.
+  - `rerun.groovy` reruns exactly the run's annotations (unnamed ones found by their bounds),
+    saves the detections it makes, skips preview markers, and stops with a message when an
+    annotation is gone. Before, it lost its detections, and with unnamed annotations it ran on
+    every annotation in the image.
+  - Morphometric heatmaps are written whenever morphometrics and window analysis are on; before,
+    turning off "Write fiber-mask overlay PNG" removed them too.
+  - "Min coverage per window" now also hides below-gate windows in the heatmaps built from
+    counts (fiber coverage, ridge count).
+  - Removed the GLCM heatmap "Property" choice: it never limited anything, one heatmap is written
+    per enabled property. An old params.json that has it still loads. This changes the settings
+    hash in every run folder name.
+  - "Value (HSV)" is no longer offered: it computes exactly the same pixels as "Raw intensity".
+    Saved settings and calibrations that name it still work and count as Raw intensity. Hue and
+    Saturation are offered only for RGB images.
+  - The batch dialog says that a saved "Selected annotations" search area means every annotation
+    (filtered by class) in a batch.
+  - A results card's overlay buttons are disabled while another image is open, instead of
+    drawing that result on the wrong image.
+  - "Rebuild" in Setup environment deletes only the environment at the configured location.
+
+  *Project threshold calibration*
+  - `Calibrate threshold...` fits the settings of the loaded params.json (zone mode, analysis
+    downsample, sigmas, pixel size, shown read-only), not whatever the Run dialog last saved, and
+    offers the same source channels as the Run dialog, including named channels.
+  - A run refuses a calibration fitted at another zone mode, border zone width, analysis
+    downsample or analyzed pixel size, and the preview says so instead of promising the same
+    cut. A calibration file from 0.1.x that does not record these is refused; calibrate again.
+  - Cancel stops a calibration and writes nothing; replacing a calibration asks first.
+  - The calibration's `rerun.groovy` reproduces its zone mode, downsample and pixel-size choice.
+  - The preview's region marker is no longer pooled, and unsaved annotations of the open image
+    count.
+
+  *Density maps* (values differ from 0.3.0 maps made with default settings)
+  - Windows below the Run's "Min coverage per window" (default 5 %) are empty in the fiber
+    channels; the two threshold-free channels keep them.
+  - Ridge count drops branches shorter than the Run's "Min branch length" (default 5 um; it used
+    a fixed 2 um).
+  - Object density reads 0 where a class has no objects (it read as no data).
+  - A window and overlap that land on a half pixel (for example 15 um at 0.5 um/px with 25 %
+    overlap) no longer fail the image with a grid-size mismatch.
+  - Refuses to run while the Run settings use an existing fiber mask, instead of thresholding
+    with settings you may never have set.
+  - Pixel-positivity rules find their channel by name in each image (before: by position, from
+    the first image); incomplete rows block Run with a message.
+  - The channels option adds entries only for images whose map this run wrote; the output mode
+    is saved and honored by the rerun script; "Map file only" never touches a project entry.
+    A density `rerun.groovy` written by 0.3.0 no longer runs; make the map again to get a new one.
+
+  *Window classifier (experimental)*
+  - Apply no longer refuses every model: a feature column excluded at training made every image
+    fail the compatibility check, even with the override.
+  - Apply segments with the settings stored in the model (including its pooled threshold),
+    window size, overlap and context radii, not with the current Run settings. Before, the
+    stored settings were never read back.
+  - Train refuses "Use existing fiber mask" and a calibrated threshold that cannot be loaded.
+    Both dialogs say which Run settings the classifier does not use (analysis downsample,
+    pixel-size override).
+  - Permutation shuffles (minimum 20) and bootstrap resamples (minimum 200) can no longer crash
+    training or silently skip a refusal check.
+  - The window grid sent to Python is the one Java places tiles on (a half-pixel stride put
+    features on the wrong grid).
+  - Map files record the model, its verdict and any override; detections from an override run
+    carry an `Overridden` measurement. "Selected annotation" means its outline, not its box.
+    Retraining under an existing name asks first.
+
+  *Wording*: tooltips for min branch length (straightness only; enabled with Tortuosity), the
+  morphometric summary file, the output folder (`.npz`, not CSV), the source channel used by
+  texture and Radon, the region-size line ("will be tiled"), "Open folder", and the
+  density-overlay render style now match the code.
 - **The Python worker runs in UTF-8 mode on every host.** It starts with `PYTHONUTF8=1` (unless
   QuPath was started with `PYTHONUTF8` set), so on Windows files it reads or writes without an
   explicit encoding, paths and its error output use UTF-8 like the Linux and macOS workers,
