@@ -578,3 +578,10 @@ __version__ = "0.4.9"
 #     existing_mask_full_w/h and analysis_downsample for it. A region-sized
 #     mask (crop=None) is what Java writes for the pixel-classifier and
 #     object-class sources. Issue #1.
+#   - pipeline.py: morphometric heatmaps no longer depend on the fiber-mask
+#     overlay switch; the per-window coverage gate also hides windows in
+#     heatmaps built from integer counts; heatmap_property removed (every
+#     enabled GLCM property was always rendered).
+#   - wmodel.py: apply selects the model's own feature columns by name, so a
+#     column excluded at training no longer refuses every image; training
+#     records the full and excluded column lists.
