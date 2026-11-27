@@ -62,9 +62,9 @@ cfg.segChannel = "Raw intensity"
 cfg.ridgeFilter = "None"
 cfg.invertIntensity = false
 cfg.borderZoneUm = 50.0
-// A histogram does not need full resolution. At downsample 4 this reads 1/16
-// the pixels; the resulting gray-level threshold is the same number.
-cfg.readDownsample = args.size() > 4 ? args[4] as double : 4.0
+// The run refuses a calibration fitted at another analysis downsample, so
+// pass the downsample the runs will use (default 1).
+cfg.analysisDownsample = args.size() > 4 ? args[4] as double : 1.0
 
 def cb = new FiberCalibrationRunner.ProgressCallback() {
     void update(String message, int completed, int total) {
@@ -82,6 +82,6 @@ println "CAL_THRESHOLD_NORM|${res.thresholdNormalised}"
 println "CAL_THRESHOLD_GRAY16|${Math.round(res.thresholdNormalised * 65535)}"
 println "CAL_REGIONS|${res.regionsUsed}"
 println "CAL_PIXELS|${res.pixelsUsed}"
-println "CAL_DOWNSAMPLE|${cfg.readDownsample}"
+println "CAL_DOWNSAMPLE|${cfg.analysisDownsample}"
 println "CAL_SECONDS|${(System.currentTimeMillis() - t0) / 1000.0}"
 println "DONE"
