@@ -43,6 +43,7 @@ import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.analysis.AnnotationClassFilter;
 import qupath.ext.fiberanalysis.analysis.HeadlessFx;
 import qupath.ext.fiberanalysis.analysis.PooledThreshold;
+import qupath.ext.fiberanalysis.analysis.UserMessage;
 import qupath.ext.fiberanalysis.preferences.FiberAnalysisPreferences;
 import qupath.ext.fiberanalysis.ui.SectionBuilder;
 import qupath.fx.dialogs.Dialogs;
@@ -103,7 +104,7 @@ public final class FiberWindowTrainDialog {
     public void show() {
         Project<BufferedImage> project = gui == null ? null : gui.getProject();
         if (project == null) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     TITLE,
                     "Open a project first. A classifier is trained across images,"
                             + " and each image is one cross-validation group.");
@@ -401,22 +402,22 @@ public final class FiberWindowTrainDialog {
         List<String> classes = new ArrayList<>(classList.getSelectionModel().getSelectedItems());
         List<ImageRow> images = new ArrayList<>(imageList.getSelectionModel().getSelectedItems());
         if (classes.size() < 2) {
-            Dialogs.showErrorMessage(TITLE, "Select at least two classes; there is nothing to separate.");
+            UserMessage.error(TITLE, "Select at least two classes; there is nothing to separate.");
             return;
         }
         if (images.isEmpty()) {
-            Dialogs.showErrorMessage(TITLE, "Select at least one image.");
+            UserMessage.error(TITLE, "Select at least one image.");
             return;
         }
         SegmentationSpec seg = SegmentationSpec.fromPreferences();
         String refusal = runSettingsRefusal(seg);
         if (refusal != null) {
-            Dialogs.showErrorMessage(TITLE, refusal);
+            UserMessage.error(TITLE, refusal);
             return;
         }
         var radii = WindowClassifierWorkflow.parseRadii(radiiField.getText());
         if (!radii.rejected().isEmpty()) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     TITLE,
                     "Context radii: '" + String.join("', '", radii.rejected()) + "' is not a whole number above 0."
                             + "\nEnter whole numbers separated by commas, for example 1,3, or leave the field"
@@ -429,7 +430,7 @@ public final class FiberWindowTrainDialog {
             modelDir = WindowClassifierModelManager.resolveForWrite(
                     project, modelNameField.getText(), projectLocalCheck.isSelected());
         } catch (Exception ex) {
-            Dialogs.showErrorMessage(TITLE, ex.getMessage());
+            UserMessage.error(TITLE, ex.getMessage());
             return;
         }
         if (java.nio.file.Files.exists(modelDir.resolve("model.joblib"))
@@ -443,7 +444,7 @@ public final class FiberWindowTrainDialog {
         var preflightReport = preflight();
         reportArea.setText(preflightReport);
         if (preflightReport.contains("[BLOCK]")) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     TITLE,
                     "This training set cannot support a slide-level estimate."
                             + " See the report; every finding names what to do about it.");
@@ -571,7 +572,7 @@ public final class FiberWindowTrainDialog {
             logger.info("Window classifier training finished: {}", result.verdict());
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            HeadlessFx.runLater(() -> reportArea.setText("Cancelled."));
+            HeadlessFx.runLater(() -> reportArea.setText("Canceled."));
         } catch (Exception ex) {
             logger.error("Window classifier training failed", ex);
             HeadlessFx.runLater(() -> {

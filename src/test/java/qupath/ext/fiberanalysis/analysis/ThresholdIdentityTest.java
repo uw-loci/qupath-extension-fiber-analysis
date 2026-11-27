@@ -128,7 +128,8 @@ class ThresholdIdentityTest {
                 .doesNotContain("(run B)")
                 .contains("[this run]: img1, img2")
                 .endsWith("Details are in the log.");
-        assertThat(w).startsWith("Results in this project were cut at 3 different thresholds or pixel sizes");
+        assertThat(w)
+                .startsWith("Results in this project were cut at 3 different thresholds, fiber masks or pixel sizes");
         assertThat(w).contains("Otsu 0.08337 at 0.1732 um/px").contains("[this run]: img1, img2");
         assertThat(w).contains("Otsu 0.07630 at 0.1732 um/px").contains("(run B): old1, old2");
         assertThat(w).contains("at 0.3464 um/px").contains(": coarse");

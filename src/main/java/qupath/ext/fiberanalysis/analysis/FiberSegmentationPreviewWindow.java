@@ -147,7 +147,7 @@ final class FiberSegmentationPreviewWindow {
         sizeChoice.getItems().addAll(128, 256, 512);
         sizeChoice.setValue(256);
         sizeChoice.setTooltip(new Tooltip("Side of the preview region in analyzed pixels (at the run's analysis\n"
-                + "downsample). Centred on the viewer (or the selected annotation's centroid)."));
+                + "downsample). Centered on the viewer (or the selected annotation's centroid)."));
 
         Slider opacitySlider = new Slider(0.0, 1.0, 0.65);
         opacitySlider.setPrefWidth(140);
@@ -218,7 +218,7 @@ final class FiberSegmentationPreviewWindow {
             tempDir[0] = Files.createTempDirectory("fiber-preview-");
             tempDir[0].toFile().deleteOnExit();
         } catch (IOException e) {
-            Dialogs.showErrorMessage("Fiber preview", "Could not create temp dir: " + e.getMessage());
+            UserMessage.error("Fiber preview", "Could not create temp dir: " + e.getMessage());
             return;
         }
         final AtomicLong lastRequest = new AtomicLong(0);

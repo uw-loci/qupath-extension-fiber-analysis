@@ -37,6 +37,7 @@ import org.slf4j.LoggerFactory;
 import qupath.ext.fiberanalysis.analysis.DensityChannelAttacher;
 import qupath.ext.fiberanalysis.analysis.DensitySidecar;
 import qupath.ext.fiberanalysis.analysis.HeadlessFx;
+import qupath.ext.fiberanalysis.analysis.UserMessage;
 import qupath.ext.fiberanalysis.ui.SectionBuilder;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
@@ -93,13 +94,13 @@ public final class FiberWindowApplyDialog {
     /** Open the dialog. Requires an open image in a project. */
     public void show() {
         if (gui == null || gui.getImageData() == null) {
-            Dialogs.showErrorMessage(TITLE, "Open an image first.");
+            UserMessage.error(TITLE, "Open an image first.");
             return;
         }
         Project<BufferedImage> project = gui.getProject();
         List<WindowClassifierModelManager.ModelInfo> models = WindowClassifierModelManager.list(project);
         if (models.isEmpty()) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     TITLE,
                     "No trained window classifier was found.\n\nTrain one first," + " or copy a model folder into\n"
                             + WindowClassifierModelManager.userRoot());
@@ -377,7 +378,7 @@ public final class FiberWindowApplyDialog {
         var model = modelCombo.getValue();
         if (model == null) return;
         if (model.provisional() && !acknowledgeCheck.isSelected()) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     TITLE,
                     "This model failed its own validation (" + model.verdict()
                             + "). Tick the acknowledgement under Overrides to apply it anyway;"
@@ -385,7 +386,7 @@ public final class FiberWindowApplyDialog {
             return;
         }
         if (!rasterCheck.isSelected() && !detectionsCheck.isSelected()) {
-            Dialogs.showErrorMessage(TITLE, "Choose at least one output.");
+            UserMessage.error(TITLE, "Choose at least one output.");
             return;
         }
         PathObject sel = selectedAnnotation();
@@ -501,7 +502,7 @@ public final class FiberWindowApplyDialog {
             logger.info("Applied window classifier {}: {}", model.id(), text.replace("\n", " | "));
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            HeadlessFx.runLater(() -> logArea.setText("Cancelled."));
+            HeadlessFx.runLater(() -> logArea.setText("Canceled."));
         } catch (Exception ex) {
             logger.error("Applying the window classifier failed", ex);
             String msg = String.valueOf(ex.getMessage());

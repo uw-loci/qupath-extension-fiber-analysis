@@ -36,7 +36,6 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import qupath.fx.dialogs.Dialogs;
 import qupath.lib.color.ColorMaps;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.viewer.overlays.PathOverlay;
@@ -512,7 +511,7 @@ public final class DensityOverlayDialog {
         if (style == null) return;
         var viewer = qupath.getViewer();
         if (viewer == null || viewer.getImageData() == null) {
-            Dialogs.showErrorMessage(TITLE, "Open the image the map belongs to first.");
+            UserMessage.error(TITLE, "Open the image the map belongs to first.");
             return;
         }
         var server = viewer.getImageData().getServer();

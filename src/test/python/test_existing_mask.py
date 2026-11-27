@@ -100,3 +100,24 @@ def test_analyze_names_a_missing_mask():
 
     with pytest.raises(FileNotFoundError, match="no mask was given"):
         pipeline.analyze(np.zeros((8, 8, 3), dtype=np.uint8), seg_source="existing", existing_mask_path="")
+
+
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "LA"])
+def test_a_fiber_drawn_in_any_color_counts_and_alpha_does_not(tmp_path, mode):
+    h, w = 6, 8
+    if mode == "LA":
+        arr = np.zeros((h, w, 2), dtype=np.uint8)
+        arr[..., 1] = 255  # opaque everywhere
+        arr[2, 3, 0] = 255
+        want = 1
+    else:
+        arr = np.zeros((h, w, len(mode)), dtype=np.uint8)
+        if mode == "RGBA":
+            arr[..., 3] = 255
+        arr[1, 1, 1] = 255  # green only
+        arr[4, 6, 2] = 200  # blue only
+        want = 2
+    path = str(tmp_path / ("m_" + mode + ".png"))
+    Image.fromarray(arr, mode=mode).save(path)
+    got = seg.load_existing_mask(path, (h, w))
+    assert int(got.sum()) == want

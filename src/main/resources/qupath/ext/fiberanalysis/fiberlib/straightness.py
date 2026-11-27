@@ -536,10 +536,11 @@ def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2, s
             continue
         cy = float(np.mean([p[0] for p in seg]))
         cx = float(np.mean([p[1] for p in seg]))
-        iy = int(cy // stride_px)
-        ix = int(cx // stride_px)
-        if 0 <= iy < grid_shape[0] and 0 <= ix < grid_shape[1]:
-            bins[iy * grid_shape[1] + ix].append(t)
+        # Every window whose box [i * stride, i * stride + window) holds the
+        # fiber's center; with overlap that is more than one window.
+        for iy in _windows_holding(cy, window_px, stride_px, grid_shape[0]):
+            for ix in _windows_holding(cx, window_px, stride_px, grid_shape[1]):
+                bins[iy * grid_shape[1] + ix].append(t)
     for iy in range(grid_shape[0]):
         for ix in range(grid_shape[1]):
             vs = bins[iy * grid_shape[1] + ix]
@@ -552,6 +553,13 @@ def compute_skeleton_tortuosity(fiber_mask, window_grid=None, min_branch_px=2, s
     # when aggregating to a per-annotation number.
     out["per_window_n_fibers"] = n_fibers_per_win
     return out
+
+
+def _windows_holding(c, window_px, stride_px, n):
+    """Indices i in [0, n) of the windows [i * stride, i * stride + window) that contain c."""
+    lo = int(np.floor((c - window_px) / stride_px)) + 1
+    hi = int(np.floor(c / stride_px))
+    return range(max(0, lo), min(n - 1, hi) + 1)
 
 
 # ---- Radon scalar metrics --------------------------------------------------

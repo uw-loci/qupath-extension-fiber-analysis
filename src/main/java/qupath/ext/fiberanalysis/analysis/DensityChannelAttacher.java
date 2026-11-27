@@ -80,11 +80,11 @@ public final class DensityChannelAttacher {
         ProjectImageEntry<BufferedImage> entry =
                 project == null || imageData == null ? null : project.getEntry(imageData);
         if (entry == null) {
-            Dialogs.showErrorMessage(TITLE, "Open a project image first.");
+            UserMessage.error(TITLE, "Open a project image first.");
             return;
         }
         if (entry.getMetadata().containsKey(META_KIND)) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     TITLE,
                     "This entry already holds fiber channels. Open \""
                             + entry.getMetadata().get(META_SOURCE) + "\" to add its map.");
@@ -92,7 +92,7 @@ public final class DensityChannelAttacher {
         }
         Path map = DensitySidecar.sidecarPathFor(project, entry);
         if (!DensitySidecar.exists(map)) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     TITLE,
                     "No density map for this image yet. Run \"Project density map...\" first.\n\nExpected: " + map);
             return;

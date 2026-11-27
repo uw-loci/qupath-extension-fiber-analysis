@@ -71,12 +71,12 @@ public final class DensitySamplingCommand {
     public void run() {
         ImageData<BufferedImage> imageData = gui != null ? gui.getImageData() : null;
         if (imageData == null) {
-            Dialogs.showErrorMessage("Fiber density sampling", "No image is open.");
+            UserMessage.error("Fiber density sampling", "No image is open.");
             return;
         }
         Project<BufferedImage> project = gui.getProject();
         if (project == null) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     "Fiber density sampling",
                     "No project is open. The sampling command reads the sidecar from "
                             + "<project>/fiber-analysis/density-maps/.");
@@ -84,13 +84,13 @@ public final class DensitySamplingCommand {
         }
         ProjectImageEntry<BufferedImage> entry = project.getEntry(imageData);
         if (entry == null) {
-            Dialogs.showErrorMessage("Fiber density sampling", "Current image is not part of the open project.");
+            UserMessage.error("Fiber density sampling", "Current image is not part of the open project.");
             return;
         }
 
         Path sidecar = DensitySidecar.sidecarPathFor(project, entry);
         if (!DensitySidecar.exists(sidecar)) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     "Fiber density sampling",
                     "No density sidecar for this image yet. Run \"Project density map...\" first.\n\n" + "Expected: "
                             + sidecar);
@@ -101,7 +101,7 @@ public final class DensitySamplingCommand {
         PathObjectHierarchy hierarchy = imageData.getHierarchy();
         List<PathObject> targets = resolveTargets(hierarchy);
         if (targets.isEmpty()) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     "Fiber density sampling",
                     "No objects to sample. Either select one or more objects, or add annotations first.");
             return;

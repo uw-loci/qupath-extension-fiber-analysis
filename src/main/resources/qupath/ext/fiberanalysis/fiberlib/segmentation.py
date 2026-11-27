@@ -462,7 +462,11 @@ def load_existing_mask(path, image_shape, crop=None):
         raise ValueError(f"Unsupported mask file extension {ext!r} (use .png, .tif, .npy or .npz)")
 
     if arr.ndim == 3:
-        arr = arr[..., 0]
+        # A pixel is fiber when any color channel is non-zero; an alpha
+        # channel (the 4th, or the 2nd of gray + alpha) is not a color.
+        n = arr.shape[-1]
+        colors = 3 if n >= 3 else 1
+        arr = np.asarray(arr[..., :colors]).any(axis=-1)
     rh, rw = (int(v) for v in image_shape)
     if crop is None:
         if arr.shape != (rh, rw):

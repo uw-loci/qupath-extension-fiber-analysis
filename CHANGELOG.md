@@ -22,6 +22,21 @@ recorded in every result file.
   cannot work (no classifier saved, a class the classifier lacks, an image
   with no objects of the class, one mask file for several images) is
   refused before the run starts. fiberlib 0.4.9.
+- **Per-window straightness and fiber counts with window overlap above 0.** Each traced fiber
+  was given to one window by its center divided by the stride, so with overlap a window counted
+  only the fibers in its top-left stride-sized corner. A fiber now counts in every window whose box
+  holds its center. Changes per-window tortuosity, ridge count and their heatmaps, detections and
+  density-map channels whenever overlap is above 0; at the default 0 % overlap nothing changes.
+- **A mask file with fibers drawn in color reads them.** A pixel is fiber when any color channel
+  is non-zero; an alpha channel is ignored. Before, only the first (red) channel was read, so a
+  mask drawn in green gave no fibers.
+- **An existing-mask run records what made its mask.** `existing_mask.json` in the run folder
+  names the source, the classifier, its fiber class and a SHA-256 of the classifier (or the mask
+  file's size, date and SHA-256), so a classifier retrained under the same name can be told apart.
+  The image entry's "Fiber threshold (annotations)" metadata now says the mask source instead of
+  keeping a threshold from an earlier run, and the project-wide "not all comparable" warning
+  counts it.
+- Error messages from the dialogs are also written to the log.
 - **Every control now does what it says.** After #1, an audit traced every control in every
   dialog to the code it should change; 36 more were dead, partly wired or described wrongly.
   The ones that change what you get:

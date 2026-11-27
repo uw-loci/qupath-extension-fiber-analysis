@@ -205,4 +205,15 @@ class ExistingMaskTest {
         IOException e = assertThrows(IOException.class, () -> m.checkImage(image()));
         assertTrue(e.getMessage().contains("Fiber"), e.getMessage());
     }
+
+    @Test
+    void provenanceNamesTheClassifierAndItsClass() throws IOException {
+        Map<String, Object> p = ExistingMask.forClassifier(
+                        stripeClassifier(ChannelType.CLASSIFICATION), "stripe", "Fiber")
+                .provenance();
+        assertEquals("Pixel classifier", p.get("source"));
+        assertEquals("stripe", p.get("classifier"));
+        assertEquals("Fiber", p.get("fiber_class"));
+        assertEquals("CLASSIFICATION", p.get("output_type"));
+    }
 }

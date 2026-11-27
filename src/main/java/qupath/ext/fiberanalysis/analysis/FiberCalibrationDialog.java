@@ -164,7 +164,7 @@ public final class FiberCalibrationDialog {
                 + " 'Invert intensity' for these. Without invert, calibration will threshold"
                 + " the bright unstained tissue as 'fiber' and report nonsense.\n\n"
                 + "When in doubt: run a regular Otsu on a single representative"
-                + " image first, confirm 'Show fiber mask' overlays the actual fibers, then come"
+                + " image first, confirm the result card's 'Fiber mask' overlay covers the actual fibers, then come"
                 + " back here with the same source-channel + invert settings.");
         body.setWrapText(true);
         body.setStyle("-fx-font-size: 11px;");
@@ -213,7 +213,7 @@ public final class FiberCalibrationDialog {
 
         channelCombo =
                 new ComboBox<>(FXCollections.observableArrayList(SourceChannel.choices((ImageServerMetadata) null)));
-        channelCombo.setValue(runParams.internalChannel());
+        channelCombo.setValue(SourceChannel.offered(runParams.internalChannel()));
         channelCombo.setTooltip(new Tooltip("Same source channel the run will use. Lists the choices every image"
                 + " the calibration reads offers, as the Run dialog does for one image."));
         channelNote = new Label("");
@@ -395,7 +395,7 @@ public final class FiberCalibrationDialog {
     private void runCalibration() {
         Project<BufferedImage> project = getProject();
         if (project == null || project.getPath() == null) {
-            Dialogs.showErrorMessage(TITLE, "A QuPath project must be open. Create or open a project and try again.");
+            UserMessage.error(TITLE, "A QuPath project must be open. Create or open a project and try again.");
             return;
         }
         FiberCalibrationRunner.CalibrationConfig cfg = FiberCalibrationRunner.CalibrationConfig.fromRun(runParams);
@@ -427,7 +427,7 @@ public final class FiberCalibrationDialog {
                 return;
             }
         } catch (java.io.IOException ex) {
-            Dialogs.showErrorMessage(TITLE, ex.getMessage());
+            UserMessage.error(TITLE, ex.getMessage());
             return;
         }
 

@@ -56,8 +56,24 @@ final class ProjectThresholds {
             Collection<ProjectImageEntry<BufferedImage>> entries,
             String key,
             ThresholdIdentity id) {
+        record(project, entries, key, id.label());
+    }
+
+    /**
+     * Stores a label on the entries and saves the project.
+     *
+     * @param project the project
+     * @param entries the entries the result belongs to
+     * @param key     metadata key
+     * @param label   what made the fiber mask: a threshold identity's label, or an existing-mask description
+     */
+    static void record(
+            Project<BufferedImage> project,
+            Collection<ProjectImageEntry<BufferedImage>> entries,
+            String key,
+            String label) {
         if (project == null || entries.isEmpty()) return;
-        for (ProjectImageEntry<BufferedImage> e : entries) e.getMetadata().put(key, id.label());
+        for (ProjectImageEntry<BufferedImage> e : entries) e.getMetadata().put(key, label);
         try {
             project.syncChanges();
         } catch (IOException e) {

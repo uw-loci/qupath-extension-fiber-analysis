@@ -123,7 +123,7 @@ public final class FiberDensityMapDialog {
 
         Project<BufferedImage> project = gui != null ? gui.getProject() : null;
         if (project == null) {
-            Dialogs.showErrorMessage("Fiber Analysis density map", "Open a project first.");
+            UserMessage.error("Fiber Analysis density map", "Open a project first.");
             return;
         }
 
@@ -599,7 +599,7 @@ public final class FiberDensityMapDialog {
     private void onRun() {
         Project<BufferedImage> project = gui != null ? gui.getProject() : null;
         if (project == null) {
-            Dialogs.showErrorMessage("Fiber density map", "No open project.");
+            UserMessage.error("Fiber density map", "No open project.");
             return;
         }
         List<ImageRow> picked = pickedRows();
@@ -637,7 +637,7 @@ public final class FiberDensityMapDialog {
             }
             // Python would fall back to Otsu on every tile, silently.
             if (projectThresholdNorm == null) {
-                Dialogs.showErrorMessage(
+                UserMessage.error(
                         "Fiber density map",
                         "The threshold method is Project Otsu, but calibration '" + calName
                                 + "' could not be read. Choose a calibration in the Run dialog, or another"
@@ -657,7 +657,7 @@ public final class FiberDensityMapDialog {
                             FiberAnalysisPreferences.sigmaMaxProperty().get(),
                             FiberAnalysisPreferences.sigmaStepProperty().get()));
             if (mismatch != null) {
-                Dialogs.showErrorMessage("Fiber density map", mismatch);
+                UserMessage.error("Fiber density map", mismatch);
                 return;
             }
             // Always submit lowercase canonical method name to the Python side.
@@ -768,8 +768,7 @@ public final class FiberDensityMapDialog {
                 default -> DensityRegion.wholeImage();
             };
         } catch (IllegalArgumentException | NullPointerException e) {
-            Dialogs.showErrorMessage(
-                    "Fiber density map", e.getMessage() == null ? "No image is open." : e.getMessage());
+            UserMessage.error("Fiber density map", e.getMessage() == null ? "No image is open." : e.getMessage());
             return null;
         }
     }
@@ -792,7 +791,7 @@ public final class FiberDensityMapDialog {
             try {
                 open.saveImageData(data);
             } catch (java.io.IOException e) {
-                Dialogs.showErrorMessage("Fiber density map", "Could not save the image: " + e.getMessage());
+                UserMessage.error("Fiber density map", "Could not save the image: " + e.getMessage());
                 return false;
             }
         }

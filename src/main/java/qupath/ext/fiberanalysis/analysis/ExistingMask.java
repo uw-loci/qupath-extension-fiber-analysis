@@ -243,6 +243,69 @@ final class ExistingMask {
     }
 
     /**
+     * What made the fiber mask, for the run folder: enough to tell later whether a classifier or mask
+     * file with the same name is still the one that was used.
+     *
+     * @return source, names and a SHA-256 of the classifier's saved form or of the mask file
+     * @throws IOException when the mask file cannot be read
+     */
+    Map<String, Object> provenance() throws IOException {
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("source", source);
+        switch (source) {
+            case CLASSIFIER: {
+                var meta = classifier.getMetadata();
+                out.put("classifier", classifierName);
+                out.put(
+                        "fiber_class",
+                        String.valueOf(meta.getClassificationLabels().get(fiberLabel)));
+                out.put("output_type", meta.getOutputType().name());
+                var res = meta.getInputResolution();
+                if (res != null) {
+                    out.put("classifier_pixel_size", res.getAveragedPixelSize().doubleValue());
+                    out.put("classifier_pixel_unit", res.getPixelWidthUnit());
+                }
+                out.put(
+                        "classifier_sha256",
+                        sha256(qupath.lib.io.GsonTools.getInstance()
+                                .toJson(classifier)
+                                .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+                break;
+            }
+            case OBJECT_CLASS:
+                out.put("fiber_class", fiberClass.toString());
+                break;
+            default: {
+                out.put("mask_file", maskFile.toAbsolutePath().toString());
+                out.put("mask_file_bytes", Files.size(maskFile));
+                out.put(
+                        "mask_file_modified",
+                        Files.getLastModifiedTime(maskFile).toString());
+                try (var in = Files.newInputStream(maskFile)) {
+                    java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                    byte[] buf = new byte[1 << 16];
+                    int n;
+                    while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+                    out.put("mask_file_sha256", java.util.HexFormat.of().formatHex(md.digest()));
+                } catch (java.security.NoSuchAlgorithmException e) {
+                    throw new IOException(e);
+                }
+            }
+        }
+        return out;
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            return java.util.HexFormat.of()
+                    .formatHex(
+                            java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
      * Checks the source against one image before any region is read.
      *
      * @param data the image

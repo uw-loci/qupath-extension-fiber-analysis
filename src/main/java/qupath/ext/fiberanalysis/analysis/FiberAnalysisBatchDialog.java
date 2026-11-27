@@ -97,7 +97,7 @@ public final class FiberAnalysisBatchDialog {
 
         Project<BufferedImage> project = getProject();
         if (project == null) {
-            Dialogs.showErrorMessage(
+            UserMessage.error(
                     "Fiber Analysis Batch", "A QuPath project must be open. Open or create a project and try again.");
             return;
         }
@@ -180,7 +180,7 @@ public final class FiberAnalysisBatchDialog {
                 return;
             }
             if (loadedParams == null) {
-                Dialogs.showErrorMessage(
+                UserMessage.error(
                         "Fiber Analysis Batch",
                         "Load a params.json first (Browse...). Every run of 'Run analysis...' writes one"
                                 + " in its output folder.");
@@ -190,7 +190,7 @@ public final class FiberAnalysisBatchDialog {
             if (chosen.size() > 1
                     && "existing".equalsIgnoreCase(paramsForRun.segSource())
                     && ExistingMask.FILE.equals(paramsForRun.maskSource())) {
-                Dialogs.showErrorMessage(
+                UserMessage.error(
                         "Fiber Analysis Batch",
                         "These settings read the fiber mask from one file, which belongs to one image."
                                 + " Select a single image, or use a pixel classifier or an object class as the"
@@ -246,10 +246,10 @@ public final class FiberAnalysisBatchDialog {
         Button calBtn = new Button("Calibrate threshold...");
         calBtn.setTooltip(new javafx.scene.control.Tooltip(
                 "Open the calibration dialog: explanation, image-type guidance (including DAB /"
-                        + " brightfield warnings), settings, and a Run Calibration button."));
+                        + " brightfield warnings), settings, and a Run calibration button."));
         calBtn.setOnAction(e -> {
             if (loadedParams == null) {
-                Dialogs.showErrorMessage(
+                UserMessage.error(
                         "Fiber Analysis Batch",
                         "Load the params.json the batch will run with first (Browse...). The calibration"
                                 + " fits the zone, downsample and filter settings in it.");

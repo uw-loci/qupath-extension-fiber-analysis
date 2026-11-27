@@ -563,6 +563,18 @@ public class FiberAnalysisWorkflow {
             } catch (IOException e) {
                 logger.warn("Could not write params: {}", e.getMessage());
             }
+            if (existingMask != null) {
+                try {
+                    Files.writeString(
+                            outputRoot.resolve("existing_mask.json"),
+                            new com.google.gson.GsonBuilder()
+                                    .setPrettyPrinting()
+                                    .create()
+                                    .toJson(existingMask.provenance()));
+                } catch (IOException e) {
+                    logger.warn("Could not write existing_mask.json: {}", e.getMessage());
+                }
+            }
 
             List<PathObject> allWindowDetections = new ArrayList<>();
             List<PathObject> allCollagenDetections = new ArrayList<>();
@@ -684,8 +696,15 @@ public class FiberAnalysisWorkflow {
             logger.info("Fiber Analysis run complete: {} ok, {} failed, {} ms", completed, failed, ms);
 
             ProjectImageEntry<BufferedImage> entry = ProjectThresholds.entryOf(projectAtLaunch, imageData);
-            if (identity != null && entry != null && completed > 0) {
-                ProjectThresholds.record(projectAtLaunch, List.of(entry), ThresholdIdentity.META_ANNOTATIONS, identity);
+            // An existing mask replaces the threshold, so it is what the entry records; a
+            // threshold left from an earlier run would no longer describe these detections.
+            String maskLabel = existingMask == null ? null : "Existing fiber mask: " + existingMask.describe();
+            if ((identity != null || maskLabel != null) && entry != null && completed > 0) {
+                ProjectThresholds.record(
+                        projectAtLaunch,
+                        List.of(entry),
+                        ThresholdIdentity.META_ANNOTATIONS,
+                        maskLabel != null ? maskLabel : identity.label());
                 if (checkProjectThresholds)
                     ProjectThresholds.warnIfDiffers(
                             projectAtLaunch, List.of(entry), ThresholdIdentity.META_ANNOTATIONS, "Fiber Analysis");

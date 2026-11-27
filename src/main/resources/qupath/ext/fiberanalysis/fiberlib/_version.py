@@ -585,3 +585,8 @@ __version__ = "0.4.9"
 #   - wmodel.py: apply selects the model's own feature columns by name, so a
 #     column excluded at training no longer refuses every image; training
 #     records the full and excluded column lists.
+#   - straightness.compute_skeleton_tortuosity: a fiber counts in every window
+#     whose box holds its center (was: center // stride, one window, wrong
+#     with overlap > 0). Unchanged at 0 % overlap.
+#   - segmentation.load_existing_mask: any non-zero color channel is fiber;
+#     alpha is ignored (was: first channel only).

@@ -67,7 +67,7 @@ import qupath.lib.objects.hierarchy.events.PathObjectSelectionListener;
  * and shows an error label), reads defaults from
  * {@link FiberAnalysisPreferences}, builds a {@link FiberAnalysisParams}, and
  * delegates to {@link FiberAnalysisWorkflow#runForAnnotations} with the
- * currently-selected annotations.</p>
+ * annotations chosen under Search area.</p>
  *
  * <p>{@code [Save defaults]} writes the current control state back into
  * {@link FiberAnalysisPreferences} (which auto-persists via
@@ -266,7 +266,7 @@ public final class FiberAnalysisDialog {
         runBtn.setMnemonicParsing(true);
         runBtn.setDefaultButton(true);
         runBtn.setTooltip(installDelay(
-                new Tooltip("Run fiber analysis on the currently-selected annotations using the controls above.\n"
+                new Tooltip("Run fiber analysis on the annotations chosen under Search area, with the controls above.\n"
                         + "Research use only -- do not use for clinical decisions.")));
         runBtn.setOnAction(e -> {
             FiberAnalysisParams params = validateAndBuild();
@@ -1113,7 +1113,7 @@ public final class FiberAnalysisDialog {
                 break;
         }
         String maskSourceTip = "Where to read the existing fiber mask from. Pick a QuPath pixel-classifier output,"
-                + " a thresholded object class, or a .tif/.npy file you produced elsewhere.";
+                + " the objects of one class, or a whole-image .png, .tif, .npy or .npz mask you produced elsewhere.";
         applyTooltip(maskSourceClassifierRadio, maskSourceTip);
         applyTooltip(maskSourceObjectClassRadio, maskSourceTip);
         applyTooltip(maskSourceFileRadio, maskSourceTip);
@@ -1311,7 +1311,7 @@ public final class FiberAnalysisDialog {
                 FiberAnalysisPreferences.windowObjectsProperty().get());
         applyTooltip(
                 windowObjectsCheck,
-                "One rectangular detection per window above the coverage gate, with that window's metrics. Thousands per annotation at 15 um; they also feed the Density Map.");
+                "One rectangular detection per window above the coverage gate, with that window's metrics. Thousands per annotation at 15 um; a density map can count them as an object-density class.");
         grid.add(windowObjectsCheck, 0, row, 2, 1);
         row++;
 
@@ -1429,7 +1429,7 @@ public final class FiberAnalysisDialog {
         applyTooltip(
                 morphEnabledCheck,
                 "Native reimplementation of TWOMBLI's morphometric panel (Wershof et al.,"
-                        + " Mol Syst Biol 2021). No FIJI plugins are bundled.");
+                        + " Life Sci Alliance 2021). No FIJI plugins are bundled.");
         content.getChildren().add(morphEnabledCheck);
 
         GridPane checks = baseGrid();
@@ -1437,7 +1437,9 @@ public final class FiberAnalysisDialog {
         branchpointsCheck = new CheckBox("Branch-point count");
         branchpointsCheck.setSelected(
                 FiberAnalysisPreferences.branchpointsProperty().get());
-        applyTooltip(branchpointsCheck, "Count skeleton branch points (junctions where 3+ skeleton pixels meet).");
+        applyTooltip(
+                branchpointsCheck,
+                "Count skeleton junctions: pixels where three or more skeleton branches meet (Rutovitz crossing number of 3 or more).");
         endpointsCheck = new CheckBox("Endpoint count");
         endpointsCheck.setSelected(FiberAnalysisPreferences.endpointsProperty().get());
         applyTooltip(endpointsCheck, "Count skeleton endpoints (free fiber tips).");
@@ -1785,8 +1787,8 @@ public final class FiberAnalysisDialog {
         emitNpzCheck.setSelected(FiberAnalysisPreferences.emitNpzProperty().get());
         applyTooltip(
                 emitNpzCheck,
-                "Save the per-window numeric arrays (one row per window, columns per metric) as a"
-                        + " compressed NumPy .npz file. Useful for downstream Python analysis.");
+                "Save the per-window metrics as window_metrics.npz: one 2-D array per metric, laid out like"
+                        + " the window grid. Useful for downstream Python analysis.");
         content.getChildren().add(emitNpzCheck);
 
         addWindowObjectsToHierarchy = new CheckBox("Add per-window detection objects to hierarchy");

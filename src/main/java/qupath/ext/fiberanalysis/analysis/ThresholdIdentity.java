@@ -287,7 +287,7 @@ public record ThresholdIdentity(
         StringBuilder sb = new StringBuilder();
         sb.append("Results in this project were cut at ")
                 .append(groups.size())
-                .append(" different thresholds or pixel sizes, so they are not all comparable:");
+                .append(" different thresholds, fiber masks or pixel sizes, so they are not all comparable:");
         int shown = 0;
         for (var g : groups.entrySet()) {
             if (shown++ == 4) {
